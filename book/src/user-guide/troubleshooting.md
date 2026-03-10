@@ -1,0 +1,328 @@
+# Troubleshooting
+
+**Status:** Current
+**Last updated:** 2026-03-17
+
+## Start with verbose output
+
+```bash
+batchalign3 -vvvv align ~/corpus/ -o ~/output/
+```
+
+Use the final error message together with the sections below.
+
+## Attach run logs to bug reports
+
+```bash
+batchalign3 logs --export
+```
+
+CLI-managed runs write structured logs under `~/.batchalign3/logs/`.
+
+## Worker Python resolution order
+
+When debugging which Python the CLI selects, the full resolution order is:
+
+1. `BATCHALIGN_PYTHON` environment variable
+2. Active `VIRTUAL_ENV`
+3. A sibling Python next to the binary that can import `batchalign.worker`
+4. A project `.venv` discovered by walking up from the binary
+5. `python3.12` on macOS/Linux, or `python` on Windows
+
+## The CLI cannot start local workers
+
+For local processing, the selected Python interpreter must be able to import
+`batchalign.worker`.
+
+Check the runtime explicitly:
+
+```bash
+$BATCHALIGN_PYTHON -c "import batchalign.worker"
+```
+
+If you are not using `BATCHALIGN_PYTHON`, run the same import test with the
+Python you expect Batchalign to discover.
+
+## `batchalign3: command not found`
+
+Install the package:
+
+```bash
+uv tool install batchalign3
+```
+
+If `uv` installed the tool but your shell still cannot find it, ensure the uv
+tool bin directory is on `PATH`.
+
+## The daemon will not start
+
+Check the daemon log:
+
+```bash
+cat ~/.batchalign3/daemon.log
+```
+
+Then force a clean restart:
+
+```bash
+batchalign3 serve stop
+rm -f ~/.batchalign3/daemon.json
+batchalign3 morphotag corpus/ -o output/
+```
+
+## Cache looks stale
+
+Bypass the cache for one run:
+
+```bash
+batchalign3 --override-cache morphotag corpus/ -o output/
+```
+
+Clear cached data:
+
+```bash
+batchalign3 cache clear --yes
+batchalign3 cache clear --all --yes
+```
+
+## Runs are slow or memory-heavy
+
+Cap workers explicitly:
+
+```bash
+batchalign3 --workers 2 morphotag corpus/ -o output/
+```
+
+Force CPU mode:
+
+```bash
+batchalign3 --force-cpu morphotag corpus/ -o output/
+```
+
+The first daemon-backed run is usually slower because models may still need to
+load.
+
+## Job deferred or rejected due to memory pressure
+
+If a job fails with `MemoryPressure` or logs say "job deferred due to memory
+pressure", the server's memory gate detected insufficient RAM. The gate polls
+available memory for up to 60 seconds before giving up.
+
+**Common causes:**
+
+1. Too many concurrent workers — reduce `max_workers_per_job` or
+   `max_concurrent_jobs` in `~/.batchalign3/server.yaml`
+2. Other processes consuming RAM
+3. Idle workers holding loaded models — reduce `worker_idle_timeout_s` to
+   release them sooner, or restart the server
+
+**Disable the gate entirely** (not recommended for production):
+
+```yaml
+memory_gate_mb: 0
+```
+
+See [Worker Tuning](worker-tuning.md) for detailed memory budgets and tuning
+guidance.
+
+## "Cannot find audio file" or "Media conversion failed"
+
+**Cannot find audio file:** The server could not locate a media file
+matching the CHAT file's stem. In content mode (`--server`), check that
+`~/.batchalign3/server.yaml` has a `media_mappings` entry for the data
+directory you are processing, and that the volume is mounted. See
+[Media Resolution](../reference/media-conversion.md#media-resolution).
+
+**Media conversion failed — ffmpeg not found:** MP4 (and M4A, WebM, WMA)
+files require ffmpeg for conversion to WAV. Install ffmpeg:
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt install ffmpeg
+
+# Or download from https://ffmpeg.org/download.html
+```
+
+After installing, restart the server (`batchalign3 serve stop && serve start`).
+
+**Media conversion failed — ffmpeg error:** The ffmpeg conversion itself
+failed. Check that the source media file is not corrupted. The error
+message includes ffmpeg's stderr output for diagnosis.
+
+## Some utterances lose timing after `align`
+
+If `align` leaves some utterances without timing bullets, or if `chatter
+validate` reports E362 (non-monotonic timestamps) on align output, the most
+likely cause is **overlapping speech** in the transcript.
+
+### Why this happens
+
+CHAT transcription convention places utterances in conversational order for
+readability. Overlapping speech markers (`&*SPK:words`) interleave one
+speaker's words inside another speaker's utterance. But in the audio, those
+words occur in temporal order, which may differ from the text order.
+
+The alignment engine uses a monotonic matcher: it can only assign timestamps
+that increase through the file in text order. When text order and audio order
+diverge -- which is inherent in transcripts with dense `&*` markers -- the
+matcher cannot assign correct timestamps to every utterance without violating
+monotonicity.
+
+Rather than write invalid CHAT or silently corrupt timestamps, `align` strips
+timing from the affected utterances. They appear in the output as plain
+untimed text, just as they would before alignment. The surrounding utterances
+retain their full word-level timing.
+
+### How to identify affected utterances
+
+Untimed utterances have no bullet at the end of the main tier line and no
+`%wor` dependent tier. You can find them with:
+
+```bash
+# Show main-tier lines without timing bullets
+grep '^\*' output.cha | grep -v '[0-9]_[0-9]'
+```
+
+If the untimed utterances cluster in blocks (especially around sections with
+frequent `&*` markers), the cause is almost certainly text/audio order
+divergence.
+
+### What you can do
+
+1. **Accept partial coverage.** For many workflows, having most utterances
+   timed is sufficient. The untimed utterances are still valid CHAT -- they
+   just lack timing.
+
+2. **Reorder utterances to temporal order before aligning.** If you need full
+   coverage and the transcript has sections where conversational grouping
+   differs from temporal order, reordering those sections will let the aligner
+   assign timestamps to all utterances. This is the most reliable fix.
+
+3. **Use `align --before`** when re-aligning after hand edits. This preserves
+   existing good timing for unmodified utterances and only re-aligns the
+   changed regions, reducing the chance of cascading timing loss.
+
+### Known high-impact patterns
+
+- **Dense `&*` markers** (3+ per utterance, or long stretches where most
+  utterances contain `&*`): common in aphasia protocols, conversation analysis,
+  and multi-party recordings. These produce the largest untimed blocks.
+
+- **Hand-edited transcripts with restructured speaker turns**: When a
+  reviewer splits, merges, or reattributes ASR utterances, the resulting
+  text order may diverge substantially from the original audio order.
+
+- **Short backchannels ("mhm", "yeah", "okay")**: These are often placed
+  after the main speaker's utterance in the transcript but occurred during it
+  in the audio. A single misplaced backchannel can push subsequent utterances
+  out of monotonic order.
+
+This is a known architectural limitation of monotonic alignment, not a bug.
+For moderate-overlap files, improvements to `&*` handling should reduce the
+problem.  For heavily restructured transcripts with dense overlap, a more
+fundamental change (per-speaker alignment) is needed.  See
+[Monotonicity Invariant](../reference/forced-alignment.md#monotonicity-invariant)
+for the technical details and roadmap.
+
+## Audio memory spikes
+
+Batchalign uses lazy audio loading by default for alignment and ASR. To compare
+behavior against full loads:
+
+```bash
+batchalign3 --no-lazy-audio align corpus/ -o output/
+```
+
+## "Command not supported" or missing commands
+
+If the server rejects a command (e.g., `align` or `transcribe`) with an error
+like "command not supported", the server did not detect the required Python
+dependencies at startup.
+
+**Check what the server advertises:**
+
+```bash
+curl http://localhost:8000/health | python3 -m json.tool
+```
+
+Look at the `capabilities` list. If the command you need is missing:
+
+1. **Check the server log** for lines containing "excluding from server
+   capabilities" — these show which commands failed the capability gate and why.
+
+2. **Verify the Python environment** has the required packages installed. All
+   core commands work out of the box with a standard install (`uv tool install
+   batchalign3`). If a dependency was removed or failed to build, the capability
+   probe will exclude the affected command. Key dependencies:
+   - `align` needs `torch` and `torchaudio`
+   - `transcribe` needs `openai-whisper`
+   - `translate` needs `googletrans`
+   - `morphotag`, `utseg`, `coref` need `stanza`
+   - `opensmile` needs `opensmile`
+   - `avqi` needs `parselmouth` and `torchaudio`
+
+   All of these are included in the base `batchalign3` package. Only
+   HK/Cantonese engines require optional extras (`batchalign3[hk]`).
+
+3. **Restart the server** after installing missing packages — capabilities are
+   detected once at startup:
+
+   ```bash
+   batchalign3 serve stop
+   batchalign3 serve start
+   ```
+
+## `--server` seems to be ignored
+
+That is expected for `transcribe` and `avqi`: the current CLI keeps those on
+the local-daemon path because the remote server cannot read client-local audio
+paths.
+
+Check remote dispatch with a command that supports it:
+
+```bash
+batchalign3 serve status --server http://yourserver:8000
+batchalign3 --server http://yourserver:8000 morphotag corpus/ -o output/
+```
+
+## External service timeouts
+
+Timeouts reaching `api.rev.ai`, `huggingface.co`, or other external providers
+usually mean the host cannot reach the required service. Confirm network access
+from the machine running the worker runtime.
+
+## Apple Silicon / MPS issues
+
+If you hit GPU-specific failures, retry with CPU mode:
+
+```bash
+batchalign3 --force-cpu align corpus/ -o output/
+```
+
+or:
+
+```bash
+export BATCHALIGN_FORCE_CPU=1
+batchalign3 align corpus/ -o output/
+```
+
+## Capture a full debug transcript
+
+```bash
+batchalign3 -vvv morphotag corpus/ -o output/ 2>&1 | tee debug.log
+```
+
+Attach `debug.log` together with `batchalign3 logs --export` when filing an
+issue.
+
+## Filing bug reports
+
+Open an issue at <https://github.com/TalkBank/batchalign3/issues>.
+
+Attach:
+- `batchalign3 logs --export` output
+- `batchalign3 -vvv <your-command> 2>&1 | tee debug.log`
+- Your OS, Python version, and `batchalign3 version` output

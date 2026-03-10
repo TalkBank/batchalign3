@@ -1,0 +1,55 @@
+[package]
+name = "batchalign-pyo3"
+version = "0.1.0"
+edition = "2024"
+authors = ["Franklin Chen <franklinchen@franklinchen.com>"]
+license = "BSD-3-Clause"
+repository = "https://github.com/TalkBank/batchalign3"
+description = "Rust-powered CHAT handling for Batchalign"
+publish = false
+
+[lib]
+name = "batchalign_core"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+indexmap = { version = "2.13", features = ["serde"] }
+numpy = "0.28"
+pyo3 = { version = "0.28", features = ["multiple-pymethods"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+thiserror = "^2.0.18"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Shared batchalign crates
+batchalign-chat-ops = { path = "../crates/batchalign-chat-ops" }
+batchalign-revai = { path = "../crates/batchalign-revai" }
+batchalign-cli = { path = "../crates/batchalign-cli" }
+batchalign-app = { path = "../crates/batchalign-app" }
+
+# CLI runtime
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }
+
+# TalkBank crates — path deps to talkbank-tools
+talkbank-model = { path = "../../talkbank-tools/crates/talkbank-model", features = ["python"] }
+talkbank-transform = { path = "../../talkbank-tools/crates/talkbank-transform" }
+talkbank-parser = { path = "../../talkbank-tools/crates/talkbank-parser" }
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+debug = "line-tables-only"          # Less debug info -> faster linking
+
+[profile.dev.package."*"]
+opt-level = 1                       # Optimize third-party deps (one-time cost)
+
+[profile.test]
+split-debuginfo = "unpacked"
+debug = "line-tables-only"

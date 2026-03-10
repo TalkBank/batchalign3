@@ -1,0 +1,42 @@
+[package]
+name = "batchalign-app"
+version = "0.1.0"
+description = "batchalign3 application: types, server, worker pool, cache"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+batchalign-chat-ops = { workspace = true }
+batchalign-revai = { workspace = true }
+tokio = { workspace = true }
+libc = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+sqlx = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+dirs = { workspace = true }
+walkdir = { workspace = true }
+sysinfo = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+chrono = { workspace = true }
+utoipa = { workspace = true }
+async-trait = { workspace = true }
+blake3 = { workspace = true }
+moka = { workspace = true }
+fs2 = { workspace = true }
+include_dir = { workspace = true }
+tempfile = "3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+reqwest = { workspace = true }
+insta = { workspace = true }

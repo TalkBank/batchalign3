@@ -1,137 +1,176 @@
-# system utilities
-import re
-import string
-import random
+"""Training loop for utterance boundary segmentation model.
 
-# tokenization utilitise
-from batchalign.utils.utils import word_tokenize
+Fine-tunes a ``BertForTokenClassification`` to detect sentence boundaries
+from unlabelled text.  Data files (``{run_name}.train.txt``,
+``{run_name}.val.txt``) are prepared by the Rust CLI:
+``batchalign3 models prep``.
+"""
 
-# torch
-import torch
-from torch.utils.data.dataloader import DataLoader
-from torch.optim import AdamW
-
-# import huggingface utils
-from transformers import AutoTokenizer, BertForTokenClassification
-from transformers import DataCollatorForTokenClassification
-
-# import our dataset
-from batchalign.models.utterance.dataset import TOKENS, UtteranceBoundaryDataset
-
-# tqdm
-from tqdm import tqdm
-
-# training utilities
-from batchalign.models.training import *
+from __future__ import annotations
 
 import logging
-L = logging.getLogger("batchalign")
+import os
+import random
+
+import torch
+from torch.optim import AdamW
+from torch.utils.data.dataloader import DataLoader
+from tqdm import tqdm
+from transformers import (
+    AutoTokenizer,
+    BertForTokenClassification,
+    DataCollatorForTokenClassification,
+)
+
+from batchalign.models.utterance.dataset import TOKENS, UtteranceBoundaryDataset
+
+L = logging.getLogger("batchalign.models")
+
+DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
-# seed device and tokens
-DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+def _move_dict(d: dict[str, torch.Tensor], device: torch.device) -> None:
+    """Move every tensor in *d* to *device* in-place."""
+    for key in d:
+        d[key] = d[key].to(device)
 
-def train(c):
-    # get in and out dir
-    model_dir, data_dir, run_name = c.resolve_data()
 
-    if (os.path.exists(os.path.join(model_dir, run_name))):
-        L.info(f"Path {os.path.join(model_dir, run_name)} exists, skipping training...")
-        return 
+def train_utterance_model(
+    *,
+    run_name: str,
+    data_dir: str,
+    model_dir: str,
+    lr: float = 3.5e-5,
+    batch_size: int = 5,
+    epochs: int = 2,
+    window: int = 20,
+    min_length: int = 10,
+    bert_base: str = "bert-base-uncased",
+    use_wandb: bool = False,
+    wandb_name: str | None = None,
+    wandb_user: str | None = None,
+) -> None:
+    """Train an utterance segmentation model.
 
-    if c.tracker:
+    Parameters
+    ----------
+    run_name:
+        Name used for output directory and data file prefix.
+    data_dir:
+        Directory containing ``{run_name}.train.txt`` / ``.val.txt``.
+    model_dir:
+        Parent directory for saved model checkpoints.
+    lr:
+        Learning rate for AdamW.
+    batch_size:
+        Training batch size.
+    epochs:
+        Number of training epochs.
+    window:
+        Number of sentences merged per training example.
+    min_length:
+        Minimum character length to keep a sentence.
+    bert_base:
+        HuggingFace model name for the base BERT.
+    use_wandb:
+        Whether to log to Weights & Biases.
+    wandb_name:
+        W&B run display name (defaults to *run_name*).
+    wandb_user:
+        W&B entity / username.
+    """
+    output_path = os.path.join(model_dir, run_name)
+    if os.path.exists(output_path):
+        L.info("Path %s exists, skipping training.", output_path)
+        return
+
+    config: dict[str, object] = {
+        "lr": lr,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "window": window,
+        "min_length": min_length,
+        "bert_base": bert_base,
+    }
+
+    run = None
+    if use_wandb:
         import wandb
 
-        # start wandb
-        run = wandb.init(project="batchalign", name=c.tracker.run_name, entity=c.tracker.user, config=c.params)
-
-        # set configuration
+        run = wandb.init(
+            project="batchalign",
+            name=wandb_name or run_name,
+            entity=wandb_user,
+            config=config,
+        )
         config = dict(run.config)
-    else:
-        config = c.params
 
-    # create the tokenizer 
     tokenizer = AutoTokenizer.from_pretrained(config["bert_base"])
 
-    # load the data (train using MICASE, test on Pitt)
-    train_data = UtteranceBoundaryDataset(os.path.join(data_dir,  f"{run_name}.train.txt"),
-                                          tokenizer, window=config["window"], min_length=config["min_length"])
-    test_data = UtteranceBoundaryDataset(os.path.join(data_dir,  f"{run_name}.val.txt"),
-                                         tokenizer, window=config["window"], min_length=config["min_length"])
+    train_data = UtteranceBoundaryDataset(
+        os.path.join(data_dir, f"{run_name}.train.txt"),
+        tokenizer,
+        window=config["window"],  # type: ignore[arg-type]  # config vals are object
+        min_length=config["min_length"],  # type: ignore[arg-type]  # config vals are object
+    )
+    test_data = UtteranceBoundaryDataset(
+        os.path.join(data_dir, f"{run_name}.val.txt"),
+        tokenizer,
+        window=config["window"],  # type: ignore[arg-type]  # config vals are object
+        min_length=config["min_length"],  # type: ignore[arg-type]  # config vals are object
+    )
 
-    # create data collator utility on the tokenizer
-    data_collator = DataCollatorForTokenClassification(tokenizer, return_tensors='pt')
+    data_collator = DataCollatorForTokenClassification(tokenizer, return_tensors="pt")
 
-    # load the data
-    train_dataloader = DataLoader(train_data,
-                                batch_size=config["batch_size"],
-                                shuffle=True, collate_fn=lambda x:x)
-    test_dataloader = DataLoader(test_data,
-                                batch_size=config["batch_size"],
-                                shuffle=True, collate_fn=lambda x:x)
+    train_dataloader = DataLoader(
+        train_data,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        collate_fn=lambda x: x,
+    )
+    test_dataloader = DataLoader(
+        test_data,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        collate_fn=lambda x: x,
+    )
 
-    # create the model and tokenizer
-    model = BertForTokenClassification.from_pretrained(config["bert_base"],
-                                                       num_labels=len(TOKENS)).to(DEVICE)
+    model = BertForTokenClassification.from_pretrained(
+        config["bert_base"],
+        num_labels=len(TOKENS),
+    ).to(DEVICE)
     optim = AdamW(model.parameters(), lr=config["lr"])
 
-    # utility to move a whole dictionary to a device
-    def move_dict(d, device):
-        """move a dictionary to device
-
-        Attributes:
-            d (dict): dictionary to move
-            device (torch.Device): device to move to
-        """
-
-        for key, value in d.items():
-            d[key] = d[key].to(device)
-
-    # start training!
     val_data = list(iter(test_dataloader))
 
-    # watch the model
-    if c.tracker:
+    if run is not None:
         run.watch(model)
 
-    # for each epoch
-    for epoch in range(config["epochs"]):
-        print(f"Training epoch {epoch}")
+    for epoch in range(config["epochs"]):  # type: ignore[call-overload]  # config vals are object
+        L.info("Training epoch %d", epoch)
 
-        # for each batch
-        for indx, batch in tqdm(enumerate(iter(train_dataloader)), total=len(train_dataloader)):
-            # pad and conform batch
+        for indx, batch in tqdm(
+            enumerate(iter(train_dataloader)), total=len(train_dataloader)
+        ):
             batch = data_collator(batch)
-            move_dict(batch, DEVICE)
+            _move_dict(batch, DEVICE)
 
-            # train!
             output = model(**batch)
-            # backprop
             output.loss.backward()
-            # step
             optim.step()
             optim.zero_grad()
 
-            # log!
-            if c.tracker:
-                run.log({
-                    'loss': output.loss.cpu().item()
-                })
+            if run is not None:
+                run.log({"loss": output.loss.cpu().item()})
 
-            # if need to validate, validate
-            if indx % 10 == 0:
-                # select a val batch
+            if indx % 10 == 0 and val_data:
                 val_batch = data_collator(random.choice(val_data))
-                move_dict(val_batch, DEVICE)
-                # run!
+                _move_dict(val_batch, DEVICE)
                 output = model(**val_batch)
-                # log!
-                if c.tracker:
-                    run.log({
-                        'val_loss': output.loss.cpu().item()
-                    })
+                if run is not None:
+                    run.log({"val_loss": output.loss.cpu().item()})
 
-    # write model down
-    model.save_pretrained(os.path.join(model_dir, run_name))
-    tokenizer.save_pretrained(os.path.join(model_dir, run_name))
-
+    os.makedirs(output_path, exist_ok=True)
+    model.save_pretrained(output_path)
+    tokenizer.save_pretrained(output_path)
+    L.info("Model saved to %s", output_path)

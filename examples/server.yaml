@@ -1,0 +1,47 @@
+# Batchalign server configuration.
+#
+# Install to ~/.batchalign3/server.yaml on the server machine.
+#
+# media_mappings: Maps client-side directory names to server-side media
+# volumes.  The client auto-detects the mapping key from the input path,
+# so users just run:
+#
+#   batchalign3 align ~/data/corpus-data/Eng-NA/Study/ \
+#       --server http://myserver:8000
+#
+# and the server resolves media at:
+#   /mnt/media/corpus/Eng-NA/Study/<filename>
+
+# Auto-spawn a background daemon on CLI invocations.
+# When true, the CLI starts or reuses a persistent local daemon when no
+# explicit --server URL is provided. When false, the CLI requires an explicit
+# remote server or a manually started local server; it does not fall back to
+# in-process execution.
+# auto_daemon: false
+
+default_lang: eng
+max_concurrent_jobs: 8
+port: 8000
+
+# Max worker processes per job (0 = auto-tune based on RAM/GPU).
+# Each worker loads its own pipeline; multi-file jobs process in parallel.
+# max_workers_per_job: 0
+
+# Pre-load morphotag and align pipelines on startup (main thread).
+# Prevents MPS deadlock on first request from a background thread.
+warmup: true
+
+# Media roots: directories to search for audio files referenced by @Media:
+# headers.  Set this if your media files are colocated with your data.
+# media_roots:
+#   - /path/to/media/
+
+# No fallback roots — all media access must go through explicit mappings.
+# This prevents accidental full-volume walks on large network mounts.
+media_roots: []
+
+# Deterministic mappings: client ~/data/<key>/ -> server volume path.
+# Uncomment and configure for your environment.
+# media_mappings:
+#   corpus-a:  /mnt/media/corpus-a
+#   corpus-b:  /mnt/media/corpus-b

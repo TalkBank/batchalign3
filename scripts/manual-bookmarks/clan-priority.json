@@ -1,0 +1,12 @@
+[
+  {"bookmark": "CHECK_Command", "match": "CHECK", "mode": "exact"},
+  {"bookmark": "FREQ_Command", "match": "FREQ", "mode": "exact"},
+  {"bookmark": "KWAL_Command", "match": "KWAL", "mode": "exact"},
+  {"bookmark": "COMBO_Command", "match": "COMBO", "mode": "exact"},
+  {"bookmark": "MLU_Command", "match": "MLU", "mode": "exact"},
+  {"bookmark": "MLT_Command", "match": "MLT", "mode": "exact"},
+  {"bookmark": "DSS_Command", "match": "DSS", "mode": "exact"},
+  {"bookmark": "VOCD_Command", "match": "VOCD", "mode": "exact"},
+  {"bookmark": "MEDIA_Linkage", "match": "Media Linkage", "mode": "exact"},
+  {"bookmark": "CHAT_Mode_Editor", "match": "Text Mode vs. CHAT Mode", "mode": "exact"}
+]

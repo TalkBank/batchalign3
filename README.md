@@ -1,242 +1,233 @@
-# TalkBank | Batchalign2
+# Batchalign3
 
-Welcome! **Batchalign2** is a Python suite of language sample analysis (LSA) software from the TalkBank project. It is used to interact with conversation audio files and their transcripts, and provides a whole host of analyses within this space.
+[![CI](https://github.com/TalkBank/batchalign3/actions/workflows/test.yml/badge.svg)](https://github.com/TalkBank/batchalign3/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/batchalign3)](https://pypi.org/project/batchalign3/)
 
-The TalkBank Project, of which Batchalign is a part, is supported by NIH grant HD082736.
+Turn audio recordings into fully annotated [CHAT](https://talkbank.org/0info/manuals/CHAT.html)
+transcripts — or enrich existing transcripts — from the command line.
 
-----
+- **Transcribe** — speech-to-text from audio (Whisper, Rev.AI)
+- **Morphotag** — morphosyntactic analysis (%mor and %gra tiers)
+- **Align** — forced alignment of words to audio timestamps
+- **Translate** — add translation tiers (%xtra)
+- **Segment** — utterance boundary detection
+- **Benchmark** — WER scoring against gold transcripts
 
-## Quick Start
+Part of the [TalkBank](https://talkbank.org/) project. Runs on macOS,
+Windows, and Linux.
 
-The following instructions provide a quick start to installing Batchalign. For most users aiming to process CHAT and audio with Batchalign, we recommend more detailed usage instructions: for [usage](https://talkbank.org/0info/BA2-usage.pdf) and [human transcript cleanup](https://talkbank.org/0info/BA2-cleanup.pdf). The following provides a quick start guide for the program.
+## Get Started
 
-### Install and Update the Package
-Batchalign is on PyPi (as `batchalign`). We recommend the use of UV to install Batchalign:
+### Easiest: Download and double-click
 
-#### macOS / Linux
+No terminal required. Download the installer for your platform, double-click
+it, and follow the on-screen prompts:
 
-```
+- **macOS:** [Download install-batchalign3.command](https://github.com/TalkBank/batchalign3/raw/main/installers/macos/install-batchalign3.command)
+  — if macOS blocks it, right-click > **Open** > **Open** in the dialog
+- **Windows:** [Download install-batchalign3.bat](https://github.com/TalkBank/batchalign3/raw/main/installers/windows/install-batchalign3.bat)
+  — if SmartScreen blocks it, click **More info** > **Run anyway**
+
+See [`installers/README.md`](installers/README.md) for details.
+
+### From the terminal
+
+Install the `uv` package manager, then install Batchalign:
+
+**macOS / Linux:**
+
+```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-UV_PYTHON=3.11 uv tool install batchalign
 ```
 
-#### Windows
+**Windows (PowerShell):**
 
-There are two commands used to install Batchalign. Run both in `powershell`:
-
-```
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-Restart `powershell` and run the second command:
+Close and reopen your terminal, then:
 
-```
-uv tool install batchalign
-```
-
-### Rock and Roll
-There are two main ways of interacting with Batchalign. Batchalign can be used as a program to batch-process CHAT (hence the name), or as a Python LSA library.
-
-- to get started with the Batchalign program, [tap here](#quick-start-command-line)
-- to get started on the Batchalign Library (assumes familiarity with Python), [tap here](#quick-start-python)
-
-## Quick Start: Command Line
-
-### Basic Usage 
-
-Once installed, you can invoke the Batchalign program by typing `batchalign` into the Terminal (MacOS) or Command Prompt (Windows).
-
-It is used in the following basic way:
-
-```
-batchalign [verb] [input_dir] [output_dir]
+```bash
+uv tool install batchalign3
 ```
 
-Where `verb` includes:
+#### Optional extras
 
-1. `transcribe` - by placing only an audio of video file (`.mp3/.mp4/.wav`) in the input directory, this function performs ASR on the audio, diarizes utterances, identifies some basic conversational features like retracing and filled pauses, and generates word-level alignments. You must supply a language code flag: `--lang=[three letter ISO language code]` for the ASR system to know what language the transcript is in. You can choose the flags `--rev` to use Rev.AI, a commercial ASR service, or `--whisper`, to use a local copy of OpenAI Whisper.
-2. `align` - by placing both an audio of video file (`.mp3/.mp4/.wav`) and an *utterance-aligned* CHAT file in the input directory, this function recovers utterance-level time alignments (if they are not already annotated) and generates word-level alignments. The @Languages header in the CHAT file tells the program which language is in the transcript.
-3. `morphotag` - by placing a CHAT file in the input directory, this function uses Stanford NLP Stanza to generate morphological and dependency analyses. The @Languages header in the CHAT file tells the program which language is in the transcript. You must supply a language code flag: `--lang=[three letter ISO language code]` for the alignment system to know what language the transcript is in. 
-<!-- 4. `bulletize` - placing both an audio of video file (`.mp3/.mp4/.wav`) and an *unlinked* CHAT file in the input directory, generate utterance-level alignments through ASR -->
-
-You can get a CHAT transcript to experiment with [at the TalkBank website](https://talkbank.org/), under any of the "Banks" that are available. You can also generate and parse a CHAT transcript via [the Python program](https://github.com/TalkBank/batchalign2?tab=readme-ov-file#chat).
-
-### Sample Commands
-For input files (CHAT and audio for `align`, CHAT only for `morphotag`, and audio only for `transcribe`), located in `~/ba_input` dumping the output to `~/ba_output`, one could write:
-
-#### ASR + Segmentation
-
-```
-batchalign transcribe --lang=eng ~/ba_input ~/ba_output
+```bash
+uv tool install "batchalign3[asr]"       # Whisper ASR engine
+uv tool install "batchalign3[hk]"        # HK/Cantonese engines
+uv tool install "batchalign3[all]"       # ASR + diarization + audio features
+uv tool install "batchalign3[all,hk]"   # Everything including HK/Cantonese
 ```
 
-#### morphosyntactic analysis
+### System requirements
 
-```
-batchalign morphotag ~/ba_input ~/ba_output
-```
+- **Python:** 3.12 (installed automatically by `uv`)
+- **Disk:** ~2 GB for ML models (downloaded on first use)
+- **RAM:** 8 GB minimum, 16 GB recommended
+- **FFmpeg:** only needed for MP4 media files
+- **Platforms:** macOS (ARM + Intel), Windows (x86), Linux (x86 + ARM)
 
-#### forced alignment
+See [Installation guide](book/src/user-guide/installation.md) for offline
+install, worker Python resolution, and development setup.
 
-```
-batchalign align ~/ba_input ~/ba_output
-```
+### First run
 
+After installing, **restart your terminal** so the `batchalign3` command is on
+your PATH. Then configure your default ASR engine:
 
------
-
-Follow instructions from
-
-```
-batchalign --help
-```
-
-and 
-
-```
-batchalign [verb] --help
+```bash
+batchalign3 setup
 ```
 
-to learn more about other options.
+This creates `~/.batchalign.ini`. You can also configure non-interactively:
 
-### Verbosity
-
-Placing one or multiple `-v` *behind the word `batchalign`* (i.e. behind the `[verb]` will not work) increases the verbosity of Batchalign. The default mode and one `-v` will use the normal Batchalign interface, whereas Batchalign with more than 1 `-v` will switch to the text-based "logging" interface.
-
-For instance, here is the instruction for running Batchalign to perform forced-alignment:
-
-```
-batchalign align input output
+```bash
+batchalign3 setup --non-interactive --engine whisper
+batchalign3 setup --non-interactive --engine rev --rev-key <KEY>
 ```
 
-With one `-v`, you can get stack trace information about any files that crashes: 
+The first time you run a processing command (e.g. `morphotag`), ML models will
+be downloaded automatically — this is a one-time cost of ~2 GB and may take a
+few minutes depending on your connection.
 
-```
-batchalign -v align input output
-```
+See [Quick start](book/src/user-guide/quick-start.md) for a full first-run
+walkthrough.
 
-and with two `-vv`, we will ditch the loading bar user interface and instead switch to a logging-based interface that has more information about what Batchalign is doing under the hood:
+### Updating
 
-```
-batchalign -vv align input output
-```
+Upgrade to the latest version:
 
-## Quick Start: Python
-
-Let's begin!
-
-```python
-import batchalign as ba
+```bash
+uv tool upgrade batchalign3
 ```
 
-### Document
-The `Document` is the most basic object in Bachalign. All processing pipelines expect `Document` as input, and will spit out `Document` as output.
+If you installed via the one-click installer, re-running the same installer
+script will upgrade an existing installation.
 
-```python
-doc = ba.Document.new("Hello, this is a transcript! I have two utterances.", 
-                      media_path="audio.mp3", lang="eng")
+The CLI will print a notice when a newer version is available on PyPI.
 
-# navigating the document
-first_utterance = doc[0]
-first_form = doc[0][0]
-the_comma = doc[0][1]
+## Usage
 
-assert the_comma.text == ','
-assert the_comma.type == ba.TokenType.PUNCT
+The safest way to run any command is with a separate output directory, so
+your originals are never touched:
 
-# taking a transcript
-sentences = doc.transcript(include_tiers=False, strip=True)
+```bash
+# Morphosyntactic analysis (%mor and %gra tiers)
+batchalign3 morphotag ~/corpus/ -o ~/output/
+
+# Forced alignment (word-level timestamps)
+batchalign3 align ~/corpus/ -o ~/output/
+
+# ASR transcription
+batchalign3 transcribe ~/recordings/ -o ~/transcripts/ --lang eng
+
+# Translation (%xtra tier)
+batchalign3 translate ~/corpus/ -o ~/output/
+
+# Utterance segmentation
+batchalign3 utseg ~/corpus/ -o ~/output/
+
+# WER benchmarking
+batchalign3 benchmark ~/corpus/
 ```
 
-Notably, if you have a Document that you haven't transcribed yet, you still can make a Document!
+The `-o` flag is optional — two positional arguments are treated as
+`input/ output/`:
 
-```python
-doc = ba.Document.new(media_path="audio.mp3", lang="eng")
+```bash
+batchalign3 morphotag ~/corpus/ ~/output/    # same as -o ~/output/
 ```
 
-### Pipelines
-<!-- You can process the language samples you got (perform ASR, forced alignment, utterance segmentation, and more!) via `BatchalignPipeline`. There are two levels of access to this API: you can either create a pipeline and use our default settings, or create and customize the underlying `BatchalignEngine`s yourself to perform processing. -->
+See [CLI reference](book/src/user-guide/cli-reference.md) for the full
+command list and all flags.
 
-#### Quick Pipeline
-Say you wanted to perform ASR, and then tag morphology of the resulting output.
+### In-place processing
 
-```python
-nlp = ba.BatchalignPipeline.new("asr,morphosyntax", lang="eng", num_speakers=2)
-doc = ba.Document.new(media_path="audio.mp3", lang="eng")
-doc = nlp(doc) # this is equivalent to nlp("audio.mp3"), we will make the initial doc for you
+If your corpus is tracked in Git (or you have another backup), you can skip
+the output directory and write results directly back into the source files.
+A single argument with no `-o` is treated as in-place:
 
-first_word_pos = doc[0][0].morphology
-first_word_time = doc[0][0].time
-first_utterance_time = doc[0].alignment
+```bash
+batchalign3 morphotag ~/corpus/
+batchalign3 align ~/corpus/
+batchalign3 translate ~/corpus/
 ```
 
-The quick API (right now) has support for the following tasks, which you can pass in a comma-separated list in the first argument:
+The `--in-place` flag makes this explicit, and is required when passing
+multiple input paths:
 
-- `asr`: ASR!
-- `morphosyntax`: PoS and dependency analysis
-- `fa`: Forced Alignment (require utterance-level timings already)
-
-We will support many, many, many more tasks soon with this API. For now, to gain access to the whole suite of tools, use the second pipeline API discussed below.
-
-#### Manual Pipeline
-Batchalign ships with a plurality of engines which preform the actual processing. For instance, to recreate the demo we had above using the Engines API, we would write
-
-```python
-# ASR
-whisper = ba.WhisperEngine(lang="eng")
-# retracing and disfluency analysis
-retrace = ba.NgramRetraceEngine()
-disfluency = ba.DisfluencyReplacementEngine()
-# morphosyntax
-morphosyntax = ba.StanzaEngine()
-
-# create a pipeline
-nlp = ba.BatchalignPipeline(whisper, retrace, disfluency, morphosyntax)
-                             
-# and run it!                             
-doc = nlp("audio.mp3") 
+```bash
+batchalign3 morphotag --in-place ~/corpus1/ ~/corpus2/
 ```
 
-[Here's a list](https://github.com/TalkBank/batchalign2/blob/master/batchalign/pipelines/__init__.py) of available engines.
+Each `.cha` file is overwritten with the annotated version. You can then
+review the changes with `git diff` and commit when satisfied.
 
-### Formats
-We currently support reading and writing two transcript formats: TalkBank CHAT, and Praat TextGrid.
+> **Warning:** In-place processing has no undo. If your files are not under
+> version control, copy the folder first or use `-o` to write to a separate
+> directory.
 
-#### CHAT
+### Verbosity and logs
 
-Here's how to read and write a CHAT file to parse a TalkBank transcript!
-
-```python
-# reading
-chat = ba.CHATFile(path="chat.cha")
-doc = chat.doc
-
-# writing
-chat = ba.CHATFile(doc=doc)
-chat.write("chat.cha")
+```bash
+batchalign3 -v morphotag ~/corpus/ -o ~/output/    # verbose
+batchalign3 -vv morphotag ~/corpus/ -o ~/output/   # debug
+batchalign3 logs --last                             # most recent run
 ```
 
-We will automatically detect audio files located within the same directory as the CHAT file, and associate it with the Batchalign Document.
+### Server mode
 
-#### TextGrid
+By default, a local server starts automatically and stays running so ML
+models only load once. If you have a more powerful machine (e.g. one with a
+GPU), you can run the server there and connect to it from your desktop or
+laptop:
 
-Importantly, there are two ways a TextGrid could be written: we can either place each **utterance** in an individual `IntervalTier`, or each **word** in its own `IntervalTier`; we leave that decision up to you. To learn more about TextGrid, [visit this page](https://github.com/timmahrt/praatIO).
+```bash
+# On the server (e.g. a GPU workstation called myserver):
+batchalign3 serve start --port 9000      # default port is 8000
 
-```python
-# reading; recall we can either interpret each IntervalTier as a word or utterance
-tg_utterance = ba.TextGridFile("utterance", path="tg_ut.TextGrid", lang="eng")
-tg_word = ba.TextGridFile("word", path="tg_w.TextGrid", lang="eng")
-
-doc1 = tg_utterance.doc
-doc2 = tg_word.doc
-
-# writing
-tg_utterance = ba.TextGridFile("utterance", doc=doc1)
-tg_word = ba.TextGridFile("word", doc=doc2)
-
-tg_utterance.write("tg_ut.TextGrid")
-tg_word.write("tg_w.TextGrid")
+# From any other machine on the network (use the same port):
+batchalign3 --server http://myserver:9000 morphotag ~/corpus/ -o ~/output/
 ```
-## Questions?
-If you have any questions or concerns, please reach out! If something isn't working right, [open an issue on GitHub](https://github.com/TalkBank/batchalign2/issues); if you need support, please feel free to email `houjun@cmu.edu` and `macw@cmu.edu`.
 
+See [Server mode](book/src/user-guide/server-mode.md) for setup details and
+the remote/local tradeoffs.
+
+## Learn more
+
+### For users
+
+- [Installation guide](book/src/user-guide/installation.md) — system requirements, offline install, updating
+- [Quick start](book/src/user-guide/quick-start.md) — first run walkthrough
+- [CLI reference](book/src/user-guide/cli-reference.md) — all commands and flags
+- [Server mode](book/src/user-guide/server-mode.md) — remote dispatch, daemon management
+- [Performance tips](book/src/user-guide/performance.md) — large corpus processing
+- [Migrating from Batchalign2](book/src/migration/index.md) — upgrade path
+- [TalkBank CHAT manual](https://talkbank.org/0info/manuals/CHAT.html) — CHAT format reference
+
+### For developers
+
+- [Python API](book/src/user-guide/python-api.md) — programmatic access to parsing, validation, and pipelines
+- [Building & Development](book/src/developer/building.md) — Rust toolchain, dev rebuilds, test matrix
+- [Batchalign2 compatibility shim](batchalign/compat.py) — drop-in for `CHATFile`, `Document`, `BatchalignPipeline`
+
+## Development
+
+Requires a Rust toolchain, [uv](https://docs.astral.sh/uv/), and a
+[talkbank-tools](https://github.com/TalkBank/talkbank-tools) sibling clone.
+
+```bash
+make sync && make build
+./target/debug/batchalign3 --help
+```
+
+## Support
+
+- Bug reports and feature requests: <https://github.com/TalkBank/batchalign3/issues>
+- General TalkBank questions: <https://talkbank.org/>
+
+---
+
+Supported by NIH grant HD082736.

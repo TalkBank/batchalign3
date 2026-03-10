@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Batchalign3 processing server LaunchDaemon (macOS).
+
+  Starts the batchalign3 Rust server via `batchalign3 serve start`.
+  Launchd manages lifecycle (auto-restart on crash, start at boot).
+
+  IMPORTANT:
+    - This is a LaunchDaemon (system domain), not a user LaunchAgent.
+    - Install with sudo and set root:wheel ownership.
+    - Replace USERNAME placeholder below before installing.
+    - Server port is configured in ~/.batchalign3/server.yaml (default 8001;
+      change to 8000 once batchalign3 is the sole server on this machine).
+
+  Prerequisites:
+    uv tool install batchalign3
+
+  Config: /Users/USERNAME/.batchalign3/server.yaml  (see examples/server.yaml)
+
+  To install:
+    sudo cp examples/launchd.plist /Library/LaunchDaemons/org.talkbank.batchalign3-server.plist
+    sudo chown root:wheel /Library/LaunchDaemons/org.talkbank.batchalign3-server.plist
+    sudo chmod 644 /Library/LaunchDaemons/org.talkbank.batchalign3-server.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/org.talkbank.batchalign3-server.plist
+
+  To restart:
+    sudo launchctl kickstart -k system/org.talkbank.batchalign3-server
+
+  To stop:
+    sudo launchctl bootout system/org.talkbank.batchalign3-server
+
+  Port assignment:
+    The default port is 8001. Once batchalign3 is the sole server on the
+    machine, update server.yaml to use port 8000.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.talkbank.batchalign3-server</string>
+
+    <key>UserName</key>
+    <string>USERNAME</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Update this path to match your batchalign3 installation -->
+        <string>/Users/USERNAME/.local/bin/batchalign3</string>
+        <string>serve</string>
+        <string>start</string>
+        <string>--foreground</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/Users/USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- 30s throttle to avoid restart storms (per 2026-02-25 postmortem) -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/.batchalign3/logs/launchd-server-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/.batchalign3/logs/launchd-server-stderr.log</string>
+</dict>
+</plist>

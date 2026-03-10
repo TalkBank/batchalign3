@@ -1,0 +1,130 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "batchalign3"
+version = "1.0.0"
+description = "Python Speech Language Sample Analysis"
+readme = "README.md"
+license = "BSD-3-Clause"
+requires-python = ">=3.12"
+authors = [
+    { name = "Brian MacWhinney", email = "macw@cmu.edu" },
+    { name = "Houjun Liu", email = "houjun@cmu.edu" },
+    { name = "Franklin Chen", email = "franklinchen@franklinchen.com" },
+]
+keywords = ["nlp", "linguistics", "chat", "talkbank", "transcription", "forced-alignment", "morphosyntax"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+]
+dependencies = [
+    # Core ML
+    "torch>=2.4.0",
+    "torchaudio>=2.4.0",
+    "transformers>=4.38.2",
+    "tokenizers>=0.14.1",
+    "numpy>=1.26",
+    "stanza[transformers]>=1.11.1",
+    "pycountry>=22.3",
+    "soundfile>=0.12.0",
+    # ASR (Whisper)
+    "openai-whisper",
+    "numba>=0.61.0",
+    "llvmlite>=0.44.0",
+    # Speaker diarization
+    "pyannote.audio>=3.1",
+    "onnxruntime>=1.16",
+    # Audio analysis (OpenSMILE, AVQI)
+    "opensmile>=2.5.0",
+    "praat-parselmouth>=0.4.6",
+    # Translation
+    "googletrans",
+    # CLI + server
+    "pydantic>=2.4",
+    "platformdirs>=4.3.0",
+    "filelock>=3.0.0",
+    "omegaconf>=2.3",
+    "typing-extensions",
+    "certifi",
+
+    # Utilities
+    "nltk>=3.8",
+    "praatio>=6.0.0",
+    "num2words",
+]
+
+[project.optional-dependencies]
+# HK/Cantonese engines (selected via --engine-overrides)
+hk-tencent = [
+    "tencentcloud-sdk-python-common",
+    "tencentcloud-sdk-python-asr",
+    "cos-python-sdk-v5",
+    "opencc-python-reimplemented",
+]
+hk-aliyun = [
+    "aliyun-python-sdk-core>=2.13.3",
+    "alibabacloud-nls-python-sdk>=1.0.0",
+    "opencc-python-reimplemented",
+]
+hk-funaudio = [
+    "funasr",
+    "opencc-python-reimplemented",
+]
+hk-cantonese-fa = [
+    "pycantonese",
+]
+hk = [
+    "batchalign3[hk-tencent,hk-aliyun,hk-funaudio,hk-cantonese-fa]",
+]
+# All optional engines (HK/Cantonese)
+all = [
+    "batchalign3[hk]",
+]
+train = [
+    "accelerate>=0.27",
+    "click>=8.1",
+    "rich>=13.6",
+    "rich-click>=1.7.0",
+]
+docs = ["mkdocs-material", "mkdocs-click"]
+
+[project.scripts]
+batchalign3 = "batchalign_core:cli_main"
+
+[project.urls]
+Homepage = "https://talkbank.org/"
+Repository = "https://github.com/TalkBank/batchalign3"
+Documentation = "https://github.com/TalkBank/batchalign3/tree/main/book/src"
+Issues = "https://github.com/TalkBank/batchalign3/issues"
+
+[tool.maturin]
+manifest-path = "pyo3/Cargo.toml"
+python-source = "."
+python-packages = ["batchalign"]
+features = ["pyo3/extension-module"]
+include = [
+    { path = "batchalign/runtime_constants.toml", format = "sdist" },
+    { path = "batchalign/runtime_constants.toml", format = "wheel" },
+]
+
+[dependency-groups]
+dev = [
+    "mypy",
+    "pyrefly",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov>=5.0",
+    "pytest-xdist",
+    "ty",
+    "types-requests>=2.32.4.20260107",
+]

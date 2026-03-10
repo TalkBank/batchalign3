@@ -1,0 +1,28 @@
+---
+source: crates/batchalign-app/tests/json_compat.rs
+expression: sub
+---
+{
+  "command": "morphotag",
+  "lang": "eng",
+  "num_speakers": 1,
+  "files": [],
+  "media_files": [],
+  "media_mapping": "",
+  "media_subdir": "",
+  "source_dir": "",
+  "options": {
+    "command": "morphotag",
+    "override_cache": false,
+    "lazy_audio": true,
+    "retokenize": false,
+    "skipmultilang": false,
+    "merge_abbrev": false
+  },
+  "paths_mode": false,
+  "source_paths": [],
+  "output_paths": [],
+  "display_names": [],
+  "debug_traces": false,
+  "before_paths": []
+}

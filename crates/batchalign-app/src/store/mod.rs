@@ -1,0 +1,498 @@
+//! In-memory job store — port of `batchalign/serve/job_store.py`.
+//!
+//! `JobStore` is the top-level control-plane owner for in-memory job state.
+//! It is composed from smaller owned runtime pieces:
+//!
+//! - [`registry::JobRegistry`] for the in-memory job map
+//! - [`counters::OperationalCounterStore`] for health/metrics bookkeeping
+//! - a store-owned `tokio::sync::Semaphore` for global job concurrency
+//! - SQLite and WebSocket boundaries for durability and live notifications
+//!
+//! Each job still runs as a `tokio::spawn` task, but the store no longer
+//! presents its synchronization primitives as just public fields to poke.
+
+mod counters;
+mod job;
+mod queries;
+mod registry;
+
+pub use job::*;
+pub(crate) use job::{CompletedFileOutput, FileFailureRecord, FileProgressRecord, FileRetryRecord};
+pub(crate) use queries::LeaseRenewalOutcome;
+pub(crate) use queries::{
+    AttemptFinishRecord, AttemptStartRecord, PersistedFileUpdate, PersistedJobUpdate,
+};
+
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::api::{
+    CommandName, FileName, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus,
+    LanguageCode3, NodeId, UnixTimestamp,
+};
+use crate::config::ServerConfig;
+use crate::scheduling::FailureCategory;
+use tokio::sync::{AcquireError, Semaphore, SemaphorePermit, broadcast};
+use tracing::{info, warn};
+
+use crate::db::JobDB;
+use crate::error::ServerError;
+use crate::ws::WsEvent;
+use counters::OperationalCounterStore;
+use registry::JobRegistry;
+
+// ---------------------------------------------------------------------------
+// Memory pressure thresholds
+// ---------------------------------------------------------------------------
+
+/// Emit a warning log when available memory drops below this threshold (in MB).
+///
+/// Set below the default `memory_gate_mb` critical threshold (2048 MB) but high
+/// enough to give operators early notice before the gate starts blocking jobs.
+/// 4 GB is roughly one Stanza model load worth of headroom.
+const MEMORY_WARNING_MB: u64 = 4096;
+
+/// Maximum seconds the memory gate will poll before rejecting a job (in seconds).
+///
+/// Two minutes is long enough for a single in-flight job to finish and free RAM,
+/// but short enough that the submitting client does not time out waiting for a
+/// response. Matches the Python server's timeout.
+const MEMORY_GATE_TIMEOUT_S: u64 = 120;
+
+/// Polling interval inside the memory gate retry loop (in seconds).
+///
+/// 5 seconds balances responsiveness (resume quickly after memory frees) against
+/// the cost of `sysinfo::System::refresh_memory()` calls.
+const MEMORY_GATE_POLL_S: u64 = 5;
+
+/// Assumed memory budget per concurrent job slot (in MB) for auto-tuning.
+///
+/// Each Python worker loads ~4 GB of ML models, but actual peak usage including
+/// intermediate tensors and audio buffers reaches ~10-12 GB.  12 GB per slot is
+/// the same conservative budget the Python server uses.
+const AUTO_CONCURRENT_BUDGET_MB: u64 = 12_000;
+
+/// Hard upper bound on auto-tuned concurrent slots, regardless of available RAM.
+///
+/// Even on a 256 GB host, running more than 8 simultaneous model-loading workers
+/// saturates CPU, memory bandwidth, and SSD I/O (thundering-herd effect).
+const AUTO_CONCURRENT_MAX_SLOTS: usize = 8;
+
+/// Fallback slot count when `sysinfo` reports 0 available memory.
+///
+/// On some platforms (containers, early boot) the memory query may return 0.
+/// Four slots is a safe middle ground that avoids both under-utilization and OOM.
+const AUTO_CONCURRENT_FALLBACK_SLOTS: usize = 4;
+
+// ---------------------------------------------------------------------------
+// Per-file status
+// ---------------------------------------------------------------------------
+
+/// Tracks the processing state of a single file within a job.
+///
+/// Each file begins in `Queued` status and progresses through `Processing` to a
+/// terminal state (`Done` or `Error`).  Progress fields are ephemeral (not
+/// persisted to SQLite) and are cleared on job restart.
+#[derive(Debug, Clone)]
+pub struct FileStatus {
+    /// Basename of the file (e.g. `"sample.cha"`), unique within the parent job.
+    pub filename: FileName,
+    /// Current lifecycle phase: Queued -> Processing -> Done | Error.
+    /// `Interrupted` is only set during DB recovery for files that were in-flight
+    /// when the server crashed.
+    pub status: FileStatusKind,
+    /// Human-readable error message, set when `status` is `Error`.
+    pub error: Option<String>,
+    /// Broad error classification (e.g. `"parse_error"`, `"worker_crash"`).
+    /// Used by the dashboard to group failures.
+    pub error_category: Option<FailureCategory>,
+    /// Structured error codes from CHAT validation (e.g. `["E362", "E701"]`).
+    /// Ephemeral -- not persisted to SQLite on restart.
+    pub error_codes: Option<Vec<String>>,
+    /// One-indexed line number in the source file where the error occurred.
+    /// `None` when the error is not localized to a specific line.
+    pub error_line: Option<i64>,
+    /// Opaque identifier linking to a detailed bug report stored on disk.
+    /// Generated by the pre-serialization validation layer when output fails
+    /// semantic checks.
+    pub bug_report_id: Option<String>,
+    /// Unix timestamp (seconds since epoch) when processing began for this file.
+    /// `None` while the file is still queued.
+    pub started_at: Option<UnixTimestamp>,
+    /// Unix timestamp (seconds since epoch) when processing finished (success or
+    /// error).  `None` while the file is in-flight.
+    pub finished_at: Option<UnixTimestamp>,
+    /// Earliest unix timestamp when a deferred retry may run. `None` when no
+    /// retry is currently scheduled for the file.
+    pub next_eligible_at: Option<UnixTimestamp>,
+    /// Durable identifier of the currently active attempt row for this file.
+    /// Ephemeral -- restored as `None` on startup and recreated on the next
+    /// dispatch when unfinished files are resumed.
+    pub current_attempt_id: Option<String>,
+    /// Current progress step within this file (e.g. utterance index).
+    /// Ephemeral -- used for live progress display only.
+    pub progress_current: Option<i64>,
+    /// Total expected steps for this file (e.g. total utterances).
+    /// Ephemeral -- used for live progress display only.
+    pub progress_total: Option<i64>,
+    /// Stable code for the current progress phase.
+    ///
+    /// The server derives the human-readable label from this enum when it
+    /// projects the in-memory status into the API response model.
+    pub progress_stage: Option<FileProgressStage>,
+}
+
+impl FileStatus {
+    /// Create a new `FileStatus` in the `Queued` state.
+    pub fn new(filename: FileName) -> Self {
+        Self {
+            filename,
+            status: FileStatusKind::Queued,
+            error: None,
+            error_category: None,
+            error_codes: None,
+            error_line: None,
+            bug_report_id: None,
+            started_at: None,
+            finished_at: None,
+            next_eligible_at: None,
+            current_attempt_id: None,
+            progress_current: None,
+            progress_total: None,
+            progress_stage: None,
+        }
+    }
+
+    /// Convert to the API response type.
+    pub fn to_entry(&self) -> FileStatusEntry {
+        FileStatusEntry {
+            filename: self.filename.clone(),
+            status: self.status,
+            error: self.error.clone(),
+            error_category: self.error_category,
+            error_codes: self.error_codes.clone(),
+            error_line: self.error_line,
+            bug_report_id: self.bug_report_id.clone(),
+            started_at: self.started_at,
+            finished_at: self.finished_at,
+            next_eligible_at: self.next_eligible_at,
+            progress_current: self.progress_current,
+            progress_total: self.progress_total,
+            progress_stage: self.progress_stage,
+            progress_label: self
+                .progress_stage
+                .map(FileProgressStage::label)
+                .map(str::to_string),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Operational counters
+// ---------------------------------------------------------------------------
+
+/// Monotonically increasing counters for server health diagnostics.
+///
+/// Exposed via the `GET /health` endpoint so operators can detect systemic
+/// problems (frequent crashes, memory exhaustion) without reading logs.
+/// All counters start at zero and are never reset during a server's lifetime.
+#[derive(Debug, Default)]
+pub struct OperationalCounters {
+    /// Number of times a Python worker process exited unexpectedly (non-zero
+    /// exit code or broken pipe) while processing a file.  High values indicate
+    /// model instability or OOM kills.
+    pub worker_crashes: i64,
+    /// Number of work-unit attempts started.
+    pub attempts_started: i64,
+    /// Number of attempts classified as retryable.
+    pub attempts_retried: i64,
+    /// Number of work units deferred for later scheduling.
+    pub deferred_work_units: i64,
+    /// Number of files that were forcibly marked as terminal errors by the
+    /// runner (e.g. after exhausting retry attempts or encountering an
+    /// unrecoverable worker failure).
+    pub forced_terminal_errors: i64,
+    /// Number of jobs that were rejected because available memory stayed below
+    /// `memory_gate_mb` for the full `MEMORY_GATE_TIMEOUT_S` duration.
+    pub memory_gate_aborts: i64,
+}
+
+// ---------------------------------------------------------------------------
+// FileResultEntry
+// ---------------------------------------------------------------------------
+
+/// Minimal result entry for a single file, stored after it reaches a terminal
+/// state.
+///
+/// Used by the results download endpoint to determine what to serve back to
+/// the client.  Successful files have `error: None`; failed files carry the
+/// error message so the client can report per-file failures.
+#[derive(Debug, Clone)]
+pub struct FileResultEntry {
+    /// Basename of the file (matches the corresponding `FileStatus::filename`).
+    pub filename: FileName,
+    /// MIME type of the result content (e.g. `"text/plain"` for CHAT output).
+    /// May be empty for errored files.
+    pub content_type: String,
+    /// Error message if processing failed for this file; `None` on success.
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// JobDetail
+// ---------------------------------------------------------------------------
+
+/// Snapshot of job state needed by the results-download endpoint.
+///
+/// This is a lightweight projection of [`Job`] that avoids exposing the full
+/// struct (and its `CancellationToken`) outside the store.  It carries just
+/// enough information for the handler to locate result files on disk and decide
+/// whether to stream content or return paths.
+pub struct JobDetail {
+    /// Current lifecycle state -- the handler uses this to reject downloads for
+    /// jobs that are still running.
+    pub status: JobStatus,
+    /// Whether the job used filesystem paths instead of staged content.  When
+    /// `true`, results live at `output_paths` and no staging dir exists.
+    pub paths_mode: bool,
+    /// Server-local directory containing staged result files.  Empty in paths
+    /// mode.
+    pub staging_dir: String,
+    /// Per-file result entries for files that have reached a terminal state.
+    pub results: Vec<FileResultEntry>,
+    /// Current status of every file in the job, for returning alongside results.
+    pub file_statuses: Vec<FileStatusEntry>,
+}
+
+// ---------------------------------------------------------------------------
+// JobStore
+// ---------------------------------------------------------------------------
+
+/// In-memory job store with background execution tasks.
+pub struct JobStore {
+    registry: JobRegistry,
+    semaphore: Semaphore,
+    db: Option<Arc<JobDB>>,
+    ws_tx: broadcast::Sender<WsEvent>,
+    counters: OperationalCounterStore,
+    config: ServerConfig,
+    node_id: NodeId,
+    trace_store: crate::trace_store::TraceStore,
+    max_concurrent: usize,
+}
+
+impl JobStore {
+    /// Create a new `JobStore` with the given configuration, optional database, and
+    /// broadcast channel for WebSocket notifications.
+    pub fn new(
+        config: ServerConfig,
+        db: Option<Arc<JobDB>>,
+        ws_tx: broadcast::Sender<WsEvent>,
+    ) -> Self {
+        let explicit = config.max_concurrent_jobs;
+        let max_concurrent = if explicit > 0 {
+            explicit as usize
+        } else {
+            auto_max_concurrent()
+        };
+        info!(
+            max_concurrent_jobs = max_concurrent,
+            config_value = config.max_concurrent_jobs,
+            "JobStore initialized"
+        );
+
+        Self {
+            registry: JobRegistry::new(),
+            semaphore: Semaphore::new(max_concurrent),
+            db,
+            ws_tx,
+            counters: OperationalCounterStore::new(),
+            node_id: NodeId::from(format!("node-{}", uuid::Uuid::new_v4().simple())),
+            trace_store: crate::trace_store::TraceStore::new(),
+            config,
+            max_concurrent,
+        }
+    }
+
+    /// Borrow the immutable server configuration owned by the store.
+    pub(crate) fn config(&self) -> &ServerConfig {
+        &self.config
+    }
+
+    /// Borrow the node identifier used for local queue-lease ownership.
+    pub(crate) fn node_id(&self) -> &NodeId {
+        &self.node_id
+    }
+
+    /// Borrow the trace store used by trace-download routes.
+    pub(crate) fn trace_store(&self) -> &crate::trace_store::TraceStore {
+        &self.trace_store
+    }
+
+    /// Acquire one global job-concurrency slot from the store-owned semaphore.
+    pub(crate) async fn acquire_job_slot(&self) -> Result<SemaphorePermit<'_>, AcquireError> {
+        self.semaphore.acquire().await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-tune concurrency
+// ---------------------------------------------------------------------------
+
+fn auto_max_concurrent() -> usize {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let available_mb = sys.available_memory() / (1024 * 1024);
+
+    let by_cpu = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4);
+
+    auto_max_concurrent_from(available_mb, by_cpu)
+}
+
+fn auto_max_concurrent_from(available_mb: u64, by_cpu: usize) -> usize {
+    // In Rust server mode, workers are separate Python processes.
+    // Use the same conservative 12 GB/slot budget as Python server mode,
+    // and hard-cap to 8 slots to avoid large-host overcommit.
+    let by_mem = if available_mb > 0 {
+        (available_mb / AUTO_CONCURRENT_BUDGET_MB) as usize
+    } else {
+        AUTO_CONCURRENT_FALLBACK_SLOTS
+    };
+
+    by_cpu.min(by_mem).clamp(2, AUTO_CONCURRENT_MAX_SLOTS)
+}
+
+// ---------------------------------------------------------------------------
+// Memory gate
+// ---------------------------------------------------------------------------
+
+/// Block until available memory is above critical threshold.
+///
+/// When a `pool` is provided along with the job's `command` and `lang`, the
+/// gate checks whether idle workers already exist for that key. If so, the
+/// memory check is skipped entirely — those workers are already loaded and no
+/// new memory allocation is needed. This prevents the deadlock where idle
+/// workers consume all RAM yet are the exact workers the new job needs.
+///
+/// Returns available memory in MB, or `Err(ServerError::MemoryPressure)` if
+/// memory stays critically low past the timeout.
+pub(crate) async fn memory_gate(
+    context: &str,
+    pool: Option<&crate::worker::pool::WorkerPool>,
+    command: Option<&CommandName>,
+    lang: Option<&LanguageCode3>,
+    critical_mb: u64,
+) -> Result<Option<u64>, ServerError> {
+    // Gate disabled when threshold is 0.
+    if critical_mb == 0 {
+        return Ok(available_memory_mb());
+    }
+
+    // If the pool already has idle workers for this (command, lang), skip the
+    // memory check — those workers are already loaded and will be reused.
+    if let (Some(pool), Some(cmd), Some(lang)) = (pool, command, lang)
+        && pool.has_idle_workers(cmd, lang)
+    {
+        info!(
+            command = %cmd,
+            lang = %lang,
+            context = context,
+            "Skipping memory gate — reusable idle workers exist"
+        );
+        return Ok(available_memory_mb());
+    }
+
+    let avail = available_memory_mb();
+    let Some(avail) = avail else {
+        return Ok(None);
+    };
+
+    if avail >= critical_mb {
+        if avail < MEMORY_WARNING_MB {
+            warn!(available_mb = avail, context = context, "Memory pressure");
+        }
+        return Ok(Some(avail));
+    }
+
+    warn!(
+        available_mb = avail,
+        context = context,
+        timeout_s = MEMORY_GATE_TIMEOUT_S,
+        "Memory critically low, waiting for recovery"
+    );
+
+    let deadline =
+        tokio::time::Instant::now() + tokio::time::Duration::from_secs(MEMORY_GATE_TIMEOUT_S);
+
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(MEMORY_GATE_POLL_S)).await;
+        let current = available_memory_mb();
+        match current {
+            Some(a) if a >= critical_mb => {
+                info!(available_mb = a, context = context, "Memory recovered");
+                return Ok(Some(a));
+            }
+            None => return Ok(None),
+            Some(a) => {
+                warn!(
+                    available_mb = a,
+                    context = context,
+                    "Still waiting for memory"
+                );
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let current_mb = current.unwrap_or(0);
+            let worker_hint = pool
+                .map(|p| {
+                    let keys = p.worker_keys();
+                    if keys.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "\nHint: {} idle workers holding memory: {}.",
+                            p.worker_count(),
+                            keys.join(", ")
+                        )
+                    }
+                })
+                .unwrap_or_default();
+            return Err(ServerError::MemoryPressure(format!(
+                "Insufficient memory ({current_mb} MB available, need {critical_mb} MB). \
+                 {context}{worker_hint}"
+            )));
+        }
+    }
+}
+
+fn available_memory_mb() -> Option<u64> {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let avail = sys.available_memory() / (1024 * 1024);
+    if avail > 0 { Some(avail) } else { None }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn unix_now() -> UnixTimestamp {
+    UnixTimestamp(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64(),
+    )
+}
+
+/// Convert a Unix timestamp to ISO 8601 string.
+pub fn ts_iso(ts: UnixTimestamp) -> String {
+    use chrono::{DateTime, Utc};
+    let secs = ts.0 as i64;
+    let nsecs = ((ts.0 - secs as f64) * 1_000_000_000.0) as u32;
+    DateTime::<Utc>::from_timestamp(secs, nsecs)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default()
+}

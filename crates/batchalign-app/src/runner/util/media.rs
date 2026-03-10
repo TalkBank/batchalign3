@@ -1,0 +1,277 @@
+//! Media resolution, preflight validation, and output path handling.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use crate::api::CommandName;
+use crate::options::{CommandOptions, UtrEngine};
+use crate::store::{PendingJobFile, RunnerJobSnapshot};
+
+use super::auto_tune::KNOWN_MEDIA_EXTENSIONS;
+
+/// Check if a job should use Rev.AI preflight submission.
+///
+/// Preflight pre-submits all audio files to Rev.AI before processing,
+/// allowing Rev.AI to process them in parallel server-side.
+pub(in crate::runner) fn should_preflight(
+    command: &CommandName,
+    typed_options: Option<&CommandOptions>,
+) -> bool {
+    match (command.as_ref(), typed_options) {
+        (
+            "transcribe" | "transcribe_s",
+            Some(CommandOptions::Transcribe(t) | CommandOptions::TranscribeS(t)),
+        ) => t.effective_asr_engine().is_revai(),
+        ("transcribe" | "transcribe_s", None) => true, // rev is default
+        ("benchmark", Some(CommandOptions::Benchmark(b))) => b.effective_asr_engine().is_revai(),
+        ("benchmark", None) => true,
+        ("align", Some(CommandOptions::Align(a))) => {
+            matches!(a.utr_engine, Some(UtrEngine::RevAi))
+        }
+        ("align", None) => true, // rev_utr is default
+        _ => false,
+    }
+}
+
+/// Pre-validate media files before dispatch.
+///
+/// For non-CHAT files in paths_mode, checks:
+/// 1. File exists on disk
+/// 2. File is non-empty
+/// 3. File extension is a known audio/video format
+///
+/// Returns the set of file indices that failed validation.
+pub(in crate::runner) async fn preflight_validate_media(
+    file_list: &[PendingJobFile],
+    source_paths: &[String],
+    paths_mode: bool,
+) -> HashMap<usize, String> {
+    if !paths_mode {
+        return HashMap::new();
+    }
+
+    let mut failures = HashMap::new();
+
+    for file in file_list {
+        // Only validate non-CHAT (media) files
+        if file.has_chat {
+            continue;
+        }
+
+        let Some(source) = source_paths.get(file.file_index) else {
+            failures.insert(file.file_index, "No source path for file index".to_string());
+            continue;
+        };
+
+        let path = Path::new(source);
+
+        // Check file exists and non-empty via metadata (one syscall)
+        match tokio::fs::metadata(path).await {
+            Err(_) => {
+                failures.insert(file.file_index, format!("File not found: {source}"));
+                continue;
+            }
+            Ok(meta) if meta.len() == 0 => {
+                failures.insert(file.file_index, format!("File is empty: {source}"));
+                continue;
+            }
+            Ok(_) => {}
+        }
+
+        // Check known extension
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+        if let Some(ref ext) = ext {
+            if !KNOWN_MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+                failures.insert(
+                    file.file_index,
+                    format!("Unknown media format '.{ext}': {source}"),
+                );
+            }
+        } else {
+            failures.insert(file.file_index, format!("File has no extension: {source}"));
+        }
+    }
+
+    failures
+}
+
+/// Collect the original media paths that should be pre-submitted to Rev.AI for
+/// one job.
+///
+/// The returned paths must be the original provider-visible files, not
+/// temporary WAV conversions, because preflight submission happens before the
+/// per-file processing pipeline starts.
+pub(in crate::runner) async fn collect_preflight_audio_paths(
+    command: &CommandName,
+    job: &RunnerJobSnapshot,
+    file_list: &[PendingJobFile],
+) -> Vec<String> {
+    match command.as_ref() {
+        "align" => collect_align_preflight_audio_paths(job, file_list).await,
+        _ => file_list
+            .iter()
+            .filter(|file| !file.has_chat)
+            .filter_map(|file| {
+                if job.filesystem.paths_mode && file.file_index < job.filesystem.source_paths.len()
+                {
+                    Some(job.filesystem.source_paths[file.file_index].clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    }
+}
+
+/// Collect align-job media paths for Rev.AI preflight.
+///
+/// Align jobs usually begin from CHAT files, so preflight must resolve the
+/// sibling media path first. This helper currently supports the local
+/// `paths_mode` shape, which is where Rev.AI preflight provides the main
+/// throughput win for large corpora.
+async fn collect_align_preflight_audio_paths(
+    job: &RunnerJobSnapshot,
+    file_list: &[PendingJobFile],
+) -> Vec<String> {
+    if !job.filesystem.paths_mode {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    for file in file_list {
+        let Some(chat_path) = job.filesystem.source_paths.get(file.file_index) else {
+            continue;
+        };
+        if let Some(audio_path) = resolve_audio_for_chat(chat_path).await {
+            paths.push(audio_path);
+        }
+    }
+    paths
+}
+
+/// Resolve the audio file path for a given CHAT file path.
+///
+/// Looks for files with the same stem and a known audio extension
+/// in the same directory as the CHAT file.
+pub(in crate::runner) async fn resolve_audio_for_chat(chat_path: &str) -> Option<String> {
+    let path = Path::new(chat_path);
+    let stem = path.file_stem()?.to_str()?;
+    let dir = path.parent()?;
+
+    for ext in KNOWN_MEDIA_EXTENSIONS {
+        let candidate = dir.join(format!("{stem}.{ext}"));
+        if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// Compute audio identity for cache keying.
+///
+/// Returns an [`AudioIdentity`] built from the file's resolved path,
+/// modification time, and size.
+pub(in crate::runner) async fn compute_audio_identity(
+    audio_path: &str,
+) -> Option<batchalign_chat_ops::fa::AudioIdentity> {
+    let meta = tokio::fs::metadata(audio_path).await.ok()?;
+    let size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(batchalign_chat_ops::fa::AudioIdentity::from_metadata(
+        audio_path, mtime, size,
+    ))
+}
+
+/// Get audio duration in milliseconds via ffprobe.
+///
+/// Returns `None` if ffprobe is not available or fails.
+pub(in crate::runner) async fn get_audio_duration_ms(audio_path: &str) -> Option<u64> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            audio_path,
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let duration_s: f64 = stdout.trim().parse().ok()?;
+    Some((duration_s * 1000.0) as u64)
+}
+
+/// Replace the filename in `output_path` with `result_filename`.
+pub(in crate::runner) fn apply_result_filename(output_path: &str, result_filename: &str) -> String {
+    let output = Path::new(output_path);
+    let result_name = Path::new(result_filename).file_name().unwrap_or_default();
+    output
+        .parent()
+        .map(|p| p.join(result_name))
+        .unwrap_or_else(|| result_name.into())
+        .to_string_lossy()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_preflight;
+    use crate::api::CommandName;
+    use crate::options::{BenchmarkOptions, CommandOptions, CommonOptions, TranscribeOptions};
+
+    #[test]
+    fn transcribe_asr_override_disables_rev_preflight() {
+        let mut common = CommonOptions::default();
+        common
+            .engine_overrides
+            .insert("asr".into(), "tencent".into());
+        let opts = CommandOptions::Transcribe(TranscribeOptions {
+            common,
+            asr_engine: "rev".into(),
+            diarize: false,
+            wor: false.into(),
+            merge_abbrev: false.into(),
+            batch_size: 8,
+        });
+
+        assert!(!should_preflight(
+            &CommandName::from("transcribe"),
+            Some(&opts)
+        ));
+    }
+
+    #[test]
+    fn benchmark_asr_override_disables_rev_preflight() {
+        let mut common = CommonOptions::default();
+        common
+            .engine_overrides
+            .insert("asr".into(), "aliyun".into());
+        let opts = CommandOptions::Benchmark(BenchmarkOptions {
+            common,
+            asr_engine: "rev".into(),
+            wor: true.into(),
+            merge_abbrev: false.into(),
+        });
+
+        assert!(!should_preflight(
+            &CommandName::from("benchmark"),
+            Some(&opts)
+        ));
+    }
+}

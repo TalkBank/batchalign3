@@ -1,0 +1,12 @@
+[
+  {"bookmark": "Prerequisites", "match": "Prerequisites:"},
+  {"bookmark": "Align_Command", "match": "*align produces"},
+  {"bookmark": "Morphotag_Command", "match": "*morphotag uses"},
+  {"bookmark": "Transcribe_Command", "match": "*transcribe provides"},
+  {"bookmark": "Translate_Command", "match": "translate uses"},
+  {"bookmark": "Command_Help", "match": "--help flag"},
+  {"bookmark": "RevAI_Setup", "match": "rev.ai account"},
+  {"bookmark": "Whisper_Mode", "match": "adjusted Whisper"},
+  {"bookmark": "FFmpeg_Install", "match": "FFmpeg installation"},
+  {"bookmark": "Verbose_Mode", "match": "Verbose” Output"}
+]

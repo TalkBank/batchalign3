@@ -1,4 +1,0 @@
-recursive-include batchalign *.py
-include batchalign/version
-include batchalign/pipelines/cleanup/support/*
-include batchalign/models/speaker/*.yaml

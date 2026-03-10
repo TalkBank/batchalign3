@@ -1,0 +1,468 @@
+# Command Lifecycles
+
+**Status:** Current
+**Last updated:** 2026-03-14
+
+End-to-end sequence diagrams showing how jobs flow through the system,
+from CLI invocation to output files. Every batchalign command follows one
+of four **dispatch shapes** — one diagram per shape covers the full
+architecture. For per-command option-driven flowcharts, see
+[Command Flowcharts](command-flowcharts.md).
+
+## Dispatch Shapes Overview
+
+| Dispatch Shape | Commands | Parallelism | Key Trait |
+|----------------|----------|-------------|-----------|
+| **Batched FA Infer** | `align` | Concurrent files (semaphore-bounded by `num_workers`) | Per-file, audio-aware; groups utterances into time windows, caches per-group |
+| **Batched Text Infer** | `morphotag`, `utseg`, `translate`, `coref`, `compare` | Cross-file batching (all utterances pooled into one GPU batch) | Single batched `execute_v2` call with one prepared-text artifact; maximizes model batch efficiency |
+| **Transcribe Infer** | `transcribe`, `transcribe_s` | Concurrent files (semaphore-bounded by `num_workers`) | Creates CHAT from scratch; ASR → optional speaker diarization → post-processing → CHAT assembly |
+| **Benchmark Infer** | `benchmark` | Concurrent files (semaphore-bounded by `num_workers`) | Composes Rust transcribe + compare around one ASR worker capability |
+| **Media Analysis V2** | `opensmile`, `avqi` | Concurrent files (semaphore-bounded by `num_workers`) | Rust prepares audio, sends typed `execute_v2` requests, Python returns raw analysis payloads |
+
+All five shapes are server-side orchestrated or Rust-owned at the request
+boundary.
+
+## Parallelism Model
+
+All per-file dispatch shapes (`align`, `transcribe`, `benchmark`,
+`opensmile`, `avqi`) process files **concurrently** using
+supervised `tokio::spawn` tasks bounded by a
+`tokio::sync::Semaphore(num_workers)`. The number of workers is auto-tuned
+based on available memory and CPU cores, or set explicitly with `--workers N`.
+Each file opens its first durable attempt before setup work such as input
+reads, media resolution, or conversion so early failures are visible in the
+attempt history rather than only in terminal file state. Job-level media
+prevalidation now uses an explicit `file_setup` attempt for the same reason.
+Per-file dispatch code now routes the common processing/retry/completion
+sequence through a shared `FileRunTracker` helper instead of open-coding those
+store mutations in every pipeline. Supervised file tasks also report explicit
+`FileTaskOutcome` values back to the runner so the runner does not need to
+infer task success by rereading shared file state after the task exits. Media
+preflight failures now use that same lifecycle boundary via an explicit setup
+failure path instead of a one-off runner helper. The runner-owned lifecycle
+labels are now also typed through `FileStage` rather than repeated as ad hoc
+strings in each dispatch module. The same typed label vocabulary now flows
+through the shared internal progress channel used by FA and transcribe
+pipelines. The API now exposes that state in two parallel fields:
+`progress_stage` for stable client logic and `progress_label` as the derived
+operator-facing display string.
+
+Batched text commands (`morphotag`, `utseg`, `translate`, `coref`) take a
+different approach: they **pool all utterances from all files** into a single
+batched `execute_v2` call backed by one prepared-text artifact. The one worker
+call handles all files at once while keeping the model batch intact.
+
+| Shape | File-level parallelism | Within-file parallelism |
+|-------|------------------------|-------------------------|
+| FA Infer | Supervised tasks + `Semaphore(N)` | Sequential groups within each file |
+| Transcribe | Supervised tasks + `Semaphore(N)` | Single worker call per file |
+| Benchmark Infer | Supervised tasks + `Semaphore(N)` | Single ASR worker call plus Rust compare per file |
+| Per-File Process | Supervised tasks + `Semaphore(N)` | Single worker call per file |
+| Batched Text | N/A (single batch) | One GPU batch call covers all files |
+
+---
+
+## Scenario 1: align — 3 files, 2 workers
+
+Forced alignment is the most complex dispatch shape. Each file has its
+own audio, so files are processed sequentially. Within each file,
+utterances are grouped into time windows and batched to the worker.
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Server
+    participant JobStore
+    participant Pool as WorkerPool
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+    participant Cache
+
+    CLI->>Server: POST /jobs (align, 3 files, lang=eng)
+    Server->>JobStore: Create job (Queued)
+    Server-->>CLI: 202 Accepted {job_id}
+
+    Note over Server: Runner picks up job
+
+    Server->>JobStore: Memory gate check
+    JobStore-->>Server: OK (idle worker bypass)
+    Server->>JobStore: Mark Running
+    Server->>Pool: pre_scale(num_workers=2)
+    Pool->>W1: spawn (command=align, lang=eng)
+    Pool->>W2: spawn (command=align, lang=eng)
+
+    loop For each file (concurrent — bounded by num_workers semaphore)
+        Server->>Server: resolve audio via media_mappings
+        Server->>Server: ensure_wav() — convert mp4→wav if needed (cached)
+        Server->>Server: parse_lenient()
+
+        alt Complete reusable %wor timing
+            Note over Server: Cheap rerun path:<br/>verify main↔%wor mapping,<br/>rehydrate main-tier word bullets,<br/>refresh utterance bullets / %wor
+            Server->>JobStore: Mark file Done
+        else Normal align path
+
+            Note over Server: UTR pre-pass (detect-and-skip)
+            Server->>Server: count_utterance_timing()
+            alt Untimed utterances exist AND utr_engine configured
+                Server->>Pool: checkout infer:asr worker
+                Server->>W1: execute_v2(task="asr", typed_input)
+                W1-->>Server: typed raw ASR result
+                Server->>Server: inject_utr_timing() — exact subsequence fast path, else global DP
+                Note over Server: Untimed utterances get<br/>utterance-level bullets from ASR
+            else All utterances timed OR no utr_engine
+                Note over Server: Skip UTR (use existing bullets<br/>or interpolation fallback)
+            end
+
+            Server->>Server: pre-validate (MainTierValid)
+            Server->>Server: group_utterances() → time windows
+
+            Server->>Cache: batch lookup (BLAKE3 keys: words + audio identity + window)
+            Cache-->>Server: hits[] + misses[]
+
+            alt Cache misses exist
+                Server->>Pool: checkout worker
+                Pool-->>Server: CheckedOutWorker (RAII)
+                Server->>W1: execute_v2(task="fa", prepared_audio + prepared_text)
+                Note over W1: Read prepared artifacts,<br/>run FA model
+                W1-->>Server: typed raw FA timings
+                Note over Server: Drop CheckedOutWorker → returns to pool
+            end
+
+            Server->>Server: parse_fa_response() — DP-align model output to transcript
+            Server->>Server: apply_fa_results() — inject timings + postprocess
+            Note over Server: Timing: chunk-relative → file-absolute ms<br/>Generate %wor tier<br/>Monotonicity check (E362)<br/>Same-speaker overlap (E704)
+            Server->>Cache: store new entries
+            Server->>Server: post-validate → serialize CHAT
+            Server->>JobStore: Mark file Done
+        end
+    end
+
+    Server->>JobStore: Mark job Completed
+
+    CLI->>Server: GET /jobs/{id}/results
+    Server-->>CLI: output files
+```
+
+### Walkthrough
+
+1. **CLI** discovers `.cha` files in the input directory (sorted largest-first),
+   submits them as a single job via `POST /jobs`.
+2. **Server** creates the job in `Queued` state and returns immediately.
+3. The **runner** checks the memory gate — if an idle worker already exists
+   for `(align, eng)`, the memory check is bypassed entirely.
+4. **Pre-scaling** spawns 2 worker processes to avoid sequential spawn overhead.
+   Workers load the FA model (Whisper or Wave2Vec) at startup.
+5. Files are processed **concurrently**, bounded by `num_workers` via a
+   `tokio::sync::Semaphore`. For each file, the server **resolves** the
+   audio file by walking the parent directory or using media mappings for
+   matching `.wav`/`.mp3`/`.mp4` files. If the resolved file is MP4 (or
+   another container format), **`ensure_wav`** converts it to WAV via ffmpeg
+   and caches the result at `~/.batchalign3/media_cache/` (see
+   [Media Conversion](../reference/media-conversion.md)).
+5b. **Cheap rerun path:** After parsing, the server first checks whether the
+   file already has complete reusable `%wor` timing. If main↔`%wor` alignment
+   is clean and every mapped `%wor` word is timed, the server copies that
+   timing back to main-tier words, refreshes utterance bullets, optionally
+   regenerates `%wor`, and skips FA for the file entirely.
+5c. **UTR pre-pass** (detect-and-skip): If the file is not already fully
+   reusable, the server calls `count_utterance_timing()`. If untimed utterances
+   exist and a UTR engine is configured (`--utr`, the default), it runs a
+   Rust-owned UTR backend on the full audio, then `inject_utr_timing()`
+   first tries a cheap exact-subsequence match and falls back to one global
+   Hirschberg DP when the transcript/ASR match is missing or ambiguous. For
+   `--utr-engine rev`, the server uses the shared Rust Rev.AI client directly
+   and can reuse preflight-submitted job IDs. For worker-backed engines such as
+   Whisper, the server still uses the worker ASR task. If all utterances are
+   already timed, UTR is skipped entirely. If no UTR engine is configured
+   (`--no-utr`), untimed utterances fall back to proportional interpolation.
+   The updated CHAT text (with recovered bullets) is then used for FA grouping.
+5c. The server **groups** utterances into time windows (max 20s for Whisper,
+   15s for Wave2Vec).
+6. **Cache lookup** uses BLAKE3 hashes of (words + audio identity + time window
+   + timing mode + engine version). Cache hits skip worker IPC entirely.
+7. **Cache misses** are sent to a checked-out worker via typed `execute_v2`
+   requests. The `CheckedOutWorker` RAII guard returns the worker to the pool on
+   drop.
+8. The Rust server **DP-aligns** model timestamps to transcript words
+   (Hirschberg algorithm), converts chunk-relative times to file-absolute
+   milliseconds, generates `%wor` tiers, and runs monotonicity/overlap checks.
+9. New results are **cached** for future reuse.
+10. The CLI **polls** for results and writes output files.
+
+---
+
+## Scenario 2: morphotag — 2 files, cross-file batching
+
+Text-only commands pool utterances from all files into a single worker
+call, maximizing GPU batch efficiency.
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Server
+    participant Pool as WorkerPool
+    participant W as Worker
+    participant Cache
+
+    CLI->>Server: POST /jobs (morphotag, 2 files)
+    Server-->>CLI: 202 Accepted {job_id}
+
+    Note over Server: Runner: mark Running, select dispatch_batched_infer
+
+    par Parse all files
+        Server->>Server: parse file_a.cha → AST_a
+        Server->>Server: parse file_b.cha → AST_b
+    end
+
+    Server->>Server: clear existing %mor/%gra from both ASTs
+    Server->>Server: collect_payloads() from AST_a (utterances 0..4)
+    Server->>Server: collect_payloads() from AST_b (utterances 5..8)
+    Note over Server: Track provenance: file_a starts at index 0 (count=5),<br/>file_b starts at index 5 (count=4)
+
+    Server->>Cache: batch lookup all 9 utterances
+    Cache-->>Server: 3 hits, 6 misses
+
+    Server->>Server: inject cache hits immediately
+
+    Server->>Pool: checkout worker
+    Pool-->>Server: CheckedOutWorker
+    Server->>W: execute_v2(task="morphosyntax", prepared_text batch=6 misses)
+    Note over W: Read prepared batch artifact,<br/>run one Stanza NLP batch
+    W-->>Server: typed morphosyntax batch result
+    Note over Server: Worker returned to pool
+
+    Server->>Server: repartition responses by file (using start indices)
+
+    par Inject results per file
+        Server->>Server: inject_results() into AST_a → insert %mor/%gra tiers
+        Server->>Server: inject_results() into AST_b → insert %mor/%gra tiers
+    end
+
+    Server->>Cache: store 6 new entries
+    Server->>Server: validate alignment → serialize both files
+    Server-->>CLI: 2 output files
+```
+
+### Walkthrough
+
+1. All files are **parsed up front**, and existing `%mor`/`%gra` tiers are
+   cleared (morphotag always regenerates them).
+2. **Payloads** are collected from each file's utterances — per-utterance word
+   lists with language metadata and special-form annotations. The server tracks
+   which utterance belongs to which file via global start indices.
+3. **Cache lookup** checks all utterances at once. BLAKE3 keys include
+   (words + language + terminator + special forms + engine version). Cache hits
+   are injected immediately — no worker call needed for those utterances.
+4. All **cache misses across both files** are pooled into a single
+   `execute_v2(task="morphosyntax")` call. Rust freezes the miss batch into one
+   prepared-text artifact; the Python worker reads that artifact, runs one
+   Stanza batch, and returns typed raw UD annotations.
+5. Responses are **repartitioned** back to their source files using the tracked
+   start indices, then injected into each file's AST.
+6. This same shape handles `utseg`, `translate`, `coref`, and `compare`.
+   The only differences are: which tiers are injected, what the cache key
+   includes, and which Stanza/translation pipeline runs.
+
+---
+
+## Scenario 3: transcribe — 1 file, audio to CHAT
+
+Transcription creates CHAT from scratch rather than modifying existing
+files. It has the longest pipeline: ASR → post-processing → CHAT assembly
+→ optional follow-up commands.
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Server
+    participant Pool as WorkerPool
+    participant W as Worker
+
+    CLI->>Server: POST /jobs (transcribe, 1 audio file)
+    Server-->>CLI: 202 Accepted {job_id}
+
+    Note over Server: Runner: mark Running
+
+    opt Rev.AI engine selected
+        Server->>Server: parallel Rev.AI preflight uploads
+        Note over Server: Rust control plane uses shared Rev.AI client
+    end
+
+    Server->>Server: resolve audio path
+    Server->>Server: ensure_wav() — convert mp4→wav if needed (cached)
+    Server->>Pool: checkout worker
+    Pool-->>Server: CheckedOutWorker
+
+    Server->>W: execute_v2(task="asr", typed_input)
+    Note over W: Run ASR model or provider SDK<br/>(Whisper local or HK engine)
+    W-->>Server: typed raw ASR result (`monologue_asr_result` or `whisper_chunk_result`)
+    Note over Server: Worker returned to pool
+
+    opt diarize requested and ASR labels absent
+        Server->>Pool: checkout worker
+        Pool-->>Server: CheckedOutWorker
+        Server->>W: execute_v2(task="speaker", prepared_audio)
+        Note over W: Run diarization model<br/>(Pyannote default, NeMo optional)
+        W-->>Server: typed raw speaker result (`speaker_result`)
+        Note over Server: Worker returned to pool
+    end
+
+    Note over Server: Rust normalizes payload, then runs post-processing<br/>(batchalign-chat-ops::asr_postprocess)
+
+    Server->>Server: 1. Compound merging (adjacent subword tokens)
+    Server->>Server: 2. Number expansion (digits → words)
+    Server->>Server: 3. Retokenization (DP-align model tokens to word boundaries)
+    Server->>Server: 4. Cantonese normalization (if applicable)
+    Server->>Server: 5. Long-turn splitting (>300 words → split on punctuation)
+    Server->>Server: 6. Seconds → milliseconds
+
+    Server->>Server: build_chat() → ChatFile AST
+    Note over Server: Generate headers: @Languages, @Participants,<br/>@ID (PAR/INV/CHI/MOT...), @Media<br/>Build utterances with %wor tiers
+    opt dedicated speaker segments present
+        Server->>Server: reassign_speakers() → rewrite utterance speakers,<br/>@Participants, and @ID from raw diarization segments
+    end
+
+    opt with_utseg=true
+        Server->>Server: process_utseg() — re-segment utterance boundaries
+    end
+    opt with_morphosyntax=true
+        Server->>Server: process_morphosyntax() — add %mor/%gra tiers
+    end
+
+    Server->>Server: validate → serialize → .cha output
+    Server-->>CLI: output .cha file
+```
+
+### Walkthrough
+
+1. **Rev.AI preflight** (optional): For Rev.AI-backed transcription, the server
+   pre-submits all audio files in parallel before the per-file loop. This lets
+   Rev.AI start processing immediately, reducing wall-clock time 2-5x for large
+   batches. The `rev_job_id` is stored in the job's runtime state and passed to
+   the worker later.
+2. The worker runs ASR and returns **raw tokens** — words with timestamps,
+   optional speaker labels, and confidence scores. The worker has zero CHAT
+   awareness.
+3. **All post-processing happens in Rust** (`batchalign-chat-ops`), not Python:
+   - *Compound merging* joins adjacent subword tokens
+   - *Number expansion* converts digits to spelled-out words (language-aware)
+   - *Retokenization* uses character-level DP alignment to reconcile model token
+     boundaries with linguistic word boundaries
+   - *Cantonese normalization* converts simplified Chinese to HK traditional and
+     applies domain-specific replacements (via `zhconv` crate, pure Rust)
+   - *Long-turn splitting* breaks monologues >300 words at punctuation
+4. **CHAT assembly** (`build_chat`) creates a complete `ChatFile` AST with
+   proper headers (participant codes derived from speaker indices: PAR, INV,
+   CHI, MOT, etc.) and utterances with `%wor` timing tiers. If `transcribe_s`
+   needed dedicated speaker diarization, Rust then rewrites utterance speaker
+   codes plus `@Participants` / `@ID` headers from the raw speaker segments.
+5. Optional **follow-up commands** (utseg, morphotag) are chained automatically,
+   reusing the same worker pool. This means `transcribe --with-utseg
+   --with-morphosyntax` produces a fully annotated CHAT file in one invocation.
+
+---
+
+## Scenario 4: Server Startup & Capability Detection
+
+At startup the server must discover which NLP tasks are available before
+accepting jobs. A **probe worker** is spawned to introspect the Python
+environment.
+
+```mermaid
+sequenceDiagram
+    participant Server
+    participant Pool as WorkerPool
+    participant Probe as Probe Worker
+    participant DB as SQLite
+
+    Server->>DB: Mark queued/running jobs interrupted
+    Server->>DB: Prune expired entries
+    Server->>DB: Load jobs and reconcile runtime state
+    Note over Server,DB: Requeue resumable work; promote all-terminal jobs to final state; persist canonical status and cleared leases
+
+    Server->>Pool: spawn probe worker
+    Pool->>Probe: python -m batchalign.worker --task morphosyntax
+    Probe-->>Pool: {"ready": true, "pid": N}
+
+    Server->>Probe: capabilities()
+
+    Note over Probe: Import-probe each InferTask:<br/>stanza → Morphosyntax, Utseg, Coref ✓<br/>googletrans → Translate ✓<br/>torch+torchaudio → FA ✓<br/>whisper or Rev key → ASR ✓<br/>parselmouth+torchaudio → AVQI ✓<br/>(no opensmile) → OpenSMILE ✗
+
+    Probe-->>Server: CapabilitiesResponse {infer_tasks, engine_versions, commands=[]}
+
+    Server->>Probe: shutdown()
+    Note over Probe: Probe worker terminated
+
+    Server->>Server: validate_infer_capability_gate()
+    Note over Server: Rust derives commands from infer tasks:<br/>morphotag needs Morphosyntax ✓<br/>utseg needs Utseg ✓<br/>translate needs Translate ✓<br/>coref needs Coref ✓<br/>align needs FA ✓<br/>opensmile needs OpenSMILE ✗ → excluded
+
+    Server->>Server: Build final capabilities list
+    Server->>Pool: warmup workers (based on policy)
+
+    Note over Server: Server ready — /health advertises:<br/>commands: [morphotag, utseg, translate, coref, align, transcribe, ...]<br/>infer_tasks: [Morphosyntax, Utseg, Translate, Coref, FA, ASR, ...]
+
+    Server->>DB: Load persisted jobs, init utterance cache
+    Note over Server: Accept incoming requests
+```
+
+### Walkthrough
+
+1. **DB recovery**: Any jobs left in `Queued` or `Running` state from a
+   previous crash are first marked `Interrupted`, and expired entries are
+   pruned.
+2. **Runtime reconciliation**: `JobStore::load_from_db()` rebuilds each job and
+   then uses the `Job` recovery transition to choose a canonical state:
+   resumable files are re-queued, while all-terminal jobs are promoted to
+   `Completed` or `Failed`. The reconciled status and cleared lease metadata are
+   written back to SQLite so memory and persistence agree.
+3. A **probe worker** is spawned with a dummy command (`morphotag`). It loads
+   minimal models and reports readiness.
+4. The server calls `capabilities()` which **import-probes** each `InferTask`:
+   for each task, the worker tries to import the required Python packages
+   (e.g., `stanza` for Morphosyntax, `torch`+`torchaudio` for FA). If imports
+   succeed, the task is reported as available along with its engine version.
+5. The probe worker is shut down immediately — it exists only for introspection.
+6. **`validate_infer_capability_gate()`** derives the released command surface
+   from those infer tasks. For every server-orchestrated command, the
+   corresponding `InferTask` must be available with a non-empty engine version.
+   Commands that fail the check are excluded with a warning.
+7. **Warmup workers** are spawned based on configuration policy (e.g., pre-spawn
+   one worker for the most common command).
+8. The `/health` endpoint advertises the final, validated capability set. The
+   CLI checks this before submitting jobs — if a required command is missing,
+   it errors immediately rather than queueing a job that will fail.
+
+---
+
+## Cross-Cutting Concerns
+
+### CHAT Ownership Boundary
+
+In all four scenarios, the **Rust server owns the full CHAT lifecycle**:
+parsing, AST manipulation, validation, caching, and serialization. Python
+workers receive extracted data (word lists, audio paths) and return raw
+ML output. No CHAT text crosses the IPC boundary.
+
+### Cache Behavior
+
+Cache checks happen **before** any worker IPC. A fully-cached file
+(e.g., re-running morphotag on unchanged input) completes without
+touching a Python worker at all. Cache keys include the engine version,
+so model upgrades automatically invalidate stale entries.
+
+### Error Boundaries
+
+- **Worker crash**: Pool detects exit, decrements worker count, spawns
+  replacement on next checkout.
+- **Retryable errors** (FA timeout, Rev.AI throttle): Exponential backoff
+  with configurable `max_attempts`.
+- **Terminal errors** (parse failure, validation rejection): File marked
+  `Error`, job continues processing remaining files.
+- **Memory pressure**: Job re-queued with backoff rather than OOM-killed.
+
+### Worker Pool Mechanics
+
+Workers are keyed by `(CommandName, LanguageCode3)`. The pool uses
+`Mutex<VecDeque>` for the idle queue and `tokio::sync::Semaphore` for
+availability. `CheckedOutWorker` is an RAII guard that returns the worker
+to the pool on drop — no manual checkin needed.

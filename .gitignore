@@ -1,13 +1,48 @@
-/playground.py
+# Rust build output
+target/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+book/build/
+build/
+dist/
+mutants.out/
+mutants.out.old/
+
+# Python bytecode (global — appears in many subdirectories)
+__pycache__/
 *.pyc
-*.py#
-/extern/
+*.pyo
 
-specification.py
-/batchalign.egg-info/
-/build/
-/dist/
-/.eggs/
+# Python packaging
+*.egg-info/
 
-*.egg-info
+# Virtual environments
+.venv/
+.venv-*/
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+
+# Rust backups
+**/*.rs.bk
+
+# Logs
+*.log
+
+# Node
+node_modules/
+
+# Coverage
+lcov*.info

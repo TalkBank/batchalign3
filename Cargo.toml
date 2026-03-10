@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/batchalign-revai",
+    "crates/batchalign-chat-ops",
+    "crates/batchalign-app",
+    "crates/batchalign-cli",
+]
+exclude = ["pyo3", "apps/dashboard-desktop/src-tauri"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/TalkBank/batchalign3"
+
+[workspace.dependencies]
+# Shared crates
+batchalign-chat-ops = { path = "crates/batchalign-chat-ops" }
+batchalign-revai = { path = "crates/batchalign-revai" }
+batchalign-app = { path = "crates/batchalign-app" }
+batchalign-cli = { path = "crates/batchalign-cli" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP
+axum = { version = "0.8", features = ["ws"] }
+reqwest = { version = "0.13", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "limit", "trace", "compression-gzip", "compression-br", "catch-panic", "timeout"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+indicatif = "0.18"
+ratatui = "0.30"
+crossterm = "0.29"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
+
+# Async trait
+async-trait = "0.1"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.32"
+opentelemetry = { version = "0.31", features = ["trace"] }
+opentelemetry_sdk = { version = "0.31", features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+dashmap = "6"
+walkdir = "2"
+sysinfo = "0.38"
+tokio-util = "0.7"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# File locking / randomness / process control
+rand = "0.10"
+fs2 = "0.4"
+libc = "0.2"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# Filesystem
+dirs = "6"
+include_dir = "0.7"
+
+# Hashing
+blake3 = "1"
+moka = { version = "0.12", features = ["future"] }
+
+# TOML parsing (runtime constants)
+toml = "1.0"
+
+# Testing
+assert_cmd = "2"
+insta = { version = "1", features = ["json"] }
+predicates = "3"
+proptest = "1.10"
+tempfile = "3"

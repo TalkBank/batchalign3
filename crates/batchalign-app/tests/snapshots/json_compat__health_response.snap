@@ -1,0 +1,42 @@
+---
+source: crates/batchalign-app/tests/json_compat.rs
+expression: health
+---
+{
+  "status": "ok",
+  "version": "0.10.0",
+  "node_id": "",
+  "free_threaded": true,
+  "capabilities": [
+    "align",
+    "morphotag",
+    "transcribe"
+  ],
+  "loaded_pipelines": [
+    "morphotag:eng:1"
+  ],
+  "media_roots": [
+    "/data/media"
+  ],
+  "media_mapping_keys": [
+    "childes-data"
+  ],
+  "workers_available": 3,
+  "job_slots_available": 3,
+  "live_workers": 1,
+  "live_worker_keys": [
+    "morphotag:eng"
+  ],
+  "active_jobs": 1,
+  "cache_backend": "sqlite",
+  "redis_cache_enabled": false,
+  "redis_cache_connected": false,
+  "worker_crashes": 0,
+  "attempts_started": 0,
+  "attempts_retried": 0,
+  "deferred_work_units": 0,
+  "forced_terminal_errors": 0,
+  "memory_gate_aborts": 0,
+  "build_hash": "0.10.0-abc1234-1700000000",
+  "warmup_status": "complete"
+}

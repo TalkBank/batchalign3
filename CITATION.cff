@@ -2,7 +2,7 @@
 # Visit https://bit.ly/cffinit to generate yours today!
 
 cff-version: 1.2.0
-title: Batchalign2
+title: Batchalign3
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -16,8 +16,8 @@ authors:
     family-names: Liu
     email: houjun@stanford.edu
     affiliation: Stanford University
-repository-code: 'https://github.com/talkbank/batchalign2'
-url: 'https://github.com/talkbank/batchalign2'
+repository-code: 'https://github.com/TalkBank/batchalign3'
+url: 'https://github.com/TalkBank/batchalign3'
 abstract: >-
   Purpose: A major barrier to the wider use of language
   sample analysis (LSA) is the fact that transcription is

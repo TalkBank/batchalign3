@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "batchalign-test-cantotag-plugin"
+version = "0.0.1"
+description = "Synthetic plugin for batchalign plugin integration tests"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.entry-points."batchalign.plugins"]
+cantotag_test = "batchalign_test_cantotag_plugin:plugin"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

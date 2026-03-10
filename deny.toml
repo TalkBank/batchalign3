@@ -1,0 +1,41 @@
+# cargo-deny configuration (root Cargo workspace)
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+ignore = [
+    # rsa crate timing sidechannel (Marvin Attack). No patch available.
+    # Not exploitable in our context (no RSA operations on untrusted input).
+    "RUSTSEC-2023-0071",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "MIT-0",
+    "MITNFA",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "BSL-1.0",
+    "OpenSSL",
+    "CC0-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+
+[[licenses.exceptions]]
+# zhconv (simplified↔traditional Chinese converter) is GPL-2.0.
+# Used for Cantonese text normalization in batchalign-chat-ops.
+allow = ["GPL-2.0-or-later"]
+crate = "zhconv"
+
+[bans]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

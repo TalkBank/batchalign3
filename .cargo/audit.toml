@@ -1,0 +1,9 @@
+# RustSec audit configuration
+# Used by rustsec/audit-check@v2 in CI
+
+[advisories]
+ignore = [
+    # rsa crate timing sidechannel (Marvin Attack). No patch available.
+    # Transitive dep — not exploitable in our context.
+    "RUSTSEC-2023-0071",
+]

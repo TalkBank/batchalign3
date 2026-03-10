@@ -1,0 +1,253 @@
+//! `batchalign3 bench` — repeated performance runs for a command.
+
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use batchalign_app::options::{
+    AlignOptions, BenchmarkOptions, CommandOptions, CommonOptions, CompareOptions, CorefOptions,
+    MorphotagOptions, OpensmileOptions, TranscribeOptions, TranslateOptions, UtrEngine,
+    UtsegOptions,
+};
+use serde_json::json;
+
+use crate::args::{BenchArgs, BenchTarget, GlobalOpts};
+use crate::dispatch;
+use crate::error::CliError;
+
+fn metadata(target: BenchTarget) -> (&'static str, &'static str, u32, &'static [&'static str]) {
+    match target {
+        BenchTarget::Align => ("align", "eng", 1, &["cha"]),
+        BenchTarget::Transcribe => ("transcribe", "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::TranscribeS => ("transcribe_s", "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::Morphotag => ("morphotag", "eng", 1, &["cha"]),
+        BenchTarget::Translate => ("translate", "eng", 1, &["cha"]),
+        BenchTarget::Utseg => ("utseg", "eng", 1, &["cha"]),
+        BenchTarget::Benchmark => ("benchmark", "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::Opensmile => ("opensmile", "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::Coref => ("coref", "eng", 1, &["cha"]),
+        BenchTarget::Compare => ("compare", "eng", 1, &["cha"]),
+    }
+}
+
+fn dataset_label(args: &BenchArgs) -> String {
+    if let Some(s) = &args.dataset {
+        return s.clone();
+    }
+
+    Path::new(&args.in_dir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(args.in_dir.as_str())
+        .to_string()
+}
+
+fn build_options(global: &GlobalOpts, args: &BenchArgs) -> CommandOptions {
+    let common = CommonOptions {
+        override_cache: !args.use_cache,
+        lazy_audio: global.lazy_audio && !args.no_lazy_audio,
+        ..Default::default()
+    };
+
+    match args.command {
+        BenchTarget::Align => CommandOptions::Align(AlignOptions {
+            common,
+            fa_engine: "wav2vec_fa".into(),
+            utr_engine: Some(UtrEngine::RevAi),
+            utr_overlap_strategy: Default::default(),
+            pauses: false,
+            wor: true.into(),
+            merge_abbrev: false.into(),
+        }),
+        BenchTarget::Transcribe => CommandOptions::Transcribe(TranscribeOptions {
+            common,
+            asr_engine: "rev".into(),
+            diarize: false,
+            wor: false.into(),
+            merge_abbrev: false.into(),
+            batch_size: 8,
+        }),
+        BenchTarget::TranscribeS => CommandOptions::TranscribeS(TranscribeOptions {
+            common,
+            asr_engine: "rev".into(),
+            diarize: true,
+            wor: false.into(),
+            merge_abbrev: false.into(),
+            batch_size: 8,
+        }),
+        BenchTarget::Morphotag => CommandOptions::Morphotag(MorphotagOptions {
+            common,
+            retokenize: false,
+            skipmultilang: false,
+            merge_abbrev: false.into(),
+        }),
+        BenchTarget::Translate => CommandOptions::Translate(TranslateOptions {
+            common,
+            merge_abbrev: false.into(),
+        }),
+        BenchTarget::Utseg => CommandOptions::Utseg(UtsegOptions {
+            common,
+            merge_abbrev: false.into(),
+        }),
+        BenchTarget::Benchmark => CommandOptions::Benchmark(BenchmarkOptions {
+            common,
+            asr_engine: "rev".into(),
+            wor: false.into(),
+            merge_abbrev: false.into(),
+        }),
+        BenchTarget::Opensmile => CommandOptions::Opensmile(OpensmileOptions {
+            common,
+            feature_set: "eGeMAPSv02".into(),
+        }),
+        BenchTarget::Coref => CommandOptions::Coref(CorefOptions {
+            common,
+            merge_abbrev: false.into(),
+        }),
+        BenchTarget::Compare => CommandOptions::Compare(CompareOptions {
+            common,
+            merge_abbrev: false.into(),
+        }),
+    }
+}
+
+/// Execute repeated benchmark runs and report timing statistics.
+pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> {
+    if args.runs == 0 {
+        return Err(
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "--runs must be >= 1").into(),
+        );
+    }
+
+    if !Path::new(&args.in_dir).exists() {
+        return Err(CliError::InputMissing(args.in_dir.clone().into()));
+    }
+    std::fs::create_dir_all(&args.out_dir)?;
+
+    let (command, lang, num_speakers, extensions) = metadata(args.command);
+    let dataset = dataset_label(args);
+    let inputs = vec![args.in_dir.clone()];
+    let mut elapsed_runs = Vec::with_capacity(args.runs);
+
+    for idx in 0..args.runs {
+        let start = Instant::now();
+
+        dispatch::dispatch(
+            command,
+            lang,
+            num_speakers,
+            extensions,
+            global.server.as_deref(),
+            &inputs,
+            Some(&args.out_dir),
+            Some(build_options(global, args)),
+            None,
+            None,
+            None,
+            false,
+            global.open_dashboard && !global.no_open_dashboard,
+            global.force_cpu,
+            None,
+        )
+        .await?;
+
+        let elapsed = start.elapsed().as_secs_f64();
+        elapsed_runs.push(elapsed);
+
+        eprintln!("Run {}/{}: {:.2}s", idx + 1, args.runs, elapsed);
+        println!(
+            "BENCH_RESULT: {}",
+            json!({
+                "run": idx + 1,
+                "elapsed_s": (elapsed * 100.0).round() / 100.0,
+                "command": command,
+                "dataset": dataset,
+                "dispatch_mode": if global.server.is_some() { "server" } else { "auto" },
+            })
+        );
+
+        if idx + 1 < args.runs {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    }
+
+    let avg = elapsed_runs.iter().sum::<f64>() / elapsed_runs.len() as f64;
+    eprintln!("\nAverage: {:.2}s over {} run(s)", avg, elapsed_runs.len());
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn global() -> GlobalOpts {
+        GlobalOpts {
+            verbose: 0,
+            workers: None,
+            memlog: false,
+            mem_guard: false,
+            adaptive_workers: false,
+            no_adaptive_workers: false,
+            pool: false,
+            no_pool: false,
+            adaptive_safety_factor: None,
+            adaptive_warmup: None,
+            force_cpu: false,
+            no_force_cpu: false,
+            shared_models: false,
+            no_shared_models: false,
+            server: None,
+            override_cache: false,
+            use_cache: false,
+            lazy_audio: false,
+            no_lazy_audio: false,
+            tui: false,
+            no_tui: false,
+            open_dashboard: true,
+            no_open_dashboard: false,
+            debug_dir: None,
+            override_cache_tasks: Vec::new(),
+            engine_overrides: None,
+        }
+    }
+
+    fn args(target: BenchTarget) -> BenchArgs {
+        BenchArgs {
+            command: target,
+            in_dir: "/tmp/input".to_string(),
+            out_dir: "/tmp/out".to_string(),
+            runs: 1,
+            dataset: None,
+            no_pool: false,
+            no_lazy_audio: false,
+            no_adaptive_workers: false,
+            workers: None,
+            use_cache: false,
+        }
+    }
+
+    #[test]
+    fn metadata_align() {
+        let (cmd, lang, n, exts) = metadata(BenchTarget::Align);
+        assert_eq!(cmd, "align");
+        assert_eq!(lang, "eng");
+        assert_eq!(n, 1);
+        assert_eq!(exts, &["cha"]);
+    }
+
+    #[test]
+    fn dataset_uses_path_basename() {
+        let a = args(BenchTarget::Align);
+        assert_eq!(dataset_label(&a), "input");
+    }
+
+    #[test]
+    fn options_respect_flags() {
+        let g = global();
+        let a = args(BenchTarget::Morphotag);
+        let opts = build_options(&g, &a);
+        // use_cache=false → override_cache=true
+        assert!(opts.common().override_cache);
+        assert_eq!(opts.command_name(), "morphotag");
+    }
+}

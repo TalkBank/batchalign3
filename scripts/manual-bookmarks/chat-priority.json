@@ -1,0 +1,12 @@
+[
+  {"bookmark": "Main_Line", "match": "The Main Line"},
+  {"bookmark": "Dependent_Tiers", "match": "Dependent Tiers"},
+  {"bookmark": "Grammatical_Relations", "match": "Grammatical relations"},
+  {"bookmark": "Scoped_Symbols", "match": "Scoped Symbols"},
+  {"bookmark": "Phonology", "match": "Phonological"},
+  {"bookmark": "MOR_Format", "match": "Morphological tier"},
+  {"bookmark": "Pauses", "match": "Pauses"},
+  {"bookmark": "Retracing_and_Repetition", "match": "Retracing, Overlap"},
+  {"bookmark": "Main_Tier", "match": "The Main Line"},
+  {"bookmark": "File_Headers", "match": "File Headers"}
+]

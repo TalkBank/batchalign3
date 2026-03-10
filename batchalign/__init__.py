@@ -1,48 +1,29 @@
+"""Batchalign: ASR, forced alignment, and morphosyntax pipeline for CHAT transcripts.
+
+Batchalign3 processes conversation audio files and transcripts in CHAT format
+(Codes for the Human Analysis of Transcripts), the standard format of the
+TalkBank project. The package provides inference functions for automatic speech
+recognition (ASR), forced alignment, morphosyntactic analysis, speaker
+diarization, utterance segmentation, translation, coreference resolution,
+and audio feature extraction.
+
+The CHAT parsing and serialization layer is implemented in Rust
+(``batchalign_core``) for correctness and performance. All CHAT
+manipulation goes through principled AST operations -- never ad-hoc
+string or regex hacking.
+"""
+
 import os
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = str(1)
 
 import logging
 
-# clear all of nemo's loggers
-logging.getLogger().handlers.clear()
-logging.getLogger('nemo_logger').handlers.clear()
-logging.getLogger().setLevel(logging.CRITICAL)
-logging.getLogger('nemo_logger').disabled = True
+# Library best practice: NullHandler so library users don't get
+# "No handlers could be found" warnings.  The CLI adds its own handlers.
+logging.getLogger("batchalign").addHandler(logging.NullHandler())
 
-from .document import *
-from .constants import *
+# Suppress noisy third-party loggers without touching the root logger
+for _name in ("nemo_logger", "nemo", "pytorch_lightning"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
+
 from .errors import *
-
-# Defer slow imports
-# from .formats import *
-# from .pipelines import *
-# from .models import *
-# from .cli import batchalign as cli
-
-def __getattr__(name):
-    if name == 'cli':
-        from .cli import batchalign
-        return batchalign
-    if name == 'BatchalignPipeline':
-        from .pipelines import BatchalignPipeline
-        return BatchalignPipeline
-    if name == 'CHATFile':
-        from .formats.chat import CHATFile
-        return CHATFile
-    # Add other common engines if needed for dispatch.py
-    if name in ['WhisperEngine', 'WhisperFAEngine', 'StanzaEngine', 'RevEngine',
-                'NgramRetraceEngine', 'DisfluencyReplacementEngine', 'WhisperUTREngine',
-                'RevUTREngine', 'EvaluationEngine', 'WhisperXEngine', 'NemoSpeakerEngine',
-                'StanzaUtteranceEngine', 'CorefEngine', 'Wave2VecFAEngine', 'SeamlessTranslationModel',
-                'GoogleTranslateEngine', 'OAIWhisperEngine', 'PyannoteEngine']:
-        from .pipelines import dispatch
-        # This is a bit recursive, let's just let dispatch import them locally
-        # which it already does now.
-        import importlib
-        # We need to find which subpackage it's in. 
-        # Actually, if we use local imports in dispatch.py, we don't need these here.
-        pass
-
-    raise AttributeError(f"module {__name__} has no attribute {name}")
-
-logging.getLogger('nemo_logger').disabled = False

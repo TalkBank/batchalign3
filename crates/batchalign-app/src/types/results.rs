@@ -1,0 +1,74 @@
+//! Structured result types for server-side orchestrators.
+//!
+//! Each orchestrator returns a rich result type that includes both the
+//! serialized CHAT output and any intermediate data produced during
+//! processing.  The dispatch layer decides what to write to disk vs.
+//! what to store in the trace cache.
+
+use batchalign_chat_ops::fa::FaTimingMode;
+use batchalign_chat_ops::morphosyntax::RetokenizationInfo;
+
+use super::traces::{
+    FaGroupTrace, FaTimelineTrace, RetokenizationTrace, TimingTrace, ViolationTrace,
+};
+
+// ---------------------------------------------------------------------------
+// Forced alignment
+// ---------------------------------------------------------------------------
+
+/// Structured result from [`crate::fa::process_fa`].
+pub struct FaResult {
+    /// Serialized CHAT text with timings injected.
+    pub chat_text: String,
+    /// FA groups that were processed.
+    pub groups: Vec<FaGroupTrace>,
+    /// Timings as returned by the worker, before post-processing.
+    pub pre_injection_timings: Vec<Vec<Option<TimingTrace>>>,
+    /// Timing mode used for this run.
+    pub timing_mode: FaTimingMode,
+    /// Post-validation violations.
+    pub violations: Vec<ViolationTrace>,
+}
+
+impl FaResult {
+    /// Convert into a [`FaTimelineTrace`] for dashboard visualization.
+    pub fn into_timeline_trace(self) -> FaTimelineTrace {
+        FaTimelineTrace {
+            groups: self.groups,
+            pre_injection_timings: self.pre_injection_timings,
+            post_injection_timings: Vec::new(), // TODO Phase 4
+            timing_mode: format!("{:?}", self.timing_mode),
+            violations: self.violations,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Morphosyntax
+// ---------------------------------------------------------------------------
+
+/// Structured result from a single-file morphosyntax run.
+pub struct MorphosyntaxResult {
+    /// Serialized CHAT text with %mor/%gra injected.
+    pub chat_text: String,
+    /// Retokenization mappings (empty when retokenization is off).
+    pub retokenizations: Vec<RetokenizationInfo>,
+}
+
+impl MorphosyntaxResult {
+    /// Convert retokenization info into dashboard trace format.
+    pub fn into_retokenization_traces(self) -> Vec<RetokenizationTrace> {
+        self.retokenizations
+            .into_iter()
+            .map(|info| RetokenizationTrace {
+                utterance_index: info.utterance_ordinal,
+                original_words: info.original_words,
+                stanza_tokens: info.stanza_tokens,
+                normalized_original: String::new(), // not captured at this level
+                normalized_tokens: String::new(),
+                mapping: info.mapping,
+                used_fallback: info.used_fallback,
+            })
+            .collect()
+    }
+}

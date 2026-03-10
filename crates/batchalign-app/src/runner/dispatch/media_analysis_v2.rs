@@ -1,0 +1,531 @@
+//! Per-file Rust-owned V2 dispatch for media-analysis commands.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
+use tracing::{error, warn};
+
+use crate::ensure_wav;
+use crate::runner::util::{
+    FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_worker_error,
+    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_supervised_file_task,
+    user_facing_error,
+};
+use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
+use crate::store::{JobStore, PendingJobFile, RunnerJobSnapshot, unix_now};
+use crate::types::worker_v2::{AvqiResultV2, ExecuteOutcomeV2, OpenSmileResultV2, TaskResultV2};
+use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
+use crate::worker::avqi_request_v2::{
+    AvqiBuildInputV2, PreparedAvqiRequestIdsV2, build_avqi_request_v2,
+};
+use crate::worker::opensmile_request_v2::{
+    OpenSmileBuildInputV2, PreparedOpenSmileRequestIdsV2, build_opensmile_request_v2,
+};
+use crate::worker::pool::WorkerPool;
+
+use super::MediaAnalysisDispatchPlan;
+
+/// Shared runtime dependencies for top-level media-analysis dispatch.
+pub(in crate::runner) struct MediaAnalysisDispatchRuntime {
+    /// Worker pool used for typed V2 media-analysis requests.
+    pub pool: Arc<WorkerPool>,
+    /// Maximum number of file tasks to run concurrently for this job.
+    pub num_workers: usize,
+}
+
+/// Dispatch per-file media-analysis commands through typed worker protocol V2.
+pub(in crate::runner) async fn dispatch_media_analysis_v2(
+    job: &RunnerJobSnapshot,
+    store: &Arc<JobStore>,
+    runtime: MediaAnalysisDispatchRuntime,
+    plan: MediaAnalysisDispatchPlan,
+) {
+    let file_sem = Arc::new(Semaphore::new(runtime.num_workers));
+    let mut tasks = Vec::new();
+
+    for file in &job.pending_files {
+        if job.cancel_token.is_cancelled() {
+            break;
+        }
+
+        let permit = file_sem.clone().acquire_owned().await.unwrap();
+        let store = store.clone();
+        let pool = runtime.pool.clone();
+        let job = job.clone();
+        let file = file.clone();
+        let filename = file.filename.clone();
+        let plan = plan.clone();
+
+        tasks.push(spawn_supervised_file_task(
+            filename,
+            "media-analysis V2 file task",
+            async move {
+                let _permit = permit;
+                process_one_media_analysis_file_v2(&job, &store, &pool, &file, &plan).await
+            },
+        ));
+    }
+
+    let abnormal_exits =
+        drain_supervised_file_tasks(store, &job.identity.job_id, &job.cancel_token, tasks).await;
+    if abnormal_exits > 0 {
+        warn!(
+            job_id = %job.identity.job_id,
+            abnormal_exits,
+            "Supervised media-analysis V2 file tasks exited abnormally"
+        );
+    }
+}
+
+async fn process_one_media_analysis_file_v2(
+    job: &RunnerJobSnapshot,
+    store: &Arc<JobStore>,
+    pool: &Arc<WorkerPool>,
+    file: &PendingJobFile,
+    plan: &MediaAnalysisDispatchPlan,
+) -> FileTaskOutcome {
+    let job_id = &job.identity.job_id;
+    let correlation_id = job.identity.correlation_id.as_str();
+    let file_index = file.file_index;
+    let filename = file.filename.as_ref();
+    let lifecycle = FileRunTracker::new(store, job_id, filename);
+    let started_at = unix_now();
+
+    lifecycle
+        .begin_first_attempt(
+            WorkUnitKind::FileInfer,
+            started_at,
+            FileStage::ResolvingAudio,
+        )
+        .await;
+
+    let original_audio_path =
+        if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
+            job.filesystem.source_paths[file_index].clone()
+        } else {
+            format!("{}/input/{filename}", job.filesystem.staging_dir)
+        };
+    let output_paths = job.filesystem.output_paths.clone();
+    let staging_dir = job.filesystem.staging_dir.clone();
+
+    let retry_policy = RetryPolicy::default();
+    for attempt_number in 1..=retry_policy.max_attempts {
+        if attempt_number > 1 {
+            lifecycle
+                .restart_attempt(WorkUnitKind::FileInfer, unix_now(), FileStage::Processing)
+                .await;
+        } else {
+            lifecycle.stage(FileStage::Processing).await;
+        }
+
+        match dispatch_one_media_analysis_attempt(
+            job,
+            pool,
+            file_index,
+            filename,
+            &original_audio_path,
+            plan,
+        )
+        .await
+        {
+            Ok((result_filename, output_text, output_type)) => {
+                lifecycle.stage(FileStage::Writing).await;
+                let finished_at = unix_now();
+                let write_path = if job.filesystem.paths_mode && file_index < output_paths.len() {
+                    apply_result_filename(&output_paths[file_index], &result_filename)
+                } else {
+                    format!("{staging_dir}/output/{result_filename}")
+                };
+
+                if let Some(parent) = Path::new(&write_path).parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                if let Err(error) = tokio::fs::write(&write_path, output_text).await {
+                    let err_msg = format!("Failed to write output for {filename}: {error}");
+                    lifecycle
+                        .fail(&err_msg, FailureCategory::System, finished_at)
+                        .await;
+                    return FileTaskOutcome::TerminalStateRecorded;
+                }
+
+                lifecycle
+                    .complete_with_result(
+                        result_filename.clone().into(),
+                        output_type.as_str(),
+                        finished_at,
+                    )
+                    .await;
+                return FileTaskOutcome::TerminalStateRecorded;
+            }
+            Err(DispatchFailure::RetryableWorker(error, category)) => {
+                let finished_at = unix_now();
+                let has_retry_budget = attempt_number < retry_policy.max_attempts;
+                if has_retry_budget && is_retryable_worker_failure(category) {
+                    let retry_number = attempt_number;
+                    let backoff_ms = retry_policy.backoff_for_retry(retry_number);
+                    let retry_at =
+                        crate::api::UnixTimestamp(finished_at.0 + (backoff_ms.0 as f64 / 1000.0));
+                    lifecycle
+                        .retry(
+                            retry_at,
+                            category,
+                            &format!("Worker error: {error}; retrying in {backoff_ms} ms"),
+                            finished_at,
+                        )
+                        .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms.0)).await;
+                    continue;
+                }
+
+                let raw_msg = format!("Worker error: {error}");
+                warn!(
+                    job_id = %job_id,
+                    filename,
+                    category = %category,
+                    raw_error = %raw_msg,
+                    "Media-analysis error (raw)"
+                );
+                let user_msg = user_facing_error(category, "Analysis", filename, &raw_msg);
+                lifecycle.fail(&user_msg, category, finished_at).await;
+                return FileTaskOutcome::TerminalStateRecorded;
+            }
+            Err(DispatchFailure::Terminal(error, category)) => {
+                let finished_at = unix_now();
+                error!(
+                    job_id = %job_id,
+                    correlation_id = %correlation_id,
+                    filename = %filename,
+                    error = %error,
+                    "Media-analysis V2 dispatch failed"
+                );
+                let user_msg = user_facing_error(category, "Analysis", filename, &error);
+                lifecycle.fail(&user_msg, category, finished_at).await;
+                return FileTaskOutcome::TerminalStateRecorded;
+            }
+        }
+    }
+
+    FileTaskOutcome::MissingTerminalState
+}
+
+enum DispatchFailure {
+    RetryableWorker(String, FailureCategory),
+    Terminal(String, FailureCategory),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MediaAnalysisOutputType {
+    Csv,
+    Text,
+}
+
+impl MediaAnalysisOutputType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Text => "text",
+        }
+    }
+}
+
+async fn dispatch_one_media_analysis_attempt(
+    job: &RunnerJobSnapshot,
+    pool: &Arc<WorkerPool>,
+    file_index: usize,
+    filename: &str,
+    original_audio_path: &str,
+    plan: &MediaAnalysisDispatchPlan,
+) -> Result<(String, String, MediaAnalysisOutputType), DispatchFailure> {
+    let audio_path = ensure_wav::ensure_wav(Path::new(original_audio_path), None)
+        .await
+        .map_err(|error| {
+            DispatchFailure::Terminal(
+                format!("Media conversion failed for {filename}: {error}"),
+                FailureCategory::Validation,
+            )
+        })?;
+
+    match plan {
+        MediaAnalysisDispatchPlan::Opensmile { feature_set } => {
+            dispatch_opensmile_attempt(job, pool, file_index, filename, &audio_path, feature_set)
+                .await
+        }
+        MediaAnalysisDispatchPlan::Avqi => {
+            dispatch_avqi_attempt(job, pool, file_index, filename, &audio_path).await
+        }
+    }
+}
+
+async fn dispatch_opensmile_attempt(
+    job: &RunnerJobSnapshot,
+    pool: &Arc<WorkerPool>,
+    file_index: usize,
+    filename: &str,
+    audio_path: &Path,
+    feature_set: &str,
+) -> Result<(String, String, MediaAnalysisOutputType), DispatchFailure> {
+    let artifacts = PreparedArtifactRuntimeV2::new("opensmile_v2").map_err(|error| {
+        DispatchFailure::Terminal(
+            format!("failed to create openSMILE V2 artifact runtime: {error}"),
+            FailureCategory::Validation,
+        )
+    })?;
+
+    let request = build_opensmile_request_v2(
+        artifacts.store(),
+        OpenSmileBuildInputV2 {
+            ids: &PreparedOpenSmileRequestIdsV2::new(
+                format!("opensmile-v2-request-{file_index}"),
+                format!("opensmile-v2-audio-{file_index}"),
+            ),
+            audio_path,
+            feature_set,
+            feature_level: "functionals",
+        },
+    )
+    .await
+    .map_err(|error| {
+        DispatchFailure::Terminal(
+            format!("failed to build openSMILE V2 request: {error}"),
+            FailureCategory::Validation,
+        )
+    })?;
+
+    let response = pool
+        .dispatch_execute_v2(&job.dispatch.lang, &request)
+        .await
+        .map_err(|error| {
+            DispatchFailure::RetryableWorker(error.to_string(), classify_worker_error(&error))
+        })?;
+
+    let result = match response.result {
+        Some(TaskResultV2::OpensmileResult(result)) => result,
+        Some(other) => {
+            return Err(DispatchFailure::Terminal(
+                format!("openSMILE V2 returned unexpected payload: {other:?}"),
+                FailureCategory::ProviderTerminal,
+            ));
+        }
+        None => {
+            return Err(DispatchFailure::Terminal(
+                "openSMILE V2 response was missing a result payload".into(),
+                FailureCategory::ProviderTerminal,
+            ));
+        }
+    };
+
+    if !matches!(response.outcome, ExecuteOutcomeV2::Success) {
+        return Err(DispatchFailure::Terminal(
+            format!("openSMILE V2 request failed: {:?}", response.outcome),
+            FailureCategory::ProviderTerminal,
+        ));
+    }
+    if !result.success {
+        return Err(DispatchFailure::Terminal(
+            result
+                .error
+                .unwrap_or_else(|| "openSMILE V2 runtime failed without detail".into()),
+            FailureCategory::ProviderTerminal,
+        ));
+    }
+
+    Ok((
+        opensmile_result_filename(filename),
+        format_opensmile_csv(&result),
+        MediaAnalysisOutputType::Csv,
+    ))
+}
+
+async fn dispatch_avqi_attempt(
+    job: &RunnerJobSnapshot,
+    pool: &Arc<WorkerPool>,
+    file_index: usize,
+    filename: &str,
+    cs_audio_path: &Path,
+) -> Result<(String, String, MediaAnalysisOutputType), DispatchFailure> {
+    let sv_audio_path = resolve_avqi_sv_path(cs_audio_path).ok_or_else(|| {
+        DispatchFailure::Terminal(
+            format!("AVQI input {filename} is missing a paired .sv. audio file name"),
+            FailureCategory::Validation,
+        )
+    })?;
+    let sv_audio_path = ensure_wav::ensure_wav(&sv_audio_path, None)
+        .await
+        .map_err(|error| {
+            DispatchFailure::Terminal(
+                format!("Media conversion failed for AVQI pair {filename}: {error}"),
+                FailureCategory::Validation,
+            )
+        })?;
+
+    let artifacts =
+        PreparedArtifactRuntimeV2::new(format!("avqi_v2_{file_index}")).map_err(|error| {
+            DispatchFailure::Terminal(
+                format!("failed to create AVQI V2 artifact runtime: {error}"),
+                FailureCategory::Validation,
+            )
+        })?;
+    let request = build_avqi_request_v2(
+        artifacts.store(),
+        AvqiBuildInputV2 {
+            ids: &PreparedAvqiRequestIdsV2::new(
+                format!("avqi-v2-request-{file_index}"),
+                format!("avqi-v2-cs-{file_index}"),
+                format!("avqi-v2-sv-{file_index}"),
+            ),
+            cs_audio_path,
+            sv_audio_path: &sv_audio_path,
+        },
+    )
+    .await
+    .map_err(|error| {
+        DispatchFailure::Terminal(
+            format!("failed to build AVQI V2 request: {error}"),
+            FailureCategory::Validation,
+        )
+    })?;
+
+    let response = pool
+        .dispatch_execute_v2(&job.dispatch.lang, &request)
+        .await
+        .map_err(|error| {
+            DispatchFailure::RetryableWorker(error.to_string(), classify_worker_error(&error))
+        })?;
+
+    let result = match response.result {
+        Some(TaskResultV2::AvqiResult(result)) => result,
+        Some(other) => {
+            return Err(DispatchFailure::Terminal(
+                format!("AVQI V2 returned unexpected payload: {other:?}"),
+                FailureCategory::ProviderTerminal,
+            ));
+        }
+        None => {
+            return Err(DispatchFailure::Terminal(
+                "AVQI V2 response was missing a result payload".into(),
+                FailureCategory::ProviderTerminal,
+            ));
+        }
+    };
+
+    if !matches!(response.outcome, ExecuteOutcomeV2::Success) {
+        return Err(DispatchFailure::Terminal(
+            format!("AVQI V2 request failed: {:?}", response.outcome),
+            FailureCategory::ProviderTerminal,
+        ));
+    }
+    if !result.success {
+        return Err(DispatchFailure::Terminal(
+            result
+                .error
+                .unwrap_or_else(|| "AVQI V2 runtime failed without detail".into()),
+            FailureCategory::ProviderTerminal,
+        ));
+    }
+
+    Ok((
+        avqi_result_filename(filename),
+        format_avqi_report(&result),
+        MediaAnalysisOutputType::Text,
+    ))
+}
+
+fn format_opensmile_csv(result: &OpenSmileResultV2) -> String {
+    let mut headers = BTreeSet::new();
+    for row in &result.rows {
+        for key in row.keys() {
+            headers.insert(key.clone());
+        }
+    }
+    let ordered_headers: Vec<String> = headers.into_iter().collect();
+    let mut lines = Vec::with_capacity(result.rows.len().saturating_add(1));
+    lines.push(ordered_headers.join(","));
+    for row in &result.rows {
+        let line = ordered_headers
+            .iter()
+            .map(|header| {
+                row.get(header)
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
+fn format_avqi_report(result: &AvqiResultV2) -> String {
+    [
+        ("avqi", result.avqi),
+        ("cpps", result.cpps),
+        ("hnr", result.hnr),
+        ("shimmer_local", result.shimmer_local),
+        ("shimmer_local_db", result.shimmer_local_db),
+        ("slope", result.slope),
+        ("tilt", result.tilt),
+    ]
+    .into_iter()
+    .map(|(name, value)| format!("{name},{value}"))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn opensmile_result_filename(filename: &str) -> String {
+    let path = Path::new(filename);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    format!("{stem}.opensmile.csv")
+}
+
+fn avqi_result_filename(filename: &str) -> String {
+    let basename = Path::new(filename)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let lower = basename.to_ascii_lowercase();
+    if let Some(idx) = lower.find(".cs.") {
+        return format!("{}.avqi.txt", &basename[..idx]);
+    }
+    let stem = Path::new(filename)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    format!("{stem}.avqi.txt")
+}
+
+fn resolve_avqi_sv_path(cs_audio_path: &Path) -> Option<PathBuf> {
+    let file_name = cs_audio_path.file_name()?.to_string_lossy();
+    let lower = file_name.to_ascii_lowercase();
+    let idx = lower.find(".cs.")?;
+    let replacement = format!("{}.sv.{}", &file_name[..idx], &file_name[idx + 4..]);
+    Some(cs_audio_path.with_file_name(replacement))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn avqi_pair_resolution_rewrites_cs_to_sv() {
+        let path = Path::new("/tmp/sample.cs.wav");
+        assert_eq!(
+            resolve_avqi_sv_path(path).expect("pair path"),
+            PathBuf::from("/tmp/sample.sv.wav")
+        );
+    }
+
+    #[test]
+    fn avqi_output_filename_strips_cs_marker() {
+        assert_eq!(avqi_result_filename("sample.cs.wav"), "sample.avqi.txt");
+    }
+
+    #[test]
+    fn opensmile_output_filename_replaces_extension() {
+        assert_eq!(
+            opensmile_result_filename("sample.mp3"),
+            "sample.opensmile.csv"
+        );
+    }
+}
