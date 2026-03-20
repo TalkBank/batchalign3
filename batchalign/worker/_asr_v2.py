@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
+from batchalign.inference._domain_types import LanguageCode
 from batchalign.worker._types import AsrEngine
 from batchalign.worker._types_v2 import (
     ExecuteRequestV2,
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 class AsrExecutionHostV2:
     """Injected ASR execution hooks for the live V2 path."""
 
-    local_whisper_runner: Callable[[np.ndarray, str], WhisperChunkResultPayloadV2] | None = None
+    local_whisper_runner: Callable[[np.ndarray, LanguageCode], WhisperChunkResultPayloadV2] | None = None
     hk_tencent_runner: Callable[[AsrBatchItem], MonologueAsrResponse] | None = None
     hk_aliyun_runner: Callable[[AsrBatchItem], MonologueAsrResponse] | None = None
     hk_funaudio_runner: Callable[[AsrBatchItem], MonologueAsrResponse] | None = None
@@ -45,7 +46,7 @@ def build_default_asr_execution_host_v2(
 
         def _run_local_whisper(
             audio: np.ndarray,
-            lang: str,
+            lang: LanguageCode,
         ) -> WhisperChunkResultPayloadV2:
             return cast(
                 WhisperChunkResultPayloadV2,

@@ -1,7 +1,7 @@
 //! Media resolution, preflight validation, and output path handling.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::api::CommandName;
 use crate::options::{CommandOptions, UtrEngine};
@@ -43,7 +43,7 @@ pub(in crate::runner) fn should_preflight(
 /// Returns the set of file indices that failed validation.
 pub(in crate::runner) async fn preflight_validate_media(
     file_list: &[PendingJobFile],
-    source_paths: &[String],
+    source_paths: &[PathBuf],
     paths_mode: bool,
 ) -> HashMap<usize, String> {
     if !paths_mode {
@@ -58,21 +58,25 @@ pub(in crate::runner) async fn preflight_validate_media(
             continue;
         }
 
-        let Some(source) = source_paths.get(file.file_index) else {
+        let Some(path) = source_paths.get(file.file_index) else {
             failures.insert(file.file_index, "No source path for file index".to_string());
             continue;
         };
 
-        let path = Path::new(source);
-
         // Check file exists and non-empty via metadata (one syscall)
         match tokio::fs::metadata(path).await {
             Err(_) => {
-                failures.insert(file.file_index, format!("File not found: {source}"));
+                failures.insert(
+                    file.file_index,
+                    format!("File not found: {}", path.display()),
+                );
                 continue;
             }
             Ok(meta) if meta.len() == 0 => {
-                failures.insert(file.file_index, format!("File is empty: {source}"));
+                failures.insert(
+                    file.file_index,
+                    format!("File is empty: {}", path.display()),
+                );
                 continue;
             }
             Ok(_) => {}
@@ -87,11 +91,14 @@ pub(in crate::runner) async fn preflight_validate_media(
             if !KNOWN_MEDIA_EXTENSIONS.contains(&ext.as_str()) {
                 failures.insert(
                     file.file_index,
-                    format!("Unknown media format '.{ext}': {source}"),
+                    format!("Unknown media format '.{ext}': {}", path.display()),
                 );
             }
         } else {
-            failures.insert(file.file_index, format!("File has no extension: {source}"));
+            failures.insert(
+                file.file_index,
+                format!("File has no extension: {}", path.display()),
+            );
         }
     }
 
@@ -108,7 +115,7 @@ pub(in crate::runner) async fn collect_preflight_audio_paths(
     command: &CommandName,
     job: &RunnerJobSnapshot,
     file_list: &[PendingJobFile],
-) -> Vec<String> {
+) -> Vec<PathBuf> {
     match command.as_ref() {
         "align" => collect_align_preflight_audio_paths(job, file_list).await,
         _ => file_list
@@ -135,7 +142,7 @@ pub(in crate::runner) async fn collect_preflight_audio_paths(
 async fn collect_align_preflight_audio_paths(
     job: &RunnerJobSnapshot,
     file_list: &[PendingJobFile],
-) -> Vec<String> {
+) -> Vec<PathBuf> {
     if !job.filesystem.paths_mode {
         return Vec::new();
     }
@@ -156,15 +163,37 @@ async fn collect_align_preflight_audio_paths(
 ///
 /// Looks for files with the same stem and a known audio extension
 /// in the same directory as the CHAT file.
-pub(in crate::runner) async fn resolve_audio_for_chat(chat_path: &str) -> Option<String> {
-    let path = Path::new(chat_path);
-    let stem = path.file_stem()?.to_str()?;
-    let dir = path.parent()?;
+pub(in crate::runner) async fn resolve_audio_for_chat(chat_path: &Path) -> Option<PathBuf> {
+    resolve_audio_for_chat_with_media_dir(chat_path, None).await
+}
 
+/// Resolve the audio file for a given CHAT file path.
+///
+/// Search order:
+/// 1. Custom `media_dir` if provided (from `--media-dir`)
+/// 2. Alongside the .cha file (same directory)
+pub(in crate::runner) async fn resolve_audio_for_chat_with_media_dir(
+    chat_path: &Path,
+    media_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    let stem = chat_path.file_stem()?.to_str()?;
+
+    // 1. Check custom media_dir first
+    if let Some(dir) = media_dir {
+        for ext in KNOWN_MEDIA_EXTENSIONS {
+            let candidate = dir.join(format!("{stem}.{ext}"));
+            if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // 2. Alongside the .cha file
+    let dir = chat_path.parent()?;
     for ext in KNOWN_MEDIA_EXTENSIONS {
         let candidate = dir.join(format!("{stem}.{ext}"));
         if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-            return Some(candidate.to_string_lossy().to_string());
+            return Some(candidate);
         }
     }
     None
@@ -218,15 +247,12 @@ pub(in crate::runner) async fn get_audio_duration_ms(audio_path: &str) -> Option
 }
 
 /// Replace the filename in `output_path` with `result_filename`.
-pub(in crate::runner) fn apply_result_filename(output_path: &str, result_filename: &str) -> String {
-    let output = Path::new(output_path);
+pub(in crate::runner) fn apply_result_filename(output_path: &Path, result_filename: &str) -> PathBuf {
     let result_name = Path::new(result_filename).file_name().unwrap_or_default();
-    output
+    output_path
         .parent()
         .map(|p| p.join(result_name))
         .unwrap_or_else(|| result_name.into())
-        .to_string_lossy()
-        .to_string()
 }
 
 #[cfg(test)]

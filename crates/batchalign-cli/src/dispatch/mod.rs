@@ -76,6 +76,8 @@ pub async fn dispatch(
     open_dashboard: bool,
     force_cpu: bool,
     before: Option<&str>,
+    workers: Option<usize>,
+    timeout: Option<u64>,
 ) -> Result<(), CliError> {
     let client = BatchalignClient::new();
     let layout = RuntimeLayout::from_env();
@@ -93,7 +95,9 @@ pub async fn dispatch(
             eprintln!(
                 "warning: {command} uses local audio — ignoring --server and using local daemon."
             );
-            match resolve_local_daemon_for_command(&client, command, force_cpu).await {
+            match resolve_local_daemon_for_command(&client, command, force_cpu, workers, timeout)
+                .await
+            {
                 Ok(Some(daemon_url)) => {
                     return dispatch_paths_mode(
                         &client,
@@ -162,7 +166,8 @@ pub async fn dispatch(
     // 2. Auto-daemon
     let cfg = load_config_from_layout(&layout, None).unwrap_or_default();
     if cfg.auto_daemon {
-        match resolve_local_daemon_for_command(&client, command, force_cpu).await {
+        match resolve_local_daemon_for_command(&client, command, force_cpu, workers, timeout).await
+        {
             Ok(Some(daemon_url)) => {
                 return dispatch_paths_mode(
                     &client,
@@ -206,8 +211,10 @@ async fn resolve_local_daemon_for_command(
     client: &BatchalignClient,
     command: &str,
     force_cpu: bool,
+    workers: Option<usize>,
+    timeout: Option<u64>,
 ) -> Result<Option<String>, CliError> {
-    let main = daemon::ensure_daemon(force_cpu).await?;
+    let main = daemon::ensure_daemon(force_cpu, workers, timeout).await?;
     if let Some(url) = main {
         if daemon_supports_command(client, &url, command).await {
             return Ok(Some(url));
@@ -216,7 +223,8 @@ async fn resolve_local_daemon_for_command(
         let can_use_sidecar = command_uses_local_audio(command);
         if can_use_sidecar {
             eprintln!("warning: main daemon lacks '{command}', trying sidecar daemon.");
-            if let Some(sidecar_url) = daemon::ensure_sidecar_daemon(force_cpu).await?
+            if let Some(sidecar_url) =
+                daemon::ensure_sidecar_daemon(force_cpu, workers, timeout).await?
                 && daemon_supports_command(client, &sidecar_url, command).await
             {
                 return Ok(Some(sidecar_url));
@@ -228,7 +236,8 @@ async fn resolve_local_daemon_for_command(
             );
         }
     } else if command_uses_local_audio(command)
-        && let Some(sidecar_url) = daemon::ensure_sidecar_daemon(force_cpu).await?
+        && let Some(sidecar_url) =
+            daemon::ensure_sidecar_daemon(force_cpu, workers, timeout).await?
         && daemon_supports_command(client, &sidecar_url, command).await
     {
         return Ok(Some(sidecar_url));

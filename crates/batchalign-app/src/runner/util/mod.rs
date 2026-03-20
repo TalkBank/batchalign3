@@ -23,7 +23,8 @@ pub(super) use file_status::{
 
 pub(super) use media::{
     apply_result_filename, collect_preflight_audio_paths, compute_audio_identity,
-    get_audio_duration_ms, preflight_validate_media, resolve_audio_for_chat, should_preflight,
+    get_audio_duration_ms, preflight_validate_media, resolve_audio_for_chat,
+    resolve_audio_for_chat_with_media_dir, should_preflight,
 };
 
 #[cfg(test)]
@@ -32,7 +33,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use crate::api::{CommandName, FileName, JobId, LanguageCode3, NumSpeakers};
+    use crate::api::{CommandName, FileName, JobId, LanguageCode3, NumSpeakers, NumWorkers};
     use crate::config::ServerConfig;
     use crate::options::{AlignOptions, CommandOptions, CommonOptions, UtrEngine};
     use crate::runner::util::auto_tune::command_base_mb;
@@ -47,17 +48,19 @@ mod tests {
 
     #[test]
     fn apply_result_filename_basic() {
+        use std::path::PathBuf;
         assert_eq!(
-            apply_result_filename("/out/dir/audio.wav", "audio.cha"),
-            "/out/dir/audio.cha"
+            apply_result_filename(std::path::Path::new("/out/dir/audio.wav"), "audio.cha"),
+            PathBuf::from("/out/dir/audio.cha")
         );
     }
 
     #[test]
     fn apply_result_filename_preserves_dir() {
+        use std::path::PathBuf;
         assert_eq!(
-            apply_result_filename("/data/corpus/output/test.mp3", "test.cha"),
-            "/data/corpus/output/test.cha"
+            apply_result_filename(std::path::Path::new("/data/corpus/output/test.mp3"), "test.cha"),
+            PathBuf::from("/data/corpus/output/test.cha")
         );
     }
 
@@ -66,7 +69,7 @@ mod tests {
         let config = ServerConfig::default();
         assert_eq!(
             compute_job_workers(&CommandName::from("morphotag"), 1, &config),
-            1
+            NumWorkers(1)
         );
     }
 
@@ -78,7 +81,7 @@ mod tests {
         };
         assert_eq!(
             compute_job_workers(&CommandName::from("morphotag"), 10, &config),
-            3
+            NumWorkers(3)
         );
     }
 
@@ -90,7 +93,7 @@ mod tests {
         };
         assert_eq!(
             compute_job_workers(&CommandName::from("morphotag"), 2, &config),
-            2
+            NumWorkers(2)
         );
     }
 
@@ -99,8 +102,28 @@ mod tests {
         let config = ServerConfig::default();
         // Auto-tune should never exceed runtime::max_thread_workers()
         let result = compute_job_workers(&CommandName::from("opensmile"), 100, &config);
-        assert!(result <= runtime::max_thread_workers());
-        assert!(result >= 1);
+        assert!(*result <= runtime::max_thread_workers());
+        assert!(*result >= 1);
+    }
+
+    #[test]
+    fn compute_workers_gpu_commands_use_memory_scaling() {
+        let config = ServerConfig::default();
+        // GPU commands must use memory-based auto-tuning (not hardcoded to 1).
+        // On any machine with >8 GB available, transcribe with 47 files should
+        // get more than 1 worker. Capped at max_gpu_workers (default 8).
+        let result = compute_job_workers(&CommandName::from("transcribe"), 47, &config);
+        assert!(
+            *result >= 1,
+            "GPU auto-tune must return at least 1, got {result}"
+        );
+        assert!(
+            *result <= runtime::max_gpu_workers(),
+            "GPU auto-tune must cap at max_gpu_workers ({}), got {result}",
+            runtime::max_gpu_workers()
+        );
+        // On a typical dev machine (16+ GB), should get >1 workers
+        // (4 GB base * 1.5 overhead = 6 GB per worker, 16 GB → 2 workers)
     }
 
     #[test]
@@ -203,9 +226,11 @@ mod tests {
             fa_engine: "wav2vec_fa".into(),
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: false,
             wor: true.into(),
             merge_abbrev: false.into(),
+            media_dir: None,
         });
         assert!(!should_preflight(&CommandName::from("align"), Some(&opts)));
     }
@@ -222,7 +247,7 @@ mod tests {
             filename: "audio.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec!["/nonexistent/audio.wav".into()];
+        let source_paths = vec![std::path::PathBuf::from("/nonexistent/audio.wav")];
         let failures = preflight_validate_media(&file_list, &source_paths, false).await;
         assert!(
             failures.is_empty(),
@@ -237,7 +262,7 @@ mod tests {
             filename: "test.cha".into(),
             has_chat: true,
         }];
-        let source_paths = vec!["/nonexistent/test.cha".into()];
+        let source_paths = vec![std::path::PathBuf::from("/nonexistent/test.cha")];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert!(failures.is_empty(), "Should skip CHAT files");
     }
@@ -249,7 +274,7 @@ mod tests {
             filename: "missing.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec!["/nonexistent/path/missing.wav".into()];
+        let source_paths = vec![std::path::PathBuf::from("/nonexistent/path/missing.wav")];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("not found"));
@@ -268,7 +293,7 @@ mod tests {
             filename: "test.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![wav_path.clone()];
+        let source_paths = vec![std::path::PathBuf::from(&wav_path)];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("empty"));
@@ -285,7 +310,7 @@ mod tests {
             filename: "test.xyz".into(),
             has_chat: false,
         }];
-        let source_paths = vec![path];
+        let source_paths = vec![std::path::PathBuf::from(&path)];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("Unknown media format"));
@@ -301,7 +326,7 @@ mod tests {
             filename: "test.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![path];
+        let source_paths = vec![std::path::PathBuf::from(&path)];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert!(failures.is_empty(), "Valid .wav file should pass");
     }
@@ -317,7 +342,7 @@ mod tests {
                 filename: FileName::from(format!("test.{ext}")),
                 has_chat: false,
             }];
-            let source_paths = vec![path];
+            let source_paths = vec![std::path::PathBuf::from(&path)];
             let failures = preflight_validate_media(&file_list, &source_paths, true).await;
             assert!(failures.is_empty(), "Extension .{ext} should be accepted");
         }
@@ -335,7 +360,7 @@ mod tests {
         std::fs::write(&cha, "@Begin\n@End\n").unwrap();
         std::fs::write(&wav, b"RIFF").unwrap();
 
-        let result = resolve_audio_for_chat(&cha.to_string_lossy()).await;
+        let result = resolve_audio_for_chat(&cha).await;
         assert!(result.is_some(), "Should find wav alongside cha");
         assert!(result.unwrap().ends_with("test.wav"));
     }
@@ -346,7 +371,7 @@ mod tests {
         let cha = dir.path().join("test.cha");
         std::fs::write(&cha, "@Begin\n@End\n").unwrap();
 
-        let result = resolve_audio_for_chat(&cha.to_string_lossy()).await;
+        let result = resolve_audio_for_chat(&cha).await;
         assert!(
             result.is_none(),
             "Should return None when no audio file exists"
@@ -368,29 +393,31 @@ mod tests {
             },
             dispatch: RunnerDispatchConfig {
                 command: CommandName::from("align"),
-                lang: LanguageCode3::from("eng"),
+                lang: crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng")),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Align(AlignOptions {
                     common: CommonOptions::default(),
                     fa_engine: "wav2vec_fa".into(),
                     utr_engine: Some(UtrEngine::RevAi),
                     utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
                     pauses: false,
                     wor: true.into(),
                     merge_abbrev: false.into(),
+                    media_dir: None,
                 }),
                 runtime_state: BTreeMap::new(),
                 debug_traces: false,
             },
             filesystem: RunnerFilesystemConfig {
                 paths_mode: true,
-                source_paths: vec![chat_path.to_string_lossy().to_string()],
+                source_paths: vec![chat_path.to_path_buf()],
                 output_paths: vec![],
                 before_paths: vec![],
-                staging_dir: String::new(),
+                staging_dir: std::path::PathBuf::new(),
                 media_mapping: String::new(),
                 media_subdir: String::new(),
-                source_dir: String::new(),
+                source_dir: std::path::PathBuf::new(),
             },
             cancel_token: CancellationToken::new(),
             pending_files: vec![PendingJobFile {
@@ -404,7 +431,7 @@ mod tests {
             collect_preflight_audio_paths(&CommandName::from("align"), &job, &job.pending_files)
                 .await;
 
-        assert_eq!(paths, vec![wav_path.to_string_lossy().to_string()]);
+        assert_eq!(paths, vec![wav_path.to_path_buf()]);
     }
 
     /// Simulates the content-mode FA audio resolution bug: staged file in a
@@ -425,12 +452,12 @@ mod tests {
         std::fs::write(&staged_cha, "@Begin\n@End\n").unwrap();
 
         // Strategy 4 (alongside staged file): should fail
-        let staged_result = resolve_audio_for_chat(&staged_cha.to_string_lossy()).await;
+        let staged_result = resolve_audio_for_chat(&staged_cha).await;
         assert!(staged_result.is_none(), "No audio in staging dir");
 
         // Strategy 2 (source_dir): should succeed — this is the fix
-        let source_path = Path::new(source_dir.path()).join("ACWT01a.cha");
-        let source_result = resolve_audio_for_chat(&source_path.to_string_lossy()).await;
+        let source_path = source_dir.path().join("ACWT01a.cha");
+        let source_result = resolve_audio_for_chat(&source_path).await;
         assert!(source_result.is_some(), "Should find audio via source_dir");
         assert!(source_result.unwrap().ends_with("ACWT01a.wav"));
     }

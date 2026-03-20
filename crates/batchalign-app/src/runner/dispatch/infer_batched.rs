@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::api::{FileName, LanguageCode3};
+use crate::api::{ContentType, FileName, LanguageCode3};
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::{FailureCategory, WorkUnitKind};
@@ -41,9 +41,10 @@ pub(in crate::runner) async fn dispatch_batched_infer(
         mwt,
     } = plan;
     let job_id = &job.identity.job_id;
-    let correlation_id = job.identity.correlation_id.as_str();
+    let correlation_id = &*job.identity.correlation_id;
     let file_list = &job.pending_files;
-    let lang: &LanguageCode3 = &job.dispatch.lang;
+    let fallback_lang = LanguageCode3::from("eng");
+    let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
     let command = job.dispatch.command.as_ref();
 
     let started_at = unix_now();
@@ -76,7 +77,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
             if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
                 job.filesystem.source_paths[file_index].clone()
             } else {
-                format!("{}/input/{filename}", job.filesystem.staging_dir)
+                job.filesystem.staging_dir.join("input").join(filename)
             };
         let before_path = if !job.filesystem.before_paths.is_empty()
             && file_index < job.filesystem.before_paths.len()
@@ -241,10 +242,10 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 {
                     apply_result_filename(&job.filesystem.output_paths[file_index], &filename)
                 } else {
-                    format!("{}/output/{}", job.filesystem.staging_dir, filename)
+                    job.filesystem.staging_dir.join("output").join(&*filename)
                 };
 
-                if let Some(parent) = Path::new(&write_path).parent() {
+                if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
 
@@ -259,7 +260,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 }
 
                 lifecycle
-                    .complete_with_result(filename.clone(), "chat", finished_at)
+                    .complete_with_result(filename.clone(), ContentType::Chat, finished_at)
                     .await;
             }
             Err(err_msg) => {

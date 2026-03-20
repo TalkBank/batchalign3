@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.talkbank.batchalign3.worker-gpu-eng</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Resolved by install script to the actual batchalign3 binary path -->
+        <string>__BATCHALIGN3_BIN__</string>
+        <string>worker</string>
+        <string>start</string>
+        <string>--profile</string>
+        <string>gpu</string>
+        <string>--lang</string>
+        <string>eng</string>
+        <string>--port</string>
+        <string>9100</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__STATE_DIR__/logs/worker-gpu-eng.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__STATE_DIR__/logs/worker-gpu-eng.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Throttle restarts: wait 10s between crashes -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

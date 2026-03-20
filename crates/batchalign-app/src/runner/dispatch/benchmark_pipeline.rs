@@ -1,13 +1,13 @@
 //! Benchmark dispatch built on the Rust-owned transcribe and compare pipelines.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use batchalign_chat_ops::morphosyntax::MwtDict;
 use tracing::warn;
 
-use crate::api::{EngineVersion, UnixTimestamp};
+use crate::api::{ContentType, EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
 use crate::benchmark::{BenchmarkRequest, gold_chat_path_for_audio, process_benchmark};
 use crate::cache::UtteranceCache;
 use crate::params::CachePolicy;
@@ -37,9 +37,9 @@ pub(in crate::runner) struct BenchmarkDispatchRuntime {
     /// Current engine version string for cache partitioning.
     pub engine_version: EngineVersion,
     /// Optional preflight Rev.AI job ids keyed by original audio path.
-    pub rev_job_ids: Arc<HashMap<String, String>>,
+    pub rev_job_ids: Arc<HashMap<PathBuf, RevAiJobId>>,
     /// Maximum number of file tasks to run concurrently for this job.
-    pub num_workers: usize,
+    pub num_workers: NumWorkers,
 }
 
 /// Shared per-file benchmark dependencies.
@@ -55,7 +55,7 @@ struct BenchmarkFileContext<'a> {
     /// Shared cache/worker services for transcribe + compare.
     services: PipelineServices<'a>,
     /// Rev.AI preflight job ids keyed by the original provider audio path.
-    rev_job_ids: &'a HashMap<String, String>,
+    rev_job_ids: &'a HashMap<PathBuf, RevAiJobId>,
     /// Compare-side cache policy.
     cache_policy: CachePolicy,
     /// MWT dictionary shared with the compare pipeline.
@@ -78,7 +78,7 @@ pub(in crate::runner) async fn dispatch_benchmark_infer(
         should_merge_abbrev,
     } = plan;
 
-    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.max(1)));
+    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.0.max(1)));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -171,7 +171,7 @@ async fn process_one_benchmark_file(
 
     opts.rev_job_id = rev_job_ids.get(&original_audio_path).cloned();
 
-    let gold_path = gold_chat_path_for_audio(&original_audio_path);
+    let gold_path = gold_chat_path_for_audio(&original_audio_path.to_string_lossy());
     let gold_text = match tokio::fs::read_to_string(&gold_path).await {
         Ok(text) => text,
         Err(err) => {
@@ -184,7 +184,7 @@ async fn process_one_benchmark_file(
         }
     };
 
-    let audio_path = match crate::ensure_wav::ensure_wav(Path::new(&audio_path), None).await {
+    let audio_path = match crate::ensure_wav::ensure_wav(&audio_path, None).await {
         Ok(path) => path,
         Err(err) => {
             let err_msg = format!("Media conversion failed for {filename}: {err}");
@@ -216,7 +216,7 @@ async fn process_one_benchmark_file(
         match process_benchmark(BenchmarkRequest {
             audio_path: &audio_path,
             gold_text: &gold_text,
-            lang: &job.dispatch.lang,
+            lang: &job.dispatch.lang.resolve_or(&crate::api::LanguageCode3::from("eng")),
             services,
             transcribe_options: opts,
             cache_policy,
@@ -248,23 +248,23 @@ async fn process_one_benchmark_file(
                         &output_filename,
                     )
                 } else {
-                    format!("{}/output/{output_filename}", job.filesystem.staging_dir)
+                    job.filesystem.staging_dir.join("output").join(&output_filename)
                 };
 
-                if let Some(parent) = Path::new(&write_path).parent() {
+                if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
                 if let Err(err) = tokio::fs::write(&write_path, &chat_output).await {
                     warn!(error = %err, "Failed to write benchmark CHAT output");
                 }
 
-                let csv_path = write_path.replace(".cha", ".compare.csv");
+                let csv_path = write_path.with_extension("compare.csv");
                 if let Err(err) = tokio::fs::write(&csv_path, &csv_output).await {
                     warn!(error = %err, "Failed to write benchmark CSV output");
                 }
 
                 lifecycle
-                    .complete_with_result(output_filename.into(), "chat", finished_at)
+                    .complete_with_result(output_filename.into(), ContentType::Chat, finished_at)
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }
@@ -308,29 +308,30 @@ fn resolve_benchmark_original_audio_path(
     filesystem: &crate::store::RunnerFilesystemConfig,
     file_index: usize,
     filename: &str,
-) -> String {
+) -> PathBuf {
     filesystem
         .source_paths
         .get(file_index)
         .cloned()
-        .unwrap_or_else(|| format!("{}/{}", filesystem.source_dir, filename))
+        .unwrap_or_else(|| filesystem.source_dir.join(filename))
 }
 
 #[cfg(test)]
 mod tests {
     use super::resolve_benchmark_original_audio_path;
     use crate::store::RunnerFilesystemConfig;
+    use std::path::PathBuf;
 
     fn filesystem_config(source_paths: Vec<&str>, source_dir: &str) -> RunnerFilesystemConfig {
         RunnerFilesystemConfig {
             paths_mode: false,
-            source_paths: source_paths.into_iter().map(str::to_owned).collect(),
+            source_paths: source_paths.into_iter().map(PathBuf::from).collect(),
             output_paths: Vec::new(),
             before_paths: Vec::new(),
-            staging_dir: "/tmp/staging".to_string(),
+            staging_dir: PathBuf::from("/tmp/staging"),
             media_mapping: String::new(),
             media_subdir: String::new(),
-            source_dir: source_dir.to_string(),
+            source_dir: PathBuf::from(source_dir),
         }
     }
 
@@ -340,7 +341,7 @@ mod tests {
 
         let path = resolve_benchmark_original_audio_path(&filesystem, 0, "clip.mp3");
 
-        assert_eq!(path, "/tmp/input/clip.mp3");
+        assert_eq!(path, PathBuf::from("/tmp/input/clip.mp3"));
     }
 
     #[test]
@@ -349,6 +350,6 @@ mod tests {
 
         let path = resolve_benchmark_original_audio_path(&filesystem, 0, "clip.mp3");
 
-        assert_eq!(path, "/tmp/source/clip.mp3");
+        assert_eq!(path, PathBuf::from("/tmp/source/clip.mp3"));
     }
 }

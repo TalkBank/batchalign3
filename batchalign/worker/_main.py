@@ -17,16 +17,27 @@ from collections.abc import Mapping, Sequence
 import logging
 import os
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from batchalign.inference._domain_types import TcpPort
 
 from batchalign.device import DevicePolicy
 from batchalign.worker._model_loading import (
     enable_test_echo,
+    load_worker_profile,
     load_worker_task,
     parse_engine_overrides,
     resolve_injected_revai_api_key,
 )
-from batchalign.worker._types import InferTask
-from batchalign.worker._protocol import _print_ready, _serve_stdio
+from batchalign.worker._types import InferTask, WorkerProfile
+from batchalign.worker._protocol import (
+    _print_ready,
+    _serve_stdio,
+    _serve_stdio_concurrent,
+    _serve_tcp,
+    _serve_tcp_concurrent,
+)
 from batchalign.worker._types import WorkerBootstrapRuntime, _state
 
 
@@ -45,10 +56,21 @@ def build_arg_parser():
         help="Test mode: echo input unchanged (no ML models)",
     )
     parser.add_argument(
+        "--test-delay-ms",
+        type=int,
+        default=0,
+        help="Test mode: sleep this many ms before each response (for timeout testing)",
+    )
+    parser.add_argument(
         "--verbose",
         type=int,
         default=0,
         help="Verbosity level (0=warn, 1=info, 2=debug, 3=trace)",
+    )
+    parser.add_argument(
+        "--profile",
+        default="",
+        help="Worker profile (gpu, stanza, io) — groups related tasks into one process",
     )
     parser.add_argument(
         "--force-cpu",
@@ -56,9 +78,23 @@ def build_arg_parser():
         help=argparse.SUPPRESS,
     )
 
-    # Kept for compatibility with older launchers; ignored in stdio mode.
-    parser.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
-    parser.add_argument("--uds", default="", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "tcp"],
+        default="stdio",
+        help="IPC transport: stdio (child process) or tcp (persistent daemon)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="TCP port to listen on (0 = auto-assign from 9100-9199). Only used with --transport tcp.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="TCP bind address (default: 127.0.0.1). Only used with --transport tcp.",
+    )
     return parser
 
 
@@ -76,10 +112,17 @@ def build_worker_bootstrap_runtime(
             task = InferTask(args.task)
         except ValueError as error:
             raise ValueError(f"unknown infer task: {args.task}") from error
+    profile = None
+    if args.profile:
+        try:
+            profile = WorkerProfile(args.profile)
+        except ValueError as error:
+            raise ValueError(f"unknown worker profile: {args.profile}") from error
     return WorkerBootstrapRuntime(
         task=task,
         lang=args.lang,
         num_speakers=args.num_speakers,
+        profile=profile,
         engine_overrides=engine_overrides,
         test_echo=args.test_echo,
         verbose=args.verbose,
@@ -118,16 +161,65 @@ def main() -> None:
     _state.bootstrap = bootstrap
 
     if args.test_echo:
-        enable_test_echo(
-            bootstrap.task.value if bootstrap.task is not None else "test-echo",
-            bootstrap.lang,
-        )
+        if bootstrap.profile is not None:
+            label = f"profile:{bootstrap.profile.value}"
+        elif bootstrap.task is not None:
+            label = bootstrap.task.value
+        else:
+            label = "test-echo"
+        enable_test_echo(label, bootstrap.lang)
+        if args.test_delay_ms > 0:
+            _state.test_delay_ms = args.test_delay_ms
+    elif bootstrap.profile is not None:
+        load_worker_profile(bootstrap)
     elif bootstrap.task is not None:
         load_worker_task(bootstrap)
     else:
-        parser.error("--task is required (or use --test-echo)")
+        parser.error("--task or --profile is required (or use --test-echo)")
 
-    # After bootstrap succeeds, the worker switches to the stdio request loop
-    # expected by the Rust supervisor.
-    _print_ready()
-    _serve_stdio()
+    # After bootstrap succeeds, the worker switches to the request loop
+    # expected by the Rust supervisor (stdio) or becomes a persistent daemon
+    # (TCP). GPU profile workers use concurrent serving (ThreadPoolExecutor)
+    # so multiple requests can share loaded GPU models via in-process threads.
+    if args.transport == "tcp":
+        port = args.port if args.port != 0 else _auto_assign_port(args.host)
+        if bootstrap.profile == WorkerProfile.GPU:
+            _serve_tcp_concurrent(args.host, port)
+        else:
+            _serve_tcp(args.host, port)
+    else:
+        _print_ready()
+        if bootstrap.profile == WorkerProfile.GPU:
+            _serve_stdio_concurrent()
+        else:
+            _serve_stdio()
+
+
+def _auto_assign_port(host: str) -> TcpPort:
+    """Find an available port in the 9100-9199 range.
+
+    Checks the worker registry to avoid collisions with already-registered
+    workers, then verifies the port is bindable.
+    """
+    import socket
+
+    from batchalign.worker._registry import list_workers
+
+    registered = list_workers()
+    used_ports = {e.port for e in registered if e.host == host}
+
+    for candidate in range(9100, 9200):
+        if candidate in used_ports:
+            continue
+        # Verify the port is actually available by trying to bind.
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((host, candidate))
+                return candidate
+        except OSError:
+            continue
+
+    raise RuntimeError(
+        f"No available ports in range 9100-9199 on {host}. "
+        "Stop some workers or specify --port explicitly."
+    )

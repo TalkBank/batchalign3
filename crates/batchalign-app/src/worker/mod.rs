@@ -25,6 +25,8 @@ pub mod fa_result_v2;
 pub mod handle;
 pub mod opensmile_request_v2;
 pub mod pool;
+pub mod registry;
+pub mod tcp_handle;
 pub(crate) mod provider_credentials;
 pub mod python;
 pub mod request_builder_v2;
@@ -37,5 +39,4 @@ pub mod text_result_v2;
 // Re-export wire-format types from types::worker so that
 // `crate::worker::InferTask` etc. continues to resolve.
 pub use crate::types::worker::*;
-pub use target::WorkerTarget;
-pub(crate) use target::task_name as infer_task_target_name;
+pub use target::{WorkerProfile, WorkerTarget};

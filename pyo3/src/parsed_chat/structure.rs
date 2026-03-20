@@ -7,7 +7,7 @@
 
 use pyo3::prelude::*;
 use talkbank_model::WriteChat;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, DependentTier, Line};
 
 use crate::ParsedChat;
@@ -109,7 +109,7 @@ fn extract_structure(chat_file: &ChatFile) -> Result<String, String> {
         let mut extracted_words = Vec::new();
         crate::extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut extracted_words,
         );
 

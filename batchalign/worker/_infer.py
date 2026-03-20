@@ -30,6 +30,10 @@ def _infer(req: InferRequest) -> InferResponse:
     task routing logic stays centralized in one place.
     """
     if _state.test_echo:
+        if _state.test_delay_ms > 0:
+            import time
+
+            time.sleep(_state.test_delay_ms / 1000.0)
         return InferResponse(result=req.payload, elapsed_s=0.0)
 
     batch_req = BatchInferRequest(task=req.task, lang=req.lang, items=[req.payload])
@@ -42,6 +46,10 @@ def _infer(req: InferRequest) -> InferResponse:
 def _batch_infer(req: BatchInferRequest) -> BatchInferResponse:
     """Dispatch one batch request to the task-specific inference adapter."""
     if _state.test_echo:
+        if _state.test_delay_ms > 0:
+            import time
+
+            time.sleep(_state.test_delay_ms / 1000.0)
         return BatchInferResponse(
             results=[InferResponse(result=item, elapsed_s=0.0) for item in req.items]
         )

@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import Mapping
 
+from batchalign.inference._domain_types import RevAiApiKey
 from batchalign.inference.asr import iso3_to_language_name
 from batchalign.worker._types import AsrEngine, WorkerBootstrapRuntime, _state
 
@@ -50,16 +51,26 @@ def load_asr_engine(bootstrap: WorkerBootstrapRuntime) -> None:
         from batchalign.inference.asr import load_whisper_asr
 
         language = iso3_to_language_name(lang)
-        _state.whisper_asr_model = load_whisper_asr(
-            language=language,
-            device_policy=bootstrap.device_policy,
-        )
+        # When auto-detecting, always use the multilingual model with no
+        # language-specific overrides so Whisper detects per-segment.
+        if language == "auto":
+            _state.whisper_asr_model = load_whisper_asr(
+                model="openai/whisper-large-v3",
+                base="openai/whisper-large-v3",
+                language="auto",
+                device_policy=bootstrap.device_policy,
+            )
+        else:
+            _state.whisper_asr_model = load_whisper_asr(
+                language=language,
+                device_policy=bootstrap.device_policy,
+            )
         _state.asr_engine = AsrEngine.WHISPER
 
 
 def resolve_asr_engine(
     engine_overrides: dict[str, str] | None,
-    rev_api_key: str | None,
+    rev_api_key: RevAiApiKey | None,
 ) -> str:
     """Resolve which ASR engine this worker should load.
 
@@ -76,7 +87,7 @@ def resolve_asr_engine(
 
 def resolve_injected_revai_api_key(
     environ: Mapping[str, str] | None = None,
-) -> str | None:
+) -> RevAiApiKey | None:
     """Resolve a pre-injected Rev.AI key from an explicit environment mapping."""
     env = environ if environ is not None else os.environ
     for key_name in ("BATCHALIGN_REV_API_KEY", "REVAI_API_KEY"):

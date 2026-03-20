@@ -6,7 +6,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use batchalign_chat_ops::AlignmentDomain;
+use batchalign_chat_ops::TierDomain;
 use batchalign_chat_ops::extract::extract_words;
 use batchalign_chat_ops::parse::parse_lenient;
 use walkdir::WalkDir;
@@ -113,7 +113,7 @@ fn extract_utterances_from_files(
     for path in files {
         let text = std::fs::read_to_string(path)?;
         let (chat_file, _warnings) = parse_lenient(&text);
-        let extracted = extract_words(&chat_file, AlignmentDomain::Wor);
+        let extracted = extract_words(&chat_file, TierDomain::Wor);
         for utt in &extracted {
             let words: Vec<&str> = utt.words.iter().map(|w| w.text.as_str()).collect();
             if words.len() >= min_word_count {

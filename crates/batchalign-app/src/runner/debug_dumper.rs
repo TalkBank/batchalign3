@@ -11,6 +11,7 @@ use batchalign_chat_ops::fa::utr::{AsrTimingToken, UtrResult};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+use crate::api::DurationMs;
 use crate::types::traces::FaGroupTrace;
 
 /// Pipeline debug artifact writer.
@@ -28,9 +29,9 @@ pub(crate) struct DebugDumper {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct FaGroupDumpData {
     /// Audio window start in milliseconds.
-    pub audio_start_ms: u64,
+    pub audio_start_ms: DurationMs,
     /// Audio window end in milliseconds.
-    pub audio_end_ms: u64,
+    pub audio_end_ms: DurationMs,
     /// Words in this group.
     pub words: Vec<String>,
     /// Per-word timing pairs from FA inference.
@@ -213,6 +214,76 @@ impl DebugDumper {
             debug!(%e, "failed to write FA debug CHAT output");
         }
     }
+
+    // -------------------------------------------------------------------
+    // Transcribe pipeline debug artifacts
+    // -------------------------------------------------------------------
+
+    /// Dump raw ASR response JSON after ASR inference.
+    pub(crate) fn dump_asr_response(&self, filename: &str, response: &impl serde::Serialize) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_asr_response.json"));
+        match serde_json::to_string_pretty(response) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    debug!(%e, "failed to write ASR response JSON");
+                }
+            }
+            Err(e) => debug!(%e, "failed to serialize ASR response"),
+        }
+        info!(%filename, response = %path.display(), "ASR response debug data dumped");
+    }
+
+    /// Dump CHAT text after CHAT assembly (post-ASR, pre-utseg).
+    pub(crate) fn dump_post_asr_chat(&self, filename: &str, chat_text: &str) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_post_asr.cha"));
+        if let Err(e) = std::fs::write(&path, chat_text) {
+            debug!(%e, "failed to write post-ASR CHAT");
+        }
+    }
+
+    /// Dump CHAT text before utterance segmentation.
+    pub(crate) fn dump_pre_utseg_chat(&self, filename: &str, chat_text: &str) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_pre_utseg.cha"));
+        if let Err(e) = std::fs::write(&path, chat_text) {
+            debug!(%e, "failed to write pre-utseg CHAT");
+        }
+    }
+
+    /// Dump CHAT text after utterance segmentation.
+    pub(crate) fn dump_post_utseg_chat(&self, filename: &str, chat_text: &str) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_post_utseg.cha"));
+        if let Err(e) = std::fs::write(&path, chat_text) {
+            debug!(%e, "failed to write post-utseg CHAT");
+        }
+    }
+
+    /// Dump CHAT text before morphosyntax.
+    pub(crate) fn dump_pre_morphosyntax_chat(&self, filename: &str, chat_text: &str) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_pre_morphosyntax.cha"));
+        if let Err(e) = std::fs::write(&path, chat_text) {
+            debug!(%e, "failed to write pre-morphosyntax CHAT");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,24 +295,30 @@ mod tests {
         let dumper = DebugDumper::disabled();
         assert!(!dumper.is_enabled());
         // These should all return immediately without error
-        dumper.dump_utr_input("test.cha", "@UTF8\n@Begin\n@End");
+        let chat = "@UTF8\n@Begin\n@End";
+        dumper.dump_utr_input("test.cha", chat);
         dumper.dump_utr_tokens("test.cha", &[]);
         dumper.dump_utr_output(
             "test.cha",
-            "@UTF8\n@Begin\n@End",
+            chat,
             &UtrResult {
                 injected: 0,
                 skipped: 0,
                 unmatched: 0,
             },
         );
-        dumper.dump_fa_output("test.cha", "@UTF8\n@Begin\n@End");
+        dumper.dump_fa_output("test.cha", chat);
+        dumper.dump_asr_response("test.wav", &serde_json::json!({"tokens": []}));
+        dumper.dump_post_asr_chat("test.wav", chat);
+        dumper.dump_pre_utseg_chat("test.wav", chat);
+        dumper.dump_post_utseg_chat("test.wav", chat);
+        dumper.dump_pre_morphosyntax_chat("test.wav", chat);
         dumper.dump_fa_group_result(
             "test.cha",
             0,
             &FaGroupDumpData {
-                audio_start_ms: 0,
-                audio_end_ms: 1000,
+                audio_start_ms: DurationMs(0),
+                audio_end_ms: DurationMs(1000),
                 words: vec!["hello".into()],
                 timings: vec![Some(TimingPair {
                     start_ms: 0,
@@ -274,12 +351,17 @@ mod tests {
         dumper.dump_utr_tokens("sample.cha", &tokens);
         dumper.dump_utr_output("sample.cha", chat, &utr_result);
         dumper.dump_fa_output("sample.cha", chat);
+        dumper.dump_asr_response("sample.wav", &serde_json::json!({"tokens": [{"text": "hello"}]}));
+        dumper.dump_post_asr_chat("sample.wav", chat);
+        dumper.dump_pre_utseg_chat("sample.wav", chat);
+        dumper.dump_post_utseg_chat("sample.wav", chat);
+        dumper.dump_pre_morphosyntax_chat("sample.wav", chat);
         dumper.dump_fa_group_result(
             "sample.cha",
             0,
             &FaGroupDumpData {
-                audio_start_ms: 0,
-                audio_end_ms: 1000,
+                audio_start_ms: DurationMs(0),
+                audio_end_ms: DurationMs(1000),
                 words: vec!["hello".into()],
                 timings: vec![Some(TimingPair {
                     start_ms: 100,
@@ -295,6 +377,11 @@ mod tests {
         assert!(dir.path().join("sample_utr_result.json").exists());
         assert!(dir.path().join("sample_fa_output.cha").exists());
         assert!(dir.path().join("sample_fa_group_0.json").exists());
+        assert!(dir.path().join("sample_asr_response.json").exists());
+        assert!(dir.path().join("sample_post_asr.cha").exists());
+        assert!(dir.path().join("sample_pre_utseg.cha").exists());
+        assert!(dir.path().join("sample_post_utseg.cha").exists());
+        assert!(dir.path().join("sample_pre_morphosyntax.cha").exists());
 
         // Verify tokens roundtrip
         let tokens_json = std::fs::read_to_string(dir.path().join("sample_utr_tokens.json"))
@@ -308,8 +395,8 @@ mod tests {
         let group_json =
             std::fs::read_to_string(dir.path().join("sample_fa_group_0.json")).expect("read group");
         let parsed: FaGroupDumpData = serde_json::from_str(&group_json).expect("parse group");
-        assert_eq!(parsed.audio_start_ms, 0);
-        assert_eq!(parsed.audio_end_ms, 1000);
+        assert_eq!(parsed.audio_start_ms, DurationMs(0));
+        assert_eq!(parsed.audio_end_ms, DurationMs(1000));
         assert_eq!(parsed.words, vec!["hello"]);
         assert!(parsed.timings[0].is_some());
     }

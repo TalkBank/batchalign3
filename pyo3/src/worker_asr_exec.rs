@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use batchalign_app::api::LanguageCode3;
+use batchalign_app::api::{DurationSeconds, LanguageCode3};
 use batchalign_app::types::worker_v2::{
     AsrBackendV2, AsrElementKindV2, AsrElementV2, AsrInputV2, AsrMonologueV2, AsrRequestV2,
     ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2, InferenceTaskV2, MonologueAsrResultV2,
@@ -111,7 +111,7 @@ fn error_response(
         request_id: request.request_id.clone(),
         outcome: ExecuteOutcomeV2::Error { code, message },
         result: None,
-        elapsed_s: started_at.elapsed().as_secs_f64(),
+        elapsed_s: DurationSeconds(started_at.elapsed().as_secs_f64()),
     }
 }
 
@@ -124,7 +124,7 @@ fn success_response(
         request_id: request.request_id.clone(),
         outcome: ExecuteOutcomeV2::Success,
         result: Some(result),
-        elapsed_s: started_at.elapsed().as_secs_f64(),
+        elapsed_s: DurationSeconds(started_at.elapsed().as_secs_f64()),
     }
 }
 
@@ -147,8 +147,8 @@ fn parse_whisper_result(
         .map_err(|error| AsrExecuteFailure::Runtime(format!("invalid ASR host output: {error}")))?;
 
     for chunk in &parsed.chunks {
-        validate_non_negative("Whisper chunk start_s", chunk.start_s)?;
-        validate_non_negative("Whisper chunk end_s", chunk.end_s)?;
+        validate_non_negative("Whisper chunk start_s", chunk.start_s.0)?;
+        validate_non_negative("Whisper chunk end_s", chunk.end_s.0)?;
         if chunk.end_s < chunk.start_s {
             return Err(AsrExecuteFailure::Runtime(
                 "invalid ASR host output: Whisper chunk end_s must be >= start_s".to_owned(),
@@ -202,8 +202,8 @@ fn parse_provider_result(
 
             elements.push(AsrElementV2 {
                 value: element.value,
-                start_s: element.ts,
-                end_s: element.end_ts,
+                start_s: element.ts.map(DurationSeconds),
+                end_s: element.end_ts.map(DurationSeconds),
                 kind,
                 confidence: element.confidence,
             });

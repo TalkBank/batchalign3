@@ -38,7 +38,7 @@ pub(crate) fn add_utterance_timing_inner(
     chat_file: &mut talkbank_model::model::ChatFile,
     asr_words_json: &str,
 ) -> PyResult<()> {
-    use talkbank_model::alignment::helpers::AlignmentDomain;
+    use talkbank_model::alignment::helpers::TierDomain;
 
     let asr_words: Vec<AsrWordJson> = serde_json::from_str(asr_words_json).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid asr_words JSON: {e}"))
@@ -48,7 +48,7 @@ pub(crate) fn add_utterance_timing_inner(
         return Ok(());
     }
 
-    let extracted = crate::extract::extract_words(chat_file, AlignmentDomain::Wor);
+    let extracted = crate::extract::extract_words(chat_file, TierDomain::Wor);
     let utterance_windows = collect_utterance_windows(chat_file);
     let mut utt_timings: std::collections::HashMap<usize, Vec<Option<(u64, u64)>>> = extracted
         .iter()

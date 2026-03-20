@@ -9,9 +9,13 @@ mod dispatch;
 pub(crate) mod util;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::api::{CommandName, EngineVersion, FileName, JobId, UnixTimestamp};
+use crate::api::{
+    CommandName, ContentType, EngineVersion, FileName, JobId, LanguageCode3, NumWorkers,
+    RevAiJobId, UnixTimestamp,
+};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
 use crate::revai::{RevAiPreflightPlan, preflight_submit_audio_paths};
@@ -134,7 +138,7 @@ pub(crate) async fn job_task(job_id: JobId, context: RunnerContext) {
         .runner_snapshot(&job_id)
         .await
         .map(|snapshot| snapshot.identity.correlation_id)
-        .unwrap_or_else(|| job_id.to_string());
+        .unwrap_or_else(|| job_id.to_string().into());
     let lease_task = tokio::spawn(async move {
         let interval = std::time::Duration::from_secs(JobStore::LOCAL_LEASE_HEARTBEAT_S);
         loop {
@@ -178,7 +182,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
 
     // Read command + lang for the memory gate check.
     let gate_command = job.dispatch.command.clone();
-    let gate_lang = job.dispatch.lang.clone();
+    let gate_lang_resolved = job.dispatch.lang.as_resolved().cloned();
 
     // Memory gate — if pressure persists, defer the queued job back into the
     // local queue backend instead of sleeping inside the runner task.
@@ -194,8 +198,9 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         &context,
         Some(pool),
         Some(&gate_command),
-        Some(&gate_lang),
+        gate_lang_resolved.as_ref(),
         store.config().memory_gate_mb.0,
+        Some(store.config()),
     )
     .await
     {
@@ -247,13 +252,13 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     let num_workers = compute_job_workers(&command, file_list.len(), store.config());
 
     // Record on job and DB
-    store.record_job_worker_count(job_id, num_workers).await;
+    store.record_job_worker_count(job_id, num_workers.0).await;
 
     info!(
         job_id = %job_id,
         correlation_id = %correlation_id,
         num_files = file_list.len(),
-        num_workers = num_workers,
+        num_workers = num_workers.0,
         command = %command,
         "Processing files"
     );
@@ -279,15 +284,35 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     };
 
     // Pre-scale workers before dispatch to avoid sequential spawn overhead.
-    if num_workers > 1 {
-        pool.pre_scale(&command, &job.dispatch.lang, num_workers)
-            .await;
+    // For --lang auto, use "auto" as the worker lang — this matches the key
+    // that dispatch_execute_v2 will use for the GPU worker. Engine overrides
+    // from the job options are passed so the pre-scaled worker matches the
+    // exact key that dispatch will look up.
+    if *num_workers > 1 {
+        let pre_scale_lang = job
+            .dispatch
+            .lang
+            .as_resolved()
+            .cloned()
+            .unwrap_or_else(|| LanguageCode3::from_worker_lang("auto"));
+        let job_engine_overrides = job
+            .dispatch
+            .options
+            .common()
+            .engine_overrides_json();
+        pool.pre_scale_with_overrides(
+            &command,
+            &pre_scale_lang,
+            num_workers.0,
+            &job_engine_overrides,
+        )
+        .await;
     }
 
     // Preflight: pre-submit audio files to Rev.AI for parallel server-side processing.
     // This collects Rev.AI job IDs that individual file tasks will poll instead of
     // re-uploading, reducing total wall-clock time by 2-5x for large batches.
-    let rev_job_ids: Arc<HashMap<String, String>> = {
+    let rev_job_ids: Arc<HashMap<PathBuf, RevAiJobId>> = {
         if should_preflight(&command, Some(&job.dispatch.options)) {
             let audio_paths = collect_preflight_audio_paths(&command, &job, &file_list).await;
 
@@ -617,7 +642,7 @@ async fn dispatch_test_echo_files(
             {
                 job.filesystem.source_paths[file.file_index].clone()
             } else {
-                format!("{}/input/{filename}", job.filesystem.staging_dir)
+                job.filesystem.staging_dir.join("input").join(filename)
             };
             match tokio::fs::read_to_string(&read_path).await {
                 Ok(content) => content,
@@ -640,10 +665,13 @@ async fn dispatch_test_echo_files(
                     &result_filename,
                 )
             } else {
-                format!("{}/output/{}", job.filesystem.staging_dir, result_filename)
+                job.filesystem
+                    .staging_dir
+                    .join("output")
+                    .join(&result_filename)
             };
 
-        if let Some(parent) = std::path::Path::new(&write_path).parent() {
+        if let Some(parent) = write_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
 
@@ -656,7 +684,7 @@ async fn dispatch_test_echo_files(
         }
 
         lifecycle
-            .complete_with_result(FileName::from(result_filename), "chat", unix_now())
+            .complete_with_result(FileName::from(result_filename), ContentType::Chat, unix_now())
             .await;
     }
 }
@@ -687,6 +715,7 @@ async fn record_preflight_media_failures(
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use tokio::sync::broadcast;
@@ -721,7 +750,7 @@ mod tests {
         Job {
             identity: JobIdentity {
                 job_id: JobId::from(job_id),
-                correlation_id: format!("test-{job_id}"),
+                correlation_id: format!("test-{job_id}").into(),
             },
             dispatch: JobDispatchConfig {
                 command: "opensmile".into(),
@@ -737,15 +766,15 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: "localhost".into(),
-                source_dir: String::new(),
+                source_dir: PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: vec![FileName::from(filename)],
                 has_chat: vec![false],
-                staging_dir: String::new(),
+                staging_dir: PathBuf::new(),
                 paths_mode: true,
-                source_paths: vec![source_path.to_string()],
-                output_paths: vec![String::new()],
+                source_paths: vec![PathBuf::from(source_path)],
+                output_paths: vec![PathBuf::new()],
                 before_paths: Vec::new(),
                 media_mapping: String::new(),
                 media_subdir: String::new(),

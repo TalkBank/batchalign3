@@ -52,12 +52,8 @@ fn build_options(global: &GlobalOpts, args: &BenchArgs) -> CommandOptions {
     match args.command {
         BenchTarget::Align => CommandOptions::Align(AlignOptions {
             common,
-            fa_engine: "wav2vec_fa".into(),
             utr_engine: Some(UtrEngine::RevAi),
-            utr_overlap_strategy: Default::default(),
-            pauses: false,
-            wor: true.into(),
-            merge_abbrev: false.into(),
+            ..AlignOptions::default()
         }),
         BenchTarget::Transcribe => CommandOptions::Transcribe(TranscribeOptions {
             common,
@@ -147,6 +143,8 @@ pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> 
             global.open_dashboard && !global.no_open_dashboard,
             global.force_cpu,
             None,
+            global.workers,
+            global.timeout,
         )
         .await?;
 
@@ -184,21 +182,9 @@ mod tests {
         GlobalOpts {
             verbose: 0,
             workers: None,
-            memlog: false,
-            mem_guard: false,
-            adaptive_workers: false,
-            no_adaptive_workers: false,
-            pool: false,
-            no_pool: false,
-            adaptive_safety_factor: None,
-            adaptive_warmup: None,
             force_cpu: false,
-            no_force_cpu: false,
-            shared_models: false,
-            no_shared_models: false,
             server: None,
             override_cache: false,
-            use_cache: false,
             lazy_audio: false,
             no_lazy_audio: false,
             tui: false,
@@ -208,6 +194,7 @@ mod tests {
             debug_dir: None,
             override_cache_tasks: Vec::new(),
             engine_overrides: None,
+            timeout: None,
         }
     }
 
@@ -218,9 +205,7 @@ mod tests {
             out_dir: "/tmp/out".to_string(),
             runs: 1,
             dataset: None,
-            no_pool: false,
             no_lazy_audio: false,
-            no_adaptive_workers: false,
             workers: None,
             use_cache: false,
         }

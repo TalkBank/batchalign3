@@ -106,6 +106,24 @@ def execute_request_v2(
 ) -> ExecuteResponseV2:
     """Execute one typed V2 worker request against the loaded runtime."""
 
+    # Test-echo mode: return a successful echo response without model dispatch.
+    # This enables integration tests for the concurrent dispatch path
+    # (SharedGpuWorker) without loading real ML models.
+    if _state.test_echo:
+        import time
+
+        from batchalign.worker._types_v2 import ExecuteSuccessV2
+
+        if _state.test_delay_ms > 0:
+            time.sleep(_state.test_delay_ms / 1000.0)
+
+        return ExecuteResponseV2(
+            request_id=request.request_id,
+            outcome=ExecuteSuccessV2(),
+            result=None,
+            elapsed_s=0.001,
+        )
+
     execution_host = host or build_default_execution_host_v2()
 
     match request.task:

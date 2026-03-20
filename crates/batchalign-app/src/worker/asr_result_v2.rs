@@ -4,7 +4,7 @@
 //! but the transcription pipeline still expects the established Rust
 //! `AsrResponse` domain. This module keeps that normalization in Rust.
 
-use crate::api::LanguageCode3;
+use crate::api::{DurationSeconds, LanguageCode3};
 use crate::transcribe::{AsrResponse, AsrToken};
 use crate::types::worker_v2::{
     AsrElementKindV2, ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2,
@@ -109,17 +109,18 @@ pub fn parse_asr_response_v2(
 }
 
 /// Resolve a worker-provided language against the control-plane fallback.
-fn resolve_worker_lang(worker_lang: &LanguageCode3, fallback_lang: &LanguageCode3) -> String {
+fn resolve_worker_lang(worker_lang: &LanguageCode3, fallback_lang: &LanguageCode3) -> LanguageCode3 {
     if worker_lang.trim().is_empty() {
-        fallback_lang.to_string()
+        fallback_lang.clone()
     } else {
-        worker_lang.to_string()
+        worker_lang.clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::DurationSeconds;
     use crate::types::worker_v2::{
         AsrElementKindV2, AsrElementV2, AsrMonologueV2, ExecuteOutcomeV2, ExecuteResponseV2,
         MonologueAsrResultV2, TaskResultV2, WhisperChunkResultV2, WhisperChunkSpanV2,
@@ -137,17 +138,17 @@ mod tests {
                 chunks: vec![
                     WhisperChunkSpanV2 {
                         text: "hello".into(),
-                        start_s: 0.0,
-                        end_s: 0.5,
+                        start_s: DurationSeconds(0.0),
+                        end_s: DurationSeconds(0.5),
                     },
                     WhisperChunkSpanV2 {
                         text: "world".into(),
-                        start_s: 0.5,
-                        end_s: 1.0,
+                        start_s: DurationSeconds(0.5),
+                        end_s: DurationSeconds(1.0),
                     },
                 ],
             })),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let parsed = parse_asr_response_v2(&response, &LanguageCode3::from("eng"))
@@ -156,7 +157,7 @@ mod tests {
         assert_eq!(parsed.lang, "eng");
         assert_eq!(parsed.tokens.len(), 2);
         assert_eq!(parsed.tokens[0].text, "hello");
-        assert_eq!(parsed.tokens[1].end_s, Some(1.0));
+        assert_eq!(parsed.tokens[1].end_s, Some(DurationSeconds(1.0)));
     }
 
     #[test]
@@ -171,8 +172,8 @@ mod tests {
                     elements: vec![
                         AsrElementV2 {
                             value: "nei5".into(),
-                            start_s: Some(0.1),
-                            end_s: Some(0.4),
+                            start_s: Some(DurationSeconds(0.1)),
+                            end_s: Some(DurationSeconds(0.4)),
                             kind: AsrElementKindV2::Text,
                             confidence: Some(0.9),
                         },
@@ -185,15 +186,15 @@ mod tests {
                         },
                         AsrElementV2 {
                             value: "hou2".into(),
-                            start_s: Some(0.5),
-                            end_s: Some(0.8),
+                            start_s: Some(DurationSeconds(0.5)),
+                            end_s: Some(DurationSeconds(0.8)),
                             kind: AsrElementKindV2::Text,
                             confidence: None,
                         },
                     ],
                 }],
             })),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let parsed = parse_asr_response_v2(&response, &LanguageCode3::from("eng"))

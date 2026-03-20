@@ -11,6 +11,8 @@
 
 use std::path::PathBuf;
 
+use batchalign_app::api::{CommandName, JobId};
+
 /// All errors that the CLI can encounter.
 ///
 /// Each variant maps to a stable exit code category via [`CliError::exit_code()`].
@@ -57,7 +59,7 @@ pub enum CliError {
     #[error("server {server} does not support command '{command}'")]
     UnsupportedCommand {
         /// Requested processing command name.
-        command: String,
+        command: CommandName,
         /// Server URL that was queried.
         server: String,
     },
@@ -96,7 +98,7 @@ pub enum CliError {
     #[error("server lost job {job_id}")]
     JobLost {
         /// ID of the job that disappeared from the server.
-        job_id: String,
+        job_id: JobId,
     },
 
     /// The server kept the job record, but it reached a terminal non-success
@@ -107,7 +109,7 @@ pub enum CliError {
     #[error("job {job_id} finished with status {status}: {detail}")]
     JobFailed {
         /// ID of the terminal job.
-        job_id: String,
+        job_id: JobId,
         /// Terminal server-reported status string.
         status: String,
         /// Best available human-readable failure detail.

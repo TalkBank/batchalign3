@@ -1,7 +1,7 @@
 //! Translation and utterance segmentation inner functions.
 
 use pyo3::prelude::*;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{Line, ParseHealthTier};
 
 use crate::py_json_bridge::{
@@ -33,7 +33,7 @@ pub(crate) fn add_translation_inner(
         let mut words = Vec::new();
         crate::extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
 
@@ -111,7 +111,7 @@ pub(crate) fn add_utterance_segmentation_inner(
         let mut words = Vec::new();
         crate::extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
 
@@ -222,7 +222,7 @@ pub(crate) fn add_utterance_segmentation_batched_inner(
         let mut words = Vec::new();
         crate::extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
 

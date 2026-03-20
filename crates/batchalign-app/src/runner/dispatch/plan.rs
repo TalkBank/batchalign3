@@ -139,7 +139,7 @@ impl TranscribeDispatchPlan {
                 backend: AsrBackend::from_engine_name(asr_engine.as_wire_name()),
                 diarize,
                 speaker_backend,
-                lang: String::from(job.dispatch.lang.clone()),
+                lang: job.dispatch.lang.clone(),
                 num_speakers: job.dispatch.num_speakers.0 as usize,
                 with_utseg,
                 with_morphosyntax,
@@ -181,7 +181,7 @@ impl BenchmarkDispatchPlan {
                 backend: AsrBackend::from_engine_name(asr_engine.as_wire_name()),
                 diarize: false,
                 speaker_backend: None,
-                lang: String::from(job.dispatch.lang.clone()),
+                lang: job.dispatch.lang.clone(),
                 num_speakers: job.dispatch.num_speakers.0 as usize,
                 with_utseg: false,
                 with_morphosyntax: false,
@@ -303,7 +303,7 @@ mod tests {
             },
             dispatch: RunnerDispatchConfig {
                 command,
-                lang: LanguageCode3::from("eng"),
+                lang: crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng")),
                 num_speakers: NumSpeakers(3),
                 options,
                 runtime_state,
@@ -314,10 +314,10 @@ mod tests {
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),
                 before_paths: Vec::new(),
-                staging_dir: String::new(),
+                staging_dir: std::path::PathBuf::new(),
                 media_mapping: String::new(),
                 media_subdir: String::new(),
-                source_dir: String::new(),
+                source_dir: std::path::PathBuf::new(),
             },
             cancel_token: CancellationToken::new(),
             pending_files: Vec::new(),
@@ -392,7 +392,10 @@ mod tests {
             plan.base_options.speaker_backend,
             Some(SpeakerBackendV2::Nemo)
         );
-        assert_eq!(plan.base_options.lang, "eng");
+        assert_eq!(
+            plan.base_options.lang,
+            crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng"))
+        );
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(!plan.base_options.with_utseg);
         assert!(plan.base_options.with_morphosyntax);
@@ -423,7 +426,10 @@ mod tests {
             plan.base_options.speaker_backend,
             Some(SpeakerBackendV2::Pyannote)
         );
-        assert_eq!(plan.base_options.lang, "eng");
+        assert_eq!(
+            plan.base_options.lang,
+            crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng"))
+        );
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(plan.base_options.with_utseg);
         assert!(!plan.base_options.with_morphosyntax);

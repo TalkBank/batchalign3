@@ -59,6 +59,7 @@ pub fn parse_speaker_result_v2(response: &ExecuteResponseV2) -> Result<&SpeakerR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{DurationMs, DurationSeconds};
     use crate::types::worker_v2::{
         ExecuteResponseV2, SpeakerResultV2, SpeakerSegmentV2, WorkerRequestIdV2,
     };
@@ -70,17 +71,17 @@ mod tests {
             outcome: ExecuteOutcomeV2::Success,
             result: Some(TaskResultV2::SpeakerResult(SpeakerResultV2 {
                 segments: vec![SpeakerSegmentV2 {
-                    start_ms: 0,
-                    end_ms: 900,
+                    start_ms: DurationMs(0),
+                    end_ms: DurationMs(900),
                     speaker: "SPEAKER_1".into(),
                 }],
             })),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let parsed = parse_speaker_result_v2(&response).expect("speaker result should parse");
         assert_eq!(parsed.segments[0].speaker, "SPEAKER_1");
-        assert_eq!(parsed.segments[0].end_ms, 900);
+        assert_eq!(parsed.segments[0].end_ms, DurationMs(900));
     }
 
     #[test]
@@ -96,7 +97,7 @@ mod tests {
                     }],
                 },
             )),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let error =

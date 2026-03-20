@@ -1,7 +1,7 @@
 //! Test helpers — pure-Rust equivalents of #[pyfunction]s (no Python<'_>).
 
 use talkbank_model::WriteChat;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::Line;
 
 use crate::ParsedChat;
@@ -27,10 +27,10 @@ pub fn parse_and_serialize(chat_text: &str) -> Result<String, String> {
 
 pub fn extract_nlp_words(chat_text: &str, domain: &str) -> Result<String, String> {
     let domain = match domain {
-        "mor" => AlignmentDomain::Mor,
-        "wor" => AlignmentDomain::Wor,
-        "pho" => AlignmentDomain::Pho,
-        "sin" => AlignmentDomain::Sin,
+        "mor" => TierDomain::Mor,
+        "wor" => TierDomain::Wor,
+        "pho" => TierDomain::Pho,
+        "sin" => TierDomain::Sin,
         _ => return Err(format!("Invalid domain: {domain:?}")),
     };
     let chat_file = parse_strict_pure(chat_text)?;

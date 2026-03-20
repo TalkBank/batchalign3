@@ -17,6 +17,7 @@ from batchalign.worker._model_loading.asr import (
 )
 from batchalign.worker._model_loading.bootstrap import (
     enable_test_echo,
+    load_worker_profile,
     load_worker_task,
     parse_engine_overrides,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "load_asr_engine",
     "load_fa_engine",
     "load_translation_engine",
+    "load_worker_profile",
     "load_worker_task",
     "parse_engine_overrides",
     "resolve_injected_revai_api_key",

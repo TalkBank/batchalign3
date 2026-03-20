@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::api::{FileName, LanguageCode3};
+use crate::api::{ContentType, FileName, LanguageCode3};
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::FailureCategory;
@@ -30,9 +30,10 @@ pub(in crate::runner) async fn dispatch_compare(
     should_merge_abbrev: bool,
 ) {
     let job_id = &job.identity.job_id;
-    let correlation_id = job.identity.correlation_id.as_str();
+    let correlation_id = &*job.identity.correlation_id;
     let file_list = &job.pending_files;
-    let lang: &LanguageCode3 = &job.dispatch.lang;
+    let fallback_lang = crate::api::LanguageCode3::from("eng");
+    let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
 
     for (filename, chat_text) in file_texts {
         let lifecycle = FileRunTracker::new(store, job_id, filename);
@@ -63,12 +64,12 @@ pub(in crate::runner) async fn dispatch_compare(
                     .unwrap_or(0);
                 let gold_read_path = if job.filesystem.paths_mode {
                     if file_index < job.filesystem.source_paths.len() {
-                        crate::compare::gold_path_for(&job.filesystem.source_paths[file_index])
+                        crate::compare::gold_path_for(&job.filesystem.source_paths[file_index].to_string_lossy())
                     } else {
                         crate::compare::gold_path_for(filename)
                     }
                 } else {
-                    format!("{}/input/{}", job.filesystem.staging_dir, gold_filename)
+                    format!("{}/input/{gold_filename}", job.filesystem.staging_dir.display())
                 };
                 match tokio::fs::read_to_string(&gold_read_path).await {
                     Ok(text) => text,
@@ -118,10 +119,10 @@ pub(in crate::runner) async fn dispatch_compare(
                 {
                     apply_result_filename(&job.filesystem.output_paths[file_index], filename)
                 } else {
-                    format!("{}/output/{}", job.filesystem.staging_dir, filename)
+                    job.filesystem.staging_dir.join("output").join(filename)
                 };
 
-                if let Some(parent) = Path::new(&write_path).parent() {
+                if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
                 if let Err(e) = tokio::fs::write(&write_path, &chat_output).await {
@@ -129,13 +130,13 @@ pub(in crate::runner) async fn dispatch_compare(
                 }
 
                 // Write CSV metrics alongside the CHAT output
-                let csv_path = write_path.replace(".cha", ".compare.csv");
+                let csv_path = write_path.with_extension("compare.csv");
                 if let Err(e) = tokio::fs::write(&csv_path, &csv_output).await {
                     warn!(error = %e, "Failed to write compare CSV");
                 }
 
                 lifecycle
-                    .complete_with_result(FileName::from(filename.as_str()), "chat", finished_at)
+                    .complete_with_result(FileName::from(filename.as_str()), ContentType::Chat, finished_at)
                     .await;
             }
             Err(e) => {
@@ -181,7 +182,7 @@ mod tests {
         Job {
             identity: JobIdentity {
                 job_id: JobId::from(job_id),
-                correlation_id: format!("test-{job_id}"),
+                correlation_id: format!("test-{job_id}").into(),
             },
             dispatch: JobDispatchConfig {
                 command: "compare".into(),
@@ -197,12 +198,12 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: "localhost".into(),
-                source_dir: String::new(),
+                source_dir: std::path::PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: vec![FileName::from(filename)],
                 has_chat: vec![true],
-                staging_dir: staging_dir.to_string(),
+                staging_dir: std::path::PathBuf::from(staging_dir),
                 paths_mode: false,
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),

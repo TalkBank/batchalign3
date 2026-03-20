@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use batchalign_app::api::{
-    FileResult, HealthResponse, JobInfo, JobListItem, JobResultResponse, JobSubmission,
+    FileResult, HealthResponse, JobId, JobInfo, JobListItem, JobResultResponse, JobSubmission,
 };
 use reqwest::Client;
 use tracing::debug;
@@ -95,7 +95,7 @@ impl BatchalignClient {
 
         if resp.status().as_u16() == 404 {
             return Err(CliError::JobLost {
-                job_id: job_id.to_string(),
+                job_id: JobId::from(job_id),
             });
         }
         if !resp.status().is_success() {

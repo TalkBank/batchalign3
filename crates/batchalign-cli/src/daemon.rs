@@ -170,13 +170,21 @@ pub struct DaemonInfo {
 // ---------------------------------------------------------------------------
 
 /// Return the main daemon URL or `None` if the daemon cannot be started.
-pub async fn ensure_daemon(force_cpu: bool) -> Result<Option<String>, CliError> {
-    ensure_daemon_for(DaemonProfile::Main, force_cpu).await
+pub async fn ensure_daemon(
+    force_cpu: bool,
+    workers: Option<usize>,
+    timeout: Option<u64>,
+) -> Result<Option<String>, CliError> {
+    ensure_daemon_for(DaemonProfile::Main, force_cpu, workers, timeout).await
 }
 
 /// Return the sidecar daemon URL or `None` if the daemon cannot be started.
-pub async fn ensure_sidecar_daemon(force_cpu: bool) -> Result<Option<String>, CliError> {
-    ensure_daemon_for(DaemonProfile::Sidecar, force_cpu).await
+pub async fn ensure_sidecar_daemon(
+    force_cpu: bool,
+    workers: Option<usize>,
+    timeout: Option<u64>,
+) -> Result<Option<String>, CliError> {
+    ensure_daemon_for(DaemonProfile::Sidecar, force_cpu, workers, timeout).await
 }
 
 /// Stop the main daemon. Returns `true` if a process was killed.
@@ -202,6 +210,8 @@ pub fn read_daemon_info() -> Option<DaemonInfo> {
 async fn ensure_daemon_for(
     profile: DaemonProfile,
     force_cpu: bool,
+    workers: Option<usize>,
+    timeout: Option<u64>,
 ) -> Result<Option<String>, CliError> {
     let layout = runtime_layout();
     let dir = layout.state_dir();
@@ -222,7 +232,7 @@ async fn ensure_daemon_for(
         }
     }
 
-    let result = ensure_daemon_locked(profile, &layout, force_cpu).await;
+    let result = ensure_daemon_locked(profile, &layout, force_cpu, workers, timeout).await;
     drop(lock_file);
     result
 }
@@ -261,6 +271,8 @@ async fn ensure_daemon_locked(
     profile: DaemonProfile,
     layout: &RuntimeLayout,
     force_cpu: bool,
+    workers: Option<usize>,
+    timeout: Option<u64>,
 ) -> Result<Option<String>, CliError> {
     let dir = layout.state_dir();
     if profile.check_manual_server()
@@ -288,7 +300,7 @@ async fn ensure_daemon_locked(
                 // Brief wait for the port to be released
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 cleanup_state_file_for(profile, dir);
-                return start_daemon(profile, layout, port, force_cpu).await;
+                return start_daemon(profile, layout, port, force_cpu, workers, timeout).await;
             }
 
             if runtime_mismatch(&info, force_cpu) {
@@ -301,7 +313,7 @@ async fn ensure_daemon_locked(
                 kill_process(info.pid);
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 cleanup_state_file_for(profile, dir);
-                return start_daemon(profile, layout, port, force_cpu).await;
+                return start_daemon(profile, layout, port, force_cpu, workers, timeout).await;
             }
 
             if health_check(info.port).await {
@@ -311,12 +323,12 @@ async fn ensure_daemon_locked(
             kill_process(info.pid);
             tokio::time::sleep(Duration::from_millis(500)).await;
             cleanup_state_file_for(profile, dir);
-            return start_daemon(profile, layout, port, force_cpu).await;
+            return start_daemon(profile, layout, port, force_cpu, workers, timeout).await;
         }
         cleanup_state_file_for(profile, dir);
     }
 
-    start_daemon(profile, layout, port, force_cpu).await
+    start_daemon(profile, layout, port, force_cpu, workers, timeout).await
 }
 
 async fn detect_manual_server(layout: &RuntimeLayout) -> Option<String> {
@@ -363,6 +375,8 @@ async fn start_daemon(
     layout: &RuntimeLayout,
     port: u16,
     force_cpu: bool,
+    workers: Option<usize>,
+    timeout: Option<u64>,
 ) -> Result<Option<String>, CliError> {
     let dir = layout.state_dir();
     let python = profile.default_python(dir);
@@ -400,6 +414,12 @@ async fn start_daemon(
     }
     if force_cpu {
         cmd.arg("--force-cpu");
+    }
+    if let Some(n) = workers {
+        cmd.args(["--workers", &n.to_string()]);
+    }
+    if let Some(t) = timeout {
+        cmd.args(["--timeout", &t.to_string()]);
     }
 
     let log_path = profile.log_file(dir);

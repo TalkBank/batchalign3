@@ -28,7 +28,7 @@ use crate::revai::load_revai_api_key;
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, WorkerCapabilities,
-    WorkerHealthResponse, WorkerPid, WorkerTarget, infer_task_target_name,
+    WorkerHealthResponse, WorkerPid, WorkerProfile,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -114,8 +114,8 @@ impl WorkerRuntimeConfig {
 pub struct WorkerConfig {
     /// Path to the Python executable (e.g. "python3", "/usr/bin/python3.14t").
     pub python_path: String,
-    /// Bootstrap target describing which runtime role this worker owns.
-    pub target: WorkerTarget,
+    /// Worker profile describing which task group this worker owns.
+    pub profile: WorkerProfile,
     /// 3-letter ISO language code.
     pub lang: LanguageCode3,
     /// Number of speakers.
@@ -132,20 +132,32 @@ pub struct WorkerConfig {
     pub verbose: u8,
     /// Runtime-owned launch inputs resolved before this spawn boundary.
     pub runtime: WorkerRuntimeConfig,
+    /// Timeout override for audio-heavy tasks (ASR, FA, speaker).
+    /// 0 = use built-in default (1800).
+    pub audio_task_timeout_s: u64,
+    /// Timeout override for lightweight analysis tasks (OpenSMILE, AVQI).
+    /// 0 = use built-in default (120).
+    pub analysis_task_timeout_s: u64,
+    /// Test-only: artificial delay in milliseconds before each response.
+    /// 0 = no delay. Only effective when `test_echo` is true.
+    pub test_delay_ms: u64,
 }
 
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
             python_path: resolve_python_executable(),
-            target: WorkerTarget::infer_task(crate::worker::InferTask::Morphosyntax),
+            profile: WorkerProfile::Stanza,
             lang: LanguageCode3::from("eng"),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
             test_echo: false,
-            ready_timeout_s: 120,
+            ready_timeout_s: 300,
             verbose: 0,
             runtime: WorkerRuntimeConfig::default(),
+            audio_task_timeout_s: 0,
+            analysis_task_timeout_s: 0,
+            test_delay_ms: 0,
         }
     }
 }
@@ -160,11 +172,11 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
 
     if config.test_echo {
         cmd.arg("--test-echo");
-        let WorkerTarget::InferTask(task) = &config.target;
-        cmd.arg("--task").arg(infer_task_target_name(*task));
+        // test-echo still uses --profile so Python can identify the profile in
+        // the ready label, but no models are loaded.
+        cmd.arg("--profile").arg(config.profile.name());
     } else {
-        let WorkerTarget::InferTask(task) = &config.target;
-        cmd.arg("--task").arg(infer_task_target_name(*task));
+        cmd.arg("--profile").arg(config.profile.name());
     }
 
     cmd.arg("--lang").arg(&*config.lang);
@@ -181,6 +193,11 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
 
     if config.verbose > 0 {
         cmd.arg("--verbose").arg(config.verbose.to_string());
+    }
+
+    if config.test_delay_ms > 0 {
+        cmd.arg("--test-delay-ms")
+            .arg(config.test_delay_ms.to_string());
     }
 
     if let Some(api_key) = config.runtime.revai_api_key.as_deref() {
@@ -208,12 +225,179 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
     cmd
 }
 
+/// Spawn a **detached** TCP worker daemon that outlives the current process.
+///
+/// Unlike [`WorkerHandle::spawn`] which creates a child process tied to the
+/// server's lifetime, this launches a standalone Python process with
+/// `--transport tcp` that:
+/// 1. Loads models, binds a TCP port
+/// 2. Registers itself in `workers.json`
+/// 3. Prints a ready signal to stderr
+/// 4. Continues running after the Rust server exits
+///
+/// The server can then discover it via [`crate::worker::registry::discover_workers`]
+/// on the next startup — zero cold start.
+///
+/// Returns `(pid, port)` on success after waiting for the ready signal.
+pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, u16), WorkerError> {
+    let mut cmd = StdCommand::new(&config.python_path);
+    cmd.arg("-c")
+        .arg("import sys; sys.argv = ['batchalign-worker'] + sys.argv[1:]; from batchalign.worker import main; main()")
+        .arg("--transport")
+        .arg("tcp")
+        .arg("--profile")
+        .arg(config.profile.name())
+        .arg("--lang")
+        .arg(&*config.lang)
+        .arg("--num-speakers")
+        .arg(config.num_speakers.0.to_string())
+        .arg("--host")
+        .arg("127.0.0.1");
+
+    if port > 0 {
+        cmd.arg("--port").arg(port.to_string());
+    }
+
+    if config.test_echo {
+        cmd.arg("--test-echo");
+    }
+
+    if !config.engine_overrides.is_empty() {
+        cmd.arg("--engine-overrides").arg(&config.engine_overrides);
+    }
+
+    if config.runtime.force_cpu {
+        cmd.arg("--force-cpu");
+    }
+
+    if config.verbose > 0 {
+        cmd.arg("--verbose").arg(config.verbose.to_string());
+    }
+
+    if config.test_delay_ms > 0 {
+        cmd.arg("--test-delay-ms")
+            .arg(config.test_delay_ms.to_string());
+    }
+
+    if let Some(api_key) = config.runtime.revai_api_key.as_deref() {
+        cmd.env("BATCHALIGN_REV_API_KEY", api_key);
+    }
+    for (key, value) in worker_provider_envs(config, &HkAsrCredentialSources::from_env()) {
+        cmd.env(key, value);
+    }
+
+    // Detach: stdin from /dev/null, stdout to /dev/null, stderr piped (for ready signal).
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    // On Unix, create a new session (setsid) so the worker is fully detached
+    // from the server's process group and terminal.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    info!(
+        profile = %config.profile.label(),
+        lang = %config.lang,
+        port = port,
+        "Spawning TCP worker daemon"
+    );
+
+    let mut child: Command = cmd.into();
+    let mut child = child.spawn().map_err(|e| {
+        WorkerError::SpawnFailed(format!("failed to spawn TCP worker daemon: {e}"))
+    })?;
+
+    // Read stderr for the ready signal: {"ready": true, "pid": N, "transport": "tcp", "port": P}
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| WorkerError::SpawnFailed("TCP daemon stderr not captured".into()))?;
+    let mut stderr_reader = tokio::io::BufReader::new(stderr);
+
+    let ready = tokio::time::timeout(
+        std::time::Duration::from_secs(config.ready_timeout_s),
+        read_tcp_ready_signal(&mut stderr_reader),
+    )
+    .await
+    .map_err(|_| WorkerError::ReadyTimeout {
+        timeout_s: config.ready_timeout_s,
+    })?
+    .map_err(|e| WorkerError::ReadyParseFailed(format!("TCP daemon ready failed: {e}")))?;
+
+    // Detach stderr reader — the daemon continues on its own.
+    // We intentionally do NOT wait on the child or hold its handle.
+    // The process is now a standalone daemon managed by the OS.
+    drop(stderr_reader);
+
+    info!(
+        profile = %config.profile.label(),
+        lang = %config.lang,
+        pid = ready.0,
+        port = ready.1,
+        "TCP worker daemon ready"
+    );
+
+    Ok(ready)
+}
+
+/// TCP ready signal from stderr: `{"ready": true, "pid": N, "transport": "tcp", "port": P}`.
+#[derive(Debug, Deserialize)]
+struct TcpReadySignal {
+    ready: bool,
+    pid: u32,
+    #[allow(dead_code)]
+    transport: Option<String>,
+    port: Option<u16>,
+}
+
+/// Read the TCP ready signal from a daemon's stderr.
+async fn read_tcp_ready_signal<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> Result<(u32, u16), String> {
+    let mut line = String::new();
+    let mut attempts = 0;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => return Err("TCP daemon closed stderr without ready signal".into()),
+            Ok(_) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(signal) = serde_json::from_str::<TcpReadySignal>(trimmed) {
+                    if signal.ready {
+                        let port = signal.port.unwrap_or(0);
+                        return Ok((signal.pid, port));
+                    }
+                }
+                // Not the ready line — might be a log line, skip it.
+                attempts += 1;
+                if attempts > 100 {
+                    return Err("Too many non-ready lines on stderr".into());
+                }
+            }
+            Err(e) => return Err(format!("Failed to read TCP daemon stderr: {e}")),
+        }
+    }
+}
+
 fn worker_provider_envs(
     config: &WorkerConfig,
     sources: &HkAsrCredentialSources,
 ) -> Vec<(String, String)> {
-    let WorkerTarget::InferTask(task) = config.target;
-    if task != crate::worker::InferTask::Asr {
+    // GPU profile includes ASR — inject provider credentials when the profile
+    // handles ASR requests or the engine overrides select an HK ASR backend.
+    if config.profile != WorkerProfile::Gpu {
         return Vec::new();
     }
     sources
@@ -241,13 +425,30 @@ pub struct WorkerHandle {
     last_activity: tokio::time::Instant,
 }
 
+/// Raw parts extracted from a [`WorkerHandle`] via [`WorkerHandle::into_parts`].
+///
+/// Used by [`SharedGpuWorker`](super::pool::shared_gpu::SharedGpuWorker) to
+/// take ownership of the child's stdio channels for concurrent dispatch.
+pub(crate) struct WorkerHandleParts {
+    /// Worker configuration.
+    pub config: WorkerConfig,
+    /// The child process (caller must manage lifecycle).
+    pub child: Child,
+    /// Worker process ID.
+    pub pid: WorkerPid,
+    /// Child's stdin for writing requests.
+    pub stdin: ChildStdin,
+    /// Child's stdout for reading responses.
+    pub stdout: BufReader<ChildStdout>,
+}
+
 impl WorkerHandle {
     /// Spawn a new Python worker and wait for it to become ready.
     pub async fn spawn(config: WorkerConfig) -> Result<Self, WorkerError> {
         let mut cmd: Command = build_worker_command(&config).into();
 
         info!(
-            target = %config.target.label(),
+            target = %config.profile.label(),
             lang = %config.lang,
             test_echo = config.test_echo,
             force_cpu = config.runtime.force_cpu,
@@ -324,13 +525,16 @@ impl WorkerHandle {
         let pid = WorkerPid(ready.pid);
 
         info!(
-            target = %config.target.label(),
+            target = %config.profile.label(),
             lang = %config.lang,
             pid = %pid,
             "Worker ready"
         );
 
-        let target_label = config.target.label();
+        // Layer 3: record PID file for orphan reaping.
+        super::pool::reaper::record_worker_pid(pid.0);
+
+        let target_label = config.profile.label();
         tokio::spawn(async move {
             let mut line = String::new();
             loop {
@@ -522,7 +726,7 @@ impl WorkerHandle {
                     skipped_noise_lines += 1;
                     warn!(
                         pid = %self.pid,
-                        target = %self.config.target.label(),
+                        target = %self.config.profile.label(),
                         line = trimmed,
                         skipped_noise_lines,
                         "Ignoring non-protocol stdout while waiting for worker response"
@@ -639,7 +843,10 @@ impl WorkerHandle {
         self.write_request(&WorkerRequest::ExecuteV2 { request })
             .await?;
 
-        let timeout_s = request.timeout_seconds();
+        let timeout_s = request.timeout_seconds_with_config(
+            self.config.audio_task_timeout_s,
+            self.config.analysis_task_timeout_s,
+        );
         let timeout = Duration::from_secs(timeout_s);
         let response = tokio::time::timeout(timeout, self.read_response())
             .await
@@ -691,8 +898,11 @@ impl WorkerHandle {
     /// Uses `killpg` to kill the entire process group (the worker + any children
     /// it spawned, e.g. Stanza subprocesses), ensuring no orphans survive.
     pub async fn shutdown_in_place(&mut self) -> Result<(), WorkerError> {
+        // Layer 3: remove PID file before killing.
+        super::pool::reaper::remove_worker_pid(self.pid.0);
+
         info!(
-            target = %self.config.target.label(),
+            target = %self.config.profile.label(),
             pid = %self.pid,
             "Shutting down worker"
         );
@@ -744,9 +954,9 @@ impl WorkerHandle {
         self.pid
     }
 
-    /// The logical bootstrap target label this worker handles.
-    pub fn target_label(&self) -> String {
-        self.config.target.label()
+    /// The logical bootstrap profile label this worker handles.
+    pub fn profile_label(&self) -> &'static str {
+        self.config.profile.label()
     }
 
     /// The language this worker handles.
@@ -763,10 +973,41 @@ impl WorkerHandle {
     pub fn idle_duration(&self) -> Duration {
         self.last_activity.elapsed()
     }
+
+    /// Reference to this worker's configuration.
+    pub(crate) fn config(&self) -> &WorkerConfig {
+        &self.config
+    }
+
+    /// Consume the handle into its raw parts for concurrent mode setup.
+    ///
+    /// The returned [`WorkerHandleParts`] owns the child process, stdin, and
+    /// stdout. The caller becomes responsible for the child process lifecycle
+    /// — the `WorkerHandle::Drop` impl does **not** run.
+    pub(crate) fn into_parts(self) -> WorkerHandleParts {
+        // Use ManuallyDrop to prevent Drop::drop from killing the child.
+        let md = std::mem::ManuallyDrop::new(self);
+
+        // SAFETY: We're moving each field out of a ManuallyDrop wrapper.
+        // ManuallyDrop prevents Drop from running. Each field is moved
+        // exactly once, so no double-free can occur.
+        unsafe {
+            WorkerHandleParts {
+                config: std::ptr::read(&md.config),
+                child: std::ptr::read(&md.child),
+                pid: std::ptr::read(&md.pid),
+                stdin: std::ptr::read(&md.stdin),
+                stdout: std::ptr::read(&md.stdout),
+            }
+        }
+    }
 }
 
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
+        // Layer 3: remove PID file on drop (covers panic/unwind paths).
+        super::pool::reaper::remove_worker_pid(self.pid.0);
+
         if self.is_alive() {
             #[cfg(unix)]
             {
@@ -790,8 +1031,8 @@ mod tests {
 
     use super::{WorkerConfig, WorkerRuntimeConfig, build_worker_command};
     use crate::api::{LanguageCode3, NumSpeakers};
+    use crate::worker::WorkerProfile;
     use crate::worker::provider_credentials::HkAsrCredentialSources;
-    use crate::worker::{InferTask, WorkerTarget};
 
     fn command_args(config: &WorkerConfig) -> Vec<String> {
         build_worker_command(config)
@@ -818,14 +1059,15 @@ mod tests {
     fn worker_command_forwards_runtime_force_cpu() {
         let args = command_args(&WorkerConfig {
             python_path: "python3".to_string(),
-            target: WorkerTarget::infer_task(InferTask::Asr),
+            profile: WorkerProfile::Gpu,
             lang: LanguageCode3::from("eng"),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
             test_echo: false,
-            ready_timeout_s: 120,
+            ready_timeout_s: 300,
             verbose: 0,
             runtime: WorkerRuntimeConfig::from_sources(true, None),
+            ..Default::default()
         });
 
         assert!(args.iter().any(|arg| arg == "--force-cpu"));
@@ -835,14 +1077,15 @@ mod tests {
     fn worker_command_injects_resolved_revai_key() {
         let envs = command_envs(&WorkerConfig {
             python_path: "python3".to_string(),
-            target: WorkerTarget::infer_task(InferTask::Asr),
+            profile: WorkerProfile::Gpu,
             lang: LanguageCode3::from("eng"),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
             test_echo: false,
-            ready_timeout_s: 120,
+            ready_timeout_s: 300,
             verbose: 0,
             runtime: WorkerRuntimeConfig::from_sources(false, Some("  injected-key  ".to_string())),
+            ..Default::default()
         });
 
         assert_eq!(
@@ -856,14 +1099,15 @@ mod tests {
         let envs = super::worker_provider_envs(
             &WorkerConfig {
                 python_path: "python3".to_string(),
-                target: WorkerTarget::infer_task(InferTask::Asr),
+                profile: WorkerProfile::Gpu,
                 lang: LanguageCode3::from("yue"),
                 num_speakers: NumSpeakers(1),
                 engine_overrides: r#"{"asr":"tencent"}"#.to_string(),
                 test_echo: false,
-                ready_timeout_s: 120,
+                ready_timeout_s: 300,
                 verbose: 0,
                 runtime: WorkerRuntimeConfig::from_sources(false, None),
+                ..Default::default()
             },
             &HkAsrCredentialSources::from_sources(
                 Some("id"),

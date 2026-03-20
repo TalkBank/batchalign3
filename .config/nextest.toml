@@ -1,0 +1,41 @@
+# Nextest configuration for batchalign3
+#
+# ML tests are consolidated into one binary (`ml_golden`) so that all
+# tests share one process, one LazyLock, one PreparedWorkers, and one
+# set of loaded models. This prevents the OOM crashes caused by multiple
+# binaries each spawning their own worker pools.
+#
+# By default, ML tests are EXCLUDED — only fast unit tests run.
+#
+# To run ML tests explicitly:
+#   cargo nextest run --profile ml
+#   cargo nextest run --ignore-default-filter -E 'binary_id(batchalign-app::ml_golden)'
+#
+# To run everything:
+#   cargo nextest run --profile ml
+
+[test-groups.ml]
+max-threads = 1
+
+# --------------------------------------------------------------------------
+# Default profile: exclude ML tests. Safe for `cargo nextest run`.
+# --------------------------------------------------------------------------
+
+[profile.default]
+default-filter = 'not binary_id(batchalign-app::ml_golden)'
+
+[[profile.default.overrides]]
+filter = 'binary_id(batchalign-app::ml_golden)'
+test-group = 'ml'
+
+# --------------------------------------------------------------------------
+# ML profile: run everything, ML tests serialized via test-group.
+#
+#   cargo nextest run --profile ml
+# --------------------------------------------------------------------------
+
+[profile.ml]
+
+[[profile.ml.overrides]]
+filter = 'binary_id(batchalign-app::ml_golden)'
+test-group = 'ml'

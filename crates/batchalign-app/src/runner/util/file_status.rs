@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api::{FileName, FileProgressStage, JobId, UnixTimestamp};
+use crate::api::{ContentType, FileName, FileProgressStage, JobId, UnixTimestamp};
 use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
 use crate::store::{
     AttemptFinishRecord, CompletedFileOutput, FileFailureRecord, FileProgressRecord,
@@ -30,7 +30,7 @@ pub(in crate::runner) async fn mark_file_done(
     job_id: &JobId,
     filename: &str,
     result_filename: FileName,
-    content_type: &str,
+    content_type: ContentType,
     finished_at: UnixTimestamp,
 ) {
     store
@@ -40,7 +40,7 @@ pub(in crate::runner) async fn mark_file_done(
             finished_at,
             Some(CompletedFileOutput {
                 filename: result_filename,
-                content_type: content_type.to_string(),
+                content_type,
             }),
         )
         .await;
@@ -414,7 +414,7 @@ impl<'a> FileRunTracker<'a> {
     pub(crate) async fn complete_with_result(
         &self,
         result_filename: FileName,
-        content_type: &str,
+        content_type: ContentType,
         finished_at: UnixTimestamp,
     ) {
         mark_file_done(
@@ -684,7 +684,7 @@ mod tests {
         Job {
             identity: JobIdentity {
                 job_id: id.into(),
-                correlation_id: format!("test-{id}"),
+                correlation_id: format!("test-{id}").into(),
             },
             dispatch: JobDispatchConfig {
                 command: "morphotag".into(),
@@ -702,12 +702,12 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: String::new(),
-                source_dir: String::new(),
+                source_dir: std::path::PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: vec![FileName::from("a.cha")],
                 has_chat: vec![true],
-                staging_dir: String::new(),
+                staging_dir: std::path::PathBuf::new(),
                 paths_mode: false,
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),
@@ -845,7 +845,7 @@ mod tests {
 
         let finished_at = unix_now();
         lifecycle
-            .complete_with_result(FileName::from("a.ana"), "text/plain", finished_at)
+            .complete_with_result(FileName::from("a.ana"), ContentType::Chat, finished_at)
             .await;
 
         let detail = store.get_job_detail(&job_id).await.expect("job detail");

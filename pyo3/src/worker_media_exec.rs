@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use batchalign_app::api::DurationSeconds;
 use batchalign_app::types::worker_v2::{
     AvqiRequestV2, AvqiResultV2, ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2,
     InferenceTaskV2, OpenSmileRequestV2, OpenSmileResultV2, ProtocolErrorCodeV2, SpeakerBackendV2,
@@ -104,7 +105,7 @@ fn error_response(
         request_id: request.request_id.clone(),
         outcome: ExecuteOutcomeV2::Error { code, message },
         result: None,
-        elapsed_s: started_at.elapsed().as_secs_f64(),
+        elapsed_s: DurationSeconds(started_at.elapsed().as_secs_f64()),
     }
 }
 
@@ -117,7 +118,7 @@ fn success_response(
         request_id: request.request_id.clone(),
         outcome: ExecuteOutcomeV2::Success,
         result: Some(result),
-        elapsed_s: started_at.elapsed().as_secs_f64(),
+        elapsed_s: DurationSeconds(started_at.elapsed().as_secs_f64()),
     }
 }
 

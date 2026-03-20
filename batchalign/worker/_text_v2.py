@@ -39,8 +39,6 @@ from batchalign.worker._types import BatchInferRequest, BatchInferResponse, Infe
 from batchalign.worker._types_v2 import (
     CorefRequestV2,
     CorefResultPayloadV2,
-    CorefResultV2,
-    CorefTaskRequestV2,
     ExecuteErrorV2,
     ExecuteRequestV2,
     ExecuteResponseV2,
@@ -48,17 +46,11 @@ from batchalign.worker._types_v2 import (
     InferenceTaskV2,
     MorphosyntaxRequestV2,
     MorphosyntaxResultPayloadV2,
-    MorphosyntaxResultV2,
-    MorphosyntaxTaskRequestV2,
     ProtocolErrorCodeV2,
     TranslationResultPayloadV2,
-    TranslationResultV2,
     TranslateRequestV2,
-    TranslateTaskRequestV2,
     UtsegRequestV2,
     UtsegResultPayloadV2,
-    UtsegResultV2,
-    UtsegTaskRequestV2,
 )
 
 if TYPE_CHECKING:
@@ -377,9 +369,9 @@ def _extract_morphosyntax_request(request: ExecuteRequestV2) -> MorphosyntaxRequ
 
     if request.task is not InferenceTaskV2.MORPHOSYNTAX:
         raise ValueError(f"expected morphosyntax task, got {request.task!s}")
-    if not isinstance(request.payload, MorphosyntaxTaskRequestV2):
+    if not isinstance(request.payload, MorphosyntaxRequestV2):
         raise ValueError("execute payload did not contain morphosyntax request data")
-    return request.payload.data
+    return request.payload
 
 
 def _extract_utseg_request(request: ExecuteRequestV2) -> UtsegRequestV2:
@@ -387,9 +379,9 @@ def _extract_utseg_request(request: ExecuteRequestV2) -> UtsegRequestV2:
 
     if request.task is not InferenceTaskV2.UTSEG:
         raise ValueError(f"expected utseg task, got {request.task!s}")
-    if not isinstance(request.payload, UtsegTaskRequestV2):
+    if not isinstance(request.payload, UtsegRequestV2):
         raise ValueError("execute payload did not contain utseg request data")
-    return request.payload.data
+    return request.payload
 
 
 def _extract_translate_request(request: ExecuteRequestV2) -> TranslateRequestV2:
@@ -397,9 +389,9 @@ def _extract_translate_request(request: ExecuteRequestV2) -> TranslateRequestV2:
 
     if request.task is not InferenceTaskV2.TRANSLATE:
         raise ValueError(f"expected translate task, got {request.task!s}")
-    if not isinstance(request.payload, TranslateTaskRequestV2):
+    if not isinstance(request.payload, TranslateRequestV2):
         raise ValueError("execute payload did not contain translate request data")
-    return request.payload.data
+    return request.payload
 
 
 def _extract_coref_request(request: ExecuteRequestV2) -> CorefRequestV2:
@@ -407,22 +399,20 @@ def _extract_coref_request(request: ExecuteRequestV2) -> CorefRequestV2:
 
     if request.task is not InferenceTaskV2.COREF:
         raise ValueError(f"expected coref task, got {request.task!s}")
-    if not isinstance(request.payload, CorefTaskRequestV2):
+    if not isinstance(request.payload, CorefRequestV2):
         raise ValueError("execute payload did not contain coref request data")
-    return request.payload.data
+    return request.payload
 
 
 def _build_morphosyntax_result(
     response: BatchInferResponse,
     item_count: int,
-) -> MorphosyntaxResultV2:
+) -> MorphosyntaxResultPayloadV2:
     """Convert one host morphosyntax response into the typed V2 result."""
 
     try:
-        return MorphosyntaxResultV2(
-            data=MorphosyntaxResultPayloadV2.model_validate(
-                _normalize_text_task_result_payload("morphosyntax", response, item_count)
-            )
+        return MorphosyntaxResultPayloadV2.model_validate(
+            _normalize_text_task_result_payload("morphosyntax", response, item_count)
         )
     except (ValidationError, ValueError) as error:
         raise RuntimeError(f"invalid morphosyntax host output: {error}") from error
@@ -431,14 +421,12 @@ def _build_morphosyntax_result(
 def _build_utseg_result(
     response: BatchInferResponse,
     item_count: int,
-) -> UtsegResultV2:
+) -> UtsegResultPayloadV2:
     """Convert one host utseg response into the typed V2 result."""
 
     try:
-        return UtsegResultV2(
-            data=UtsegResultPayloadV2.model_validate(
-                _normalize_text_task_result_payload("utseg", response, item_count)
-            )
+        return UtsegResultPayloadV2.model_validate(
+            _normalize_text_task_result_payload("utseg", response, item_count)
         )
     except (ValidationError, ValueError) as error:
         raise RuntimeError(f"invalid utseg host output: {error}") from error
@@ -447,14 +435,12 @@ def _build_utseg_result(
 def _build_translate_result(
     response: BatchInferResponse,
     item_count: int,
-) -> TranslationResultV2:
+) -> TranslationResultPayloadV2:
     """Convert one host translation response into the typed V2 result."""
 
     try:
-        return TranslationResultV2(
-            data=TranslationResultPayloadV2.model_validate(
-                _normalize_text_task_result_payload("translate", response, item_count)
-            )
+        return TranslationResultPayloadV2.model_validate(
+            _normalize_text_task_result_payload("translate", response, item_count)
         )
     except (ValidationError, ValueError) as error:
         raise RuntimeError(f"invalid translate host output: {error}") from error
@@ -463,14 +449,12 @@ def _build_translate_result(
 def _build_coref_result(
     response: BatchInferResponse,
     item_count: int,
-) -> CorefResultV2:
+) -> CorefResultPayloadV2:
     """Convert one host coref response into the typed V2 result."""
 
     try:
-        return CorefResultV2(
-            data=CorefResultPayloadV2.model_validate(
-                _normalize_text_task_result_payload("coref", response, item_count)
-            )
+        return CorefResultPayloadV2.model_validate(
+            _normalize_text_task_result_payload("coref", response, item_count)
         )
     except (ValidationError, ValueError) as error:
         raise RuntimeError(f"invalid coref host output: {error}") from error

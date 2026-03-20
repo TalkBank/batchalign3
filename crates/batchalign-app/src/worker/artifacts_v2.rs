@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::api::DurationMs;
 use crate::types::worker_v2::{
     ArtifactRefV2, ByteLengthV2, ByteOffsetV2, ChannelCountV2, FrameCountV2,
     PreparedAudioEncodingV2, PreparedAudioRefV2, PreparedTextEncodingV2, PreparedTextRefV2,
@@ -148,8 +149,8 @@ impl PreparedArtifactStoreV2 {
         &self,
         id: &WorkerArtifactIdV2,
         source: &Path,
-        start_ms: u64,
-        end_ms: u64,
+        start_ms: DurationMs,
+        end_ms: DurationMs,
     ) -> Result<PreparedAudioRefV2, PreparedArtifactErrorV2> {
         if end_ms <= start_ms {
             return Err(PreparedArtifactErrorV2::Io(io::Error::new(
@@ -171,8 +172,8 @@ impl PreparedArtifactStoreV2 {
 
             fs::create_dir_all(root.join(AUDIO_DIR_NAME))?;
             let output_path = root.join(AUDIO_DIR_NAME).join(format!("{id}.pcm"));
-            let start_secs = format!("{:.3}", start_ms as f64 / 1000.0);
-            let end_secs = format!("{:.3}", end_ms as f64 / 1000.0);
+            let start_secs = format!("{:.3}", start_ms.0 as f64 / 1000.0);
+            let end_secs = format!("{:.3}", end_ms.0 as f64 / 1000.0);
 
             let output = std::process::Command::new("ffmpeg")
                 .args([
@@ -469,8 +470,8 @@ mod tests {
             .extract_prepared_audio_segment_f32le(
                 &WorkerArtifactIdV2::from("audio-segment-ref"),
                 &wav_path,
-                0,
-                100,
+                DurationMs(0u64),
+                DurationMs(100u64),
             )
             .await
             .expect("extract prepared audio segment");

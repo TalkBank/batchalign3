@@ -21,7 +21,13 @@ from batchalign.worker._model_loading.asr import load_asr_engine
 from batchalign.worker._model_loading.forced_alignment import load_fa_engine
 from batchalign.worker._model_loading.translation import load_translation_engine
 from batchalign.worker._stanza_loading import load_stanza_models, load_utseg_builder
-from batchalign.worker._types import InferTask, WorkerBootstrapRuntime, _state
+from batchalign.worker._types import (
+    PROFILE_TASKS,
+    InferTask,
+    WorkerBootstrapRuntime,
+    WorkerProfile,
+    _state,
+)
 
 L = logging.getLogger("batchalign.worker")
 
@@ -50,7 +56,7 @@ def _configure_loaded_tasks(
             InferTask.MORPHOSYNTAX,
             build_morphosyntax_batch_infer_handler(),
         )
-    if "utterance" in tasks:
+    if "utterance" in tasks or "utseg" in tasks:
         load_utseg_builder(lang)
         _state.register_batch_infer_handler(
             InferTask.UTSEG,
@@ -72,6 +78,27 @@ def _configure_loaded_tasks(
     _state.num_speakers = num_speakers
     _state.ready = True
     L.info("Models ready: target=%s pid=%d", target_label, os.getpid())
+
+def load_worker_profile(bootstrap: WorkerBootstrapRuntime) -> None:
+    """Load the ML/runtime state for a profile-based worker.
+
+    Profile-based workers load models for all tasks in the profile, enabling
+    model sharing within a single process. GPU-only models (speaker, opensmile,
+    avqi) use lazy loading on first request — only ASR/FA/Stanza/translation
+    models are loaded eagerly here.
+    """
+    if bootstrap.profile is None:
+        raise ValueError("worker bootstrap runtime requires a profile")
+
+    profile = bootstrap.profile
+    tasks = PROFILE_TASKS[profile]
+    _state.bootstrap = bootstrap
+    _configure_loaded_tasks(
+        tasks,
+        bootstrap,
+        target_label=f"profile:{profile.value}",
+    )
+
 
 def load_worker_task(bootstrap: WorkerBootstrapRuntime) -> None:
     """Load the ML/runtime state needed for one pure infer-task worker."""

@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::api::{LanguageCode3, NumSpeakers};
 use tracing::{error, info, warn};
 
-use crate::worker::WorkerTarget;
+use crate::worker::WorkerProfile;
 use crate::worker::error::WorkerError;
 use crate::worker::handle::{WorkerConfig, WorkerHandle};
 
@@ -44,16 +44,16 @@ impl WorkerPool {
         })
     }
 
-    /// Build a `WorkerConfig` for the given worker target and language.
+    /// Build a `WorkerConfig` for the given worker profile and language.
     pub(super) fn worker_config(
         &self,
-        target: &WorkerTarget,
+        profile: &WorkerProfile,
         lang: &LanguageCode3,
         engine_overrides: &str,
     ) -> WorkerConfig {
         WorkerConfig {
             python_path: self.config.python_path.clone(),
-            target: *target,
+            profile: *profile,
             lang: lang.clone(),
             num_speakers: NumSpeakers(1),
             engine_overrides: engine_overrides.to_owned(),
@@ -61,17 +61,20 @@ impl WorkerPool {
             ready_timeout_s: self.config.ready_timeout_s,
             verbose: self.config.verbose,
             runtime: self.config.runtime.clone(),
+            audio_task_timeout_s: self.config.audio_task_timeout_s,
+            analysis_task_timeout_s: self.config.analysis_task_timeout_s,
+            test_delay_ms: 0,
         }
     }
 
     /// Get or create the `WorkerGroup` for a key.
     pub(super) fn get_or_create_group(
         &self,
-        target: &WorkerTarget,
+        profile: &WorkerProfile,
         lang: &LanguageCode3,
         engine_overrides: &str,
     ) -> Arc<WorkerGroup> {
-        let key: super::WorkerKey = (*target, lang.clone(), engine_overrides.to_owned());
+        let key: super::WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
         let mut groups = self.groups.lock().unwrap();
         groups
             .entry(key)
@@ -81,15 +84,33 @@ impl WorkerPool {
 
     /// Try to atomically claim a spawn slot in a group via compare_exchange.
     ///
+    /// Checks two limits:
+    /// 1. Per-key cap: `max_workers_per_key` (prevents one key from hogging).
+    /// 2. Global cap: `max_total_workers` (prevents aggregate OOM).
+    ///
     /// Returns `Ok(claimed_total)` if a slot was claimed, `Err(current)` if
-    /// the group is already at capacity.
+    /// at capacity.
     pub(super) fn try_claim_spawn_slot(&self, group: &WorkerGroup) -> Result<usize, usize> {
         let max = self.config.max_workers_per_key;
+        let global_max = self.config.effective_max_total_workers();
+
         loop {
             let current = group.total.load(Ordering::Relaxed);
             if current >= max {
                 return Err(current);
             }
+
+            // Layer 1: check global cap across all groups.
+            let global_total = self.global_worker_count();
+            if global_total >= global_max {
+                warn!(
+                    global_total,
+                    global_max,
+                    "Global worker cap reached, rejecting spawn"
+                );
+                return Err(current);
+            }
+
             match group.total.compare_exchange(
                 current,
                 current + 1,
@@ -102,6 +123,19 @@ impl WorkerPool {
         }
     }
 
+    /// Total workers across all groups (sum of all `group.total` values).
+    ///
+    /// Used by the global cap check. Reads are relaxed — this is a
+    /// best-effort ceiling, not a precise count. Off-by-one under
+    /// concurrent spawns is acceptable (the ceiling is a safety margin).
+    fn global_worker_count(&self) -> usize {
+        let groups = self.groups.lock().unwrap();
+        groups
+            .values()
+            .map(|g| g.total.load(Ordering::Relaxed))
+            .sum()
+    }
+
     /// Spawn a worker into a group, using `try_claim_spawn_slot` for the
     /// atomic slot reservation.
     ///
@@ -110,7 +144,7 @@ impl WorkerPool {
     pub(super) async fn try_spawn_into_group(
         &self,
         group: &Arc<WorkerGroup>,
-        target: &WorkerTarget,
+        profile: &WorkerProfile,
         lang: &LanguageCode3,
         engine_overrides: &str,
     ) -> Result<bool, WorkerError> {
@@ -121,7 +155,7 @@ impl WorkerPool {
         let _bootstrap_guard = group.bootstrap.lock().await;
 
         // Slot claimed -- now spawn. If spawn fails, release the slot.
-        match WorkerHandle::spawn(self.worker_config(target, lang, engine_overrides)).await {
+        match WorkerHandle::spawn(self.worker_config(profile, lang, engine_overrides)).await {
             Ok(handle) => {
                 // Don't use a separate push_spawned (which would double-increment
                 // total). We already incremented via compare_exchange.
@@ -244,7 +278,7 @@ pub(super) async fn run_health_check(
 
             let config = WorkerConfig {
                 python_path: pool_config.python_path.clone(),
-                target: key.0,
+                profile: key.0,
                 lang: key.1.clone(),
                 num_speakers: NumSpeakers(1),
                 engine_overrides: key.2.clone(),
@@ -252,6 +286,9 @@ pub(super) async fn run_health_check(
                 ready_timeout_s: pool_config.ready_timeout_s,
                 verbose: pool_config.verbose,
                 runtime: pool_config.runtime.clone(),
+                audio_task_timeout_s: pool_config.audio_task_timeout_s,
+                analysis_task_timeout_s: pool_config.analysis_task_timeout_s,
+                test_delay_ms: 0,
             };
 
             match WorkerHandle::spawn(config).await {

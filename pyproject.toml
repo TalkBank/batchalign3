@@ -120,7 +120,6 @@ include = [
 [dependency-groups]
 dev = [
     "mypy",
-    "pyrefly",
     "pytest",
     "pytest-asyncio",
     "pytest-cov>=5.0",

@@ -1,7 +1,7 @@
 //! `WorkerPool` — manages multiple Python worker processes.
 //!
-//! Workers are keyed by `(bootstrap target, lang, engine overrides)`. The
-//! released target space is infer-task-only (for example `infer:asr` or
+//! Workers are keyed by `(worker profile, lang, engine overrides)`. The
+//! profile space is infer-task-only (for example `infer:asr` or
 //! `infer:morphosyntax`), even when the Rust control plane is scheduling
 //! higher-level commands such as `transcribe` or `compare`.
 //!
@@ -23,6 +23,8 @@
 
 mod checkout;
 mod lifecycle;
+pub(crate) mod reaper;
+pub(crate) mod shared_gpu;
 
 pub use checkout::CheckedOutWorker;
 
@@ -35,7 +37,7 @@ use crate::types::worker_v2::{
     AsrBackendV2, ExecuteRequestV2, ExecuteResponseV2, FaBackendV2, InferenceTaskV2, TaskRequestV2,
 };
 use crate::worker::{
-    BatchInferRequest, BatchInferResponse, InferTask, WorkerCapabilities, WorkerTarget,
+    BatchInferRequest, BatchInferResponse, InferTask, WorkerCapabilities, WorkerPid, WorkerProfile,
 };
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -44,9 +46,11 @@ use tracing::{error, info, warn};
 use crate::worker::error::WorkerError;
 use crate::worker::handle::{WorkerConfig, WorkerHandle, WorkerRuntimeConfig};
 use crate::worker::python::resolve_python_executable;
+use crate::worker::registry;
+use crate::worker::tcp_handle::{TcpWorkerHandle, TcpWorkerInfo};
 
-/// Key for looking up workers: (bootstrap target, lang, engine overrides).
-type WorkerKey = (WorkerTarget, LanguageCode3, String);
+/// Key for looking up workers: (worker profile, lang, engine overrides).
+type WorkerKey = (WorkerProfile, LanguageCode3, String);
 
 /// Lifecycle state of background model warmup.
 #[derive(
@@ -93,8 +97,30 @@ impl WarmupStatus {
     }
 }
 
-/// Default maximum workers per `(target, lang, engine_overrides)` key.
+/// Default maximum workers per `(profile, lang, engine_overrides)` key.
 const DEFAULT_MAX_WORKERS_PER_KEY: usize = 8;
+
+/// Absolute ceiling on total workers. Even with unlimited RAM, never spawn
+/// more than this many concurrent Python processes.
+const ABSOLUTE_MAX_TOTAL_WORKERS: usize = 32;
+
+/// RAM budget per worker for the global cap heuristic (4 GB).
+const RAM_PER_WORKER_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Compute a default global worker cap from available system memory.
+///
+/// Uses `available_memory / 4GB`, clamped to `[2, 32]`. Falls back to 4
+/// if sysinfo reports 0 (macOS undercounts).
+fn default_max_total_workers() -> usize {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let available = sys.available_memory(); // bytes
+    if available == 0 {
+        return 4; // sysinfo couldn't read memory
+    }
+    let computed = (available / RAM_PER_WORKER_BYTES) as usize;
+    computed.clamp(2, ABSOLUTE_MAX_TOTAL_WORKERS)
+}
 
 /// Configuration for the worker pool.
 #[derive(Debug, Clone)]
@@ -109,10 +135,16 @@ pub struct PoolConfig {
     pub ready_timeout_s: u64,
     /// Use test-echo mode for all workers (no ML models).
     pub test_echo: bool,
-    /// Maximum workers per `(target, lang)` key. Default: 8.
+    /// Maximum workers per `(profile, lang)` key. Default: 8.
     /// The pool is the capacity ceiling; the runner controls per-job
     /// concurrency via a semaphore.
     pub max_workers_per_key: usize,
+    /// Hard ceiling on total workers across all keys. Prevents OOM when
+    /// many different `(profile, lang, engine_overrides)` keys are active
+    /// simultaneously (e.g. multi-language test suites, concurrent jobs).
+    /// Default: computed from available RAM / 4GB per worker, capped at 32.
+    /// 0 = use computed default.
+    pub max_total_workers: usize,
     /// Verbosity level forwarded to Python workers (0=warn, 1=info, 2=debug).
     pub verbose: u8,
     /// Engine overrides as a JSON string, passed to every spawned worker via
@@ -120,6 +152,15 @@ pub struct PoolConfig {
     pub engine_overrides: String,
     /// Runtime-owned worker launch inputs (device policy, injected creds).
     pub runtime: WorkerRuntimeConfig,
+    /// Timeout override for audio-heavy tasks (ASR, FA, speaker).
+    /// 0 = use built-in default (1800).
+    pub audio_task_timeout_s: u64,
+    /// Timeout override for lightweight analysis tasks (OpenSMILE, AVQI).
+    /// 0 = use built-in default (120).
+    pub analysis_task_timeout_s: u64,
+    /// Path to the worker registry file. Empty = default
+    /// (`~/.batchalign3/workers.json`).
+    pub worker_registry_path: String,
 }
 
 impl Default for PoolConfig {
@@ -128,21 +169,37 @@ impl Default for PoolConfig {
             python_path: resolve_python_executable(),
             health_check_interval_s: 30,
             idle_timeout_s: 600, // 10 minutes
-            ready_timeout_s: 120,
+            ready_timeout_s: 300,
             test_echo: false,
             max_workers_per_key: DEFAULT_MAX_WORKERS_PER_KEY,
+            max_total_workers: 0, // 0 = use computed default
             verbose: 0,
             engine_overrides: String::new(),
             runtime: WorkerRuntimeConfig::default(),
+            audio_task_timeout_s: 0,
+            analysis_task_timeout_s: 0,
+            worker_registry_path: String::new(),
+        }
+    }
+}
+
+impl PoolConfig {
+    /// Resolved global worker cap: uses `max_total_workers` if nonzero,
+    /// otherwise computes from available system memory.
+    pub fn effective_max_total_workers(&self) -> usize {
+        if self.max_total_workers > 0 {
+            self.max_total_workers
+        } else {
+            default_max_total_workers()
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// WorkerGroup — per (target, lang) key
+// WorkerGroup — per (profile, lang) key
 // ---------------------------------------------------------------------------
 
-/// A group of workers for a single `(target, lang)` key.
+/// A group of workers for a single `(profile, lang)` key.
 ///
 /// Each group independently tracks its own pool of workers. Workers are
 /// spawned lazily on first demand and capped at `max_workers_per_key`.
@@ -169,7 +226,15 @@ struct WorkerGroup {
     /// than via RAII `SemaphorePermit` guards.
     available: Semaphore,
 
-    /// Total number of live workers in this group: idle + checked-out.
+    /// TCP worker handles discovered from the registry. These are
+    /// persistent daemons that survive server restarts.
+    tcp_workers: std::sync::Mutex<VecDeque<TcpWorkerHandle>>,
+
+    /// Semaphore with one permit per idle TCP worker.
+    tcp_available: Semaphore,
+
+    /// Total number of live workers in this group: idle + checked-out
+    /// (both stdio and TCP).
     ///
     /// `AtomicUsize` so that `worker_count()` and spawn-cap checks can
     /// read it without acquiring any mutex. Incremented in
@@ -181,7 +246,7 @@ struct WorkerGroup {
     /// Serialize worker bootstrap for one key.
     ///
     /// This prevents a burst of concurrent requests from launching multiple
-    /// heavy Python workers for the same `(target, lang, engine_overrides)`
+    /// heavy Python workers for the same `(profile, lang, engine_overrides)`
     /// bucket at once, which smooths model-loading spikes without changing the
     /// eventual steady-state concurrency of the pool.
     bootstrap: AsyncMutex<()>,
@@ -192,6 +257,8 @@ impl WorkerGroup {
         Self {
             idle: std::sync::Mutex::new(VecDeque::new()),
             available: Semaphore::new(0),
+            tcp_workers: std::sync::Mutex::new(VecDeque::new()),
+            tcp_available: Semaphore::new(0),
             total: AtomicUsize::new(0),
             bootstrap: AsyncMutex::new(()),
         }
@@ -205,10 +272,19 @@ type GroupsMap = Arc<std::sync::Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>;
 // WorkerPool
 // ---------------------------------------------------------------------------
 
+/// Key for shared GPU workers: (lang, engine_overrides).
+type GpuWorkerKey = (LanguageCode3, String);
+
 /// Manages a pool of Python worker processes.
 pub struct WorkerPool {
     config: PoolConfig,
+    /// Sequential worker groups (Stanza, IO profiles).
     groups: GroupsMap,
+    /// Shared GPU workers for concurrent V2 dispatch (GPU profile, stdio).
+    gpu_workers: Arc<tokio::sync::Mutex<HashMap<GpuWorkerKey, Arc<shared_gpu::SharedGpuWorker>>>>,
+    /// Shared GPU workers discovered from registry (TCP transport).
+    gpu_tcp_workers:
+        Arc<tokio::sync::Mutex<HashMap<GpuWorkerKey, Arc<shared_gpu::SharedGpuTcpWorker>>>>,
     cancel: CancellationToken,
     /// Background warmup lifecycle state.
     warmup_status: AtomicU8,
@@ -217,13 +293,152 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Create a new worker pool. Call [`start_background_tasks`](Self::start_background_tasks)
     /// to begin health checking and idle timeout.
+    ///
+    /// On creation, reaps any orphaned worker processes left by crashed or
+    /// killed servers (Layer 3 of the OOM defense).
     pub fn new(config: PoolConfig) -> Self {
+        let effective_cap = config.effective_max_total_workers();
+        info!(
+            max_total_workers = effective_cap,
+            max_workers_per_key = config.max_workers_per_key,
+            "Worker pool created"
+        );
+
+        // Layer 3: reap orphans from any previous server that crashed.
+        let reaped = reaper::reap_orphaned_workers();
+        if reaped > 0 {
+            info!(reaped, "Cleaned up orphaned workers from previous server");
+        }
+
         Self {
             config,
             groups: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            gpu_workers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            gpu_tcp_workers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             cancel: CancellationToken::new(),
             warmup_status: AtomicU8::new(WarmupStatus::NotStarted.as_u8()),
         }
+    }
+
+    /// Discover pre-started TCP workers from the registry file.
+    ///
+    /// Reads `workers.json`, health-checks each entry, and integrates healthy
+    /// workers into the pool. GPU workers become `SharedGpuWorker` entries;
+    /// non-GPU workers are not integrated into the sequential pool (they use
+    /// TCP handles directly via the dispatch path).
+    ///
+    /// Returns the number of workers discovered and integrated.
+    pub async fn discover_from_registry(&self) -> usize {
+        let registry_path = if self.config.worker_registry_path.is_empty() {
+            registry::default_registry_path()
+        } else {
+            std::path::PathBuf::from(&self.config.worker_registry_path)
+        };
+
+        let discovered = registry::discover_workers(
+            &registry_path,
+            self.config.audio_task_timeout_s,
+            self.config.analysis_task_timeout_s,
+        )
+        .await;
+
+        if discovered.is_empty() {
+            return 0;
+        }
+
+        let count = discovered.len();
+        info!(count, "Discovered worker(s) from registry");
+
+        // Integrate GPU workers into the shared GPU worker map.
+        // Non-GPU TCP workers are tracked in a separate TCP worker map.
+        for worker in &discovered {
+            if worker.profile.is_concurrent() {
+                let info = TcpWorkerInfo {
+                    host: worker.entry.host.clone(),
+                    port: worker.entry.port,
+                    profile: worker.profile,
+                    lang: worker.lang.clone(),
+                    engine_overrides: worker.entry.engine_overrides.clone(),
+                    pid: WorkerPid(worker.entry.pid),
+                    audio_task_timeout_s: self.config.audio_task_timeout_s,
+                    analysis_task_timeout_s: self.config.analysis_task_timeout_s,
+                };
+
+                match shared_gpu::SharedGpuTcpWorker::connect(info).await {
+                    Ok(shared) => {
+                        let key = (worker.lang.clone(), worker.entry.engine_overrides.clone());
+                        self.gpu_tcp_workers
+                            .lock()
+                            .await
+                            .entry(key)
+                            .or_insert_with(|| Arc::new(shared));
+                        info!(
+                            profile = %worker.entry.profile,
+                            lang = %worker.entry.lang,
+                            host = %worker.entry.host,
+                            port = worker.entry.port,
+                            "Integrated GPU TCP worker"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            host = %worker.entry.host,
+                            port = worker.entry.port,
+                            error = %e,
+                            "Failed to integrate GPU TCP worker"
+                        );
+                    }
+                }
+            } else {
+                // For non-GPU TCP workers, add them to the sequential pool.
+                let info = TcpWorkerInfo {
+                    host: worker.entry.host.clone(),
+                    port: worker.entry.port,
+                    profile: worker.profile,
+                    lang: worker.lang.clone(),
+                    engine_overrides: worker.entry.engine_overrides.clone(),
+                    pid: WorkerPid(worker.entry.pid),
+                    audio_task_timeout_s: self.config.audio_task_timeout_s,
+                    analysis_task_timeout_s: self.config.analysis_task_timeout_s,
+                };
+
+                match TcpWorkerHandle::connect(info).await {
+                    Ok(handle) => {
+                        let key = (
+                            worker.profile,
+                            worker.lang.clone(),
+                            worker.entry.engine_overrides.clone(),
+                        );
+                        let group = self.get_or_create_group(
+                            &worker.profile,
+                            &worker.lang,
+                            &worker.entry.engine_overrides,
+                        );
+                        group.tcp_workers.lock().unwrap().push_back(handle);
+                        group.tcp_available.add_permits(1);
+                        group.total.fetch_add(1, Ordering::Relaxed);
+                        info!(
+                            profile = %worker.entry.profile,
+                            lang = %worker.entry.lang,
+                            host = %worker.entry.host,
+                            port = worker.entry.port,
+                            "Integrated non-GPU TCP worker into pool (key={:?})",
+                            key
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            host = %worker.entry.host,
+                            port = worker.entry.port,
+                            error = %e,
+                            "Failed to integrate non-GPU TCP worker"
+                        );
+                    }
+                }
+            }
+        }
+
+        count
     }
 
     /// Check out an idle worker or spawn a new one.
@@ -234,11 +449,11 @@ impl WorkerPool {
     /// 4. Pop from the idle queue and wrap in `CheckedOutWorker` (RAII guard).
     async fn checkout(
         &self,
-        target: &WorkerTarget,
+        profile: &WorkerProfile,
         lang: &LanguageCode3,
         engine_overrides: &str,
     ) -> Result<CheckedOutWorker, WorkerError> {
-        let group = self.get_or_create_group(target, lang, engine_overrides);
+        let group = self.get_or_create_group(profile, lang, engine_overrides);
 
         loop {
             // Try to acquire a permit without waiting.
@@ -267,7 +482,7 @@ impl WorkerPool {
                 Err(_) => {
                     // No idle workers. Try to spawn one.
                     match self
-                        .try_spawn_into_group(&group, target, lang, engine_overrides)
+                        .try_spawn_into_group(&group, profile, lang, engine_overrides)
                         .await
                     {
                         Ok(true) => {
@@ -308,49 +523,188 @@ impl WorkerPool {
 
     /// Dispatch a batch inference request to a single worker.
     ///
-    /// Checks out an idle worker (or spawns one), sends the batch infer
-    /// request, and returns the response. Used for the new infer protocol
-    /// where the server owns CHAT parsing/serialization and the worker
-    /// provides pure NLP inference.
+    /// Tries TCP workers first (from registry), then falls back to stdio
+    /// workers. Checks out an idle worker (or spawns one), sends the batch
+    /// infer request, and returns the response.
     pub async fn dispatch_batch_infer(
         &self,
         lang: &LanguageCode3,
         request: &BatchInferRequest,
     ) -> Result<BatchInferResponse, WorkerError> {
-        let mut worker = self
-            .checkout(
-                &WorkerTarget::infer_task(request.task),
-                lang,
-                &self.config.engine_overrides,
-            )
-            .await?;
+        let profile = WorkerProfile::for_task(request.task);
+        let engine_overrides = &self.config.engine_overrides;
+
+        // Try TCP worker first.
+        if let Some(mut tcp_handle) = self.try_checkout_tcp(&profile, lang, engine_overrides) {
+            let result = tcp_handle.batch_infer(request).await;
+            self.return_tcp_worker(tcp_handle, &profile, lang, engine_overrides);
+            return result;
+        }
+
+        // Fall back to stdio worker.
+        let mut worker = self.checkout(&profile, lang, engine_overrides).await?;
         worker.batch_infer(request).await
     }
 
-    /// Dispatch one typed worker-protocol V2 execute request to an infer-task
-    /// worker.
+    /// Try to check out a TCP worker handle (non-blocking).
+    fn try_checkout_tcp(
+        &self,
+        profile: &WorkerProfile,
+        lang: &LanguageCode3,
+        engine_overrides: &str,
+    ) -> Option<TcpWorkerHandle> {
+        let key: WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
+        let groups = self.groups.lock().unwrap();
+        let group = groups.get(&key)?;
+        match group.tcp_available.try_acquire() {
+            Ok(permit) => {
+                permit.forget();
+                group.tcp_workers.lock().unwrap().pop_front()
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Return a TCP worker handle to the pool.
+    fn return_tcp_worker(
+        &self,
+        handle: TcpWorkerHandle,
+        profile: &WorkerProfile,
+        lang: &LanguageCode3,
+        engine_overrides: &str,
+    ) {
+        let key: WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
+        let groups = self.groups.lock().unwrap();
+        if let Some(group) = groups.get(&key) {
+            group.tcp_workers.lock().unwrap().push_back(handle);
+            group.tcp_available.add_permits(1);
+        }
+    }
+
+    /// Dispatch one typed worker-protocol V2 execute request.
+    ///
+    /// GPU profile tasks are routed to a shared concurrent worker (multiple
+    /// requests in flight to one process). Non-GPU tasks try TCP workers first,
+    /// then fall back to the traditional exclusive checkout model.
     pub async fn dispatch_execute_v2(
         &self,
         lang: &LanguageCode3,
         request: &ExecuteRequestV2,
     ) -> Result<ExecuteResponseV2, WorkerError> {
-        let (target, worker_lang, engine_overrides) =
+        let (profile, worker_lang, engine_overrides) =
             execute_v2_worker_key(lang, request, &self.config.engine_overrides)?;
+
+        if profile.is_concurrent() {
+            return self
+                .dispatch_gpu_execute_v2(&worker_lang, &engine_overrides, request)
+                .await;
+        }
+
+        // Try TCP worker first.
+        if let Some(mut tcp_handle) =
+            self.try_checkout_tcp(&profile, &worker_lang, &engine_overrides)
+        {
+            let result = tcp_handle.execute_v2(request).await;
+            self.return_tcp_worker(tcp_handle, &profile, &worker_lang, &engine_overrides);
+            return result;
+        }
+
+        // Fall back to stdio worker.
         let mut worker = self
-            .checkout(&target, &worker_lang, &engine_overrides)
+            .checkout(&profile, &worker_lang, &engine_overrides)
             .await?;
         worker.execute_v2(request).await
     }
 
+    /// Dispatch a V2 execute request to a GPU worker.
+    ///
+    /// Tries TCP workers first (discovered from registry), then falls back to
+    /// stdio workers. For TCP workers, multiple callers share one worker via
+    /// concurrent dispatch. For stdio workers, uses the existing
+    /// [`SharedGpuWorker`](shared_gpu::SharedGpuWorker) pattern.
+    async fn dispatch_gpu_execute_v2(
+        &self,
+        lang: &LanguageCode3,
+        engine_overrides: &str,
+        request: &ExecuteRequestV2,
+    ) -> Result<ExecuteResponseV2, WorkerError> {
+        // Try TCP worker first (discovered from registry).
+        let tcp_key = (lang.clone(), engine_overrides.to_owned());
+        {
+            let tcp_workers = self.gpu_tcp_workers.lock().await;
+            if let Some(tcp_worker) = tcp_workers.get(&tcp_key) {
+                return tcp_worker.execute_v2(request).await;
+            }
+        }
+
+        // Fall back to stdio worker.
+        let gpu_worker = self
+            .get_or_create_gpu_worker(lang, engine_overrides)
+            .await?;
+        gpu_worker.execute_v2(request).await
+    }
+
+    /// Get or create a shared GPU worker for the given (lang, engine_overrides).
+    /// Get or create a shared GPU worker for the given (lang, engine_overrides).
+    ///
+    /// Holds the lock across the spawn to prevent the TOCTOU race where
+    /// multiple concurrent callers each spawn their own worker process.
+    /// The spawn includes waiting for the `{"ready": true}` signal, so
+    /// the lock is held for 10-30 seconds on first call. This is acceptable
+    /// because GPU worker creation is rare (once per lang+overrides combo),
+    /// and the `pre_scale` call in the runner ensures the worker exists
+    /// before file dispatch begins.
+    async fn get_or_create_gpu_worker(
+        &self,
+        lang: &LanguageCode3,
+        engine_overrides: &str,
+    ) -> Result<Arc<shared_gpu::SharedGpuWorker>, WorkerError> {
+        let key = (lang.clone(), engine_overrides.to_owned());
+
+        let mut gpu_workers = self.gpu_workers.lock().await;
+
+        // Fast path: worker already exists.
+        if let Some(worker) = gpu_workers.get(&key) {
+            return Ok(worker.clone());
+        }
+
+        // Slow path: spawn while holding the lock to prevent duplicate spawns.
+        let config = WorkerConfig {
+            python_path: self.config.python_path.clone(),
+            profile: WorkerProfile::Gpu,
+            lang: lang.clone(),
+            num_speakers: NumSpeakers(1),
+            engine_overrides: engine_overrides.to_owned(),
+            test_echo: self.config.test_echo,
+            ready_timeout_s: self.config.ready_timeout_s,
+            verbose: self.config.verbose,
+            runtime: self.config.runtime.clone(),
+            audio_task_timeout_s: self.config.audio_task_timeout_s,
+            analysis_task_timeout_s: self.config.analysis_task_timeout_s,
+            test_delay_ms: 0,
+        };
+
+        let handle = WorkerHandle::spawn(config).await?;
+        info!(
+            lang = %lang,
+            pid = %handle.pid(),
+            "GPU worker spawned (concurrent mode)"
+        );
+        let shared = Arc::new(shared_gpu::SharedGpuWorker::from_handle(handle).await);
+
+        gpu_workers.insert(key, shared.clone());
+        Ok(shared)
+    }
+
     /// Detect capabilities by spawning a probe worker.
     ///
-    /// Spawns a temporary worker with a representative infer target, queries
+    /// Spawns a temporary worker with a representative infer profile, queries
     /// capabilities, and returns the full `WorkerCapabilities` struct (commands,
     /// free-threaded flag, infer tasks).
     pub async fn detect_capabilities(&self) -> Result<WorkerCapabilities, WorkerError> {
         let config = WorkerConfig {
             python_path: self.config.python_path.clone(),
-            target: WorkerTarget::infer_task(InferTask::Morphosyntax),
+            profile: WorkerProfile::Stanza,
             lang: "eng".into(),
             num_speakers: NumSpeakers(1),
             engine_overrides: self.config.engine_overrides.clone(),
@@ -358,6 +712,9 @@ impl WorkerPool {
             ready_timeout_s: self.config.ready_timeout_s,
             verbose: self.config.verbose,
             runtime: self.config.runtime.clone(),
+            audio_task_timeout_s: self.config.audio_task_timeout_s,
+            analysis_task_timeout_s: self.config.analysis_task_timeout_s,
+            test_delay_ms: 0,
         };
 
         let mut handle = match WorkerHandle::spawn(config).await {
@@ -393,17 +750,21 @@ impl WorkerPool {
 
     /// Pre-start workers for the given commands (warmup).
     ///
-    /// Each command spawns concurrently so independent models load in
-    /// parallel rather than sequentially.  The caller is responsible for
-    /// setting [`mark_warmup_complete()`] after this returns (or spawning
-    /// this method in a background task).
+    /// Spawns **persistent TCP daemon workers** that outlive the server process.
+    /// On the next server restart, `discover_from_registry()` finds them already
+    /// running — zero cold start. This is the key user-facing improvement:
+    /// the first `batchalign3 morphotag` run pays the model-loading cost, but
+    /// every subsequent run starts instantly.
+    ///
+    /// Each command spawns concurrently so independent models load in parallel.
+    /// The caller is responsible for setting [`mark_warmup_complete()`] after
+    /// this returns (or spawning this method in a background task).
     pub async fn warmup(&self, commands: &[(String, String)]) {
-        // Resolve all (target, group) pairs up front so the spawned tasks
-        // only need the group Arc and config, not a &self borrow.
+        use crate::worker::handle::spawn_tcp_daemon;
+
         struct WarmupItem {
-            target: WorkerTarget,
+            profile: WorkerProfile,
             lang: LanguageCode3,
-            group: Arc<WorkerGroup>,
             engine_overrides: String,
         }
 
@@ -412,37 +773,33 @@ impl WorkerPool {
             .filter_map(|(command, lang)| {
                 let command = CommandName::from(command.clone());
                 let lang = LanguageCode3::from(lang.clone());
-                let target = WorkerTarget::for_command(&command);
-                match target {
-                    Some(target) => {
-                        let group = self.get_or_create_group(
-                            &target,
-                            &lang,
-                            &self.config.engine_overrides,
-                        );
-                        Some(WarmupItem {
-                            target,
-                            lang,
-                            group,
-                            engine_overrides: self.config.engine_overrides.clone(),
-                        })
-                    }
+                let profile = WorkerProfile::for_command(&command);
+                match profile {
+                    Some(profile) => Some(WarmupItem {
+                        profile,
+                        lang,
+                        engine_overrides: self.config.engine_overrides.clone(),
+                    }),
                     None => {
-                        warn!(command = %command, lang = %lang, "Skipping warmup for unknown command target");
+                        warn!(command = %command, lang = %lang, "Skipping warmup for unknown command profile");
                         None
                     }
                 }
             })
             .collect();
 
+        let gpu_tcp_ref = self.gpu_tcp_workers.clone();
+        let groups_ref = self.groups.clone();
         let mut set = tokio::task::JoinSet::new();
         for item in items {
             let config = self.config.clone();
+            let gpu_tcp_ref = gpu_tcp_ref.clone();
+            let groups_ref = groups_ref.clone();
             set.spawn(async move {
-                let target_label = item.target.label().to_string();
+                let profile_label = item.profile.label().to_string();
                 let wc = WorkerConfig {
                     python_path: config.python_path.clone(),
-                    target: item.target,
+                    profile: item.profile,
                     lang: item.lang.clone(),
                     num_speakers: NumSpeakers(1),
                     engine_overrides: item.engine_overrides.clone(),
@@ -450,39 +807,96 @@ impl WorkerPool {
                     ready_timeout_s: config.ready_timeout_s,
                     verbose: config.verbose,
                     runtime: config.runtime.clone(),
+                    audio_task_timeout_s: config.audio_task_timeout_s,
+                    analysis_task_timeout_s: config.analysis_task_timeout_s,
+                    test_delay_ms: 0,
                 };
 
-                // Claim a slot atomically.
-                let max = config.max_workers_per_key;
-                loop {
-                    let current = item.group.total.load(Ordering::Relaxed);
-                    if current >= max {
-                        info!(target = %target_label, lang = %item.lang, "Worker already at capacity");
+                // Spawn a detached TCP daemon. It registers in workers.json
+                // and outlives the server.
+                let (pid, port) = match spawn_tcp_daemon(&wc, 0).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        error!(
+                            target = %profile_label,
+                            lang = %item.lang,
+                            error = %e,
+                            "TCP daemon warmup failed"
+                        );
                         return;
                     }
-                    match item.group.total.compare_exchange(
-                        current,
-                        current + 1,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    ) {
-                        Ok(_) => break,
-                        Err(_) => continue,
-                    }
-                }
+                };
 
-                // Serialize bootstrap for this key.
-                let _guard = item.group.bootstrap.lock().await;
+                // Connect to the just-spawned daemon.
+                let tcp_info = TcpWorkerInfo {
+                    host: "127.0.0.1".to_string(),
+                    port,
+                    profile: item.profile,
+                    lang: item.lang.clone(),
+                    engine_overrides: item.engine_overrides.clone(),
+                    pid: WorkerPid(pid),
+                    audio_task_timeout_s: config.audio_task_timeout_s,
+                    analysis_task_timeout_s: config.analysis_task_timeout_s,
+                };
 
-                match WorkerHandle::spawn(wc).await {
-                    Ok(handle) => {
-                        item.group.idle.lock().unwrap().push_back(handle);
-                        item.group.available.add_permits(1);
-                        info!(target = %target_label, lang = %item.lang, "Worker warmed up");
+                if item.profile.is_concurrent() {
+                    // GPU warmup — connect as SharedGpuTcpWorker.
+                    match shared_gpu::SharedGpuTcpWorker::connect(tcp_info).await {
+                        Ok(shared) => {
+                            let key = (item.lang.clone(), item.engine_overrides.clone());
+                            gpu_tcp_ref.lock().await.entry(key).or_insert_with(|| Arc::new(shared));
+                            info!(
+                                target = %profile_label,
+                                lang = %item.lang,
+                                pid = pid,
+                                port = port,
+                                "GPU TCP worker warmed up (persistent daemon)"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                target = %profile_label,
+                                lang = %item.lang,
+                                error = %e,
+                                "Failed to connect to GPU TCP daemon after spawn"
+                            );
+                        }
                     }
-                    Err(e) => {
-                        item.group.total.fetch_sub(1, Ordering::Relaxed);
-                        error!(target = %target_label, lang = %item.lang, error = %e, "Warmup failed");
+                } else {
+                    // Non-GPU warmup — connect as TcpWorkerHandle.
+                    match TcpWorkerHandle::connect(tcp_info).await {
+                        Ok(handle) => {
+                            let key: WorkerKey = (
+                                item.profile,
+                                item.lang.clone(),
+                                item.engine_overrides.clone(),
+                            );
+                            let mut groups = groups_ref.lock().unwrap();
+                            let group = groups
+                                .entry(key)
+                                .or_insert_with(|| Arc::new(WorkerGroup::new()))
+                                .clone();
+                            drop(groups);
+
+                            group.tcp_workers.lock().unwrap().push_back(handle);
+                            group.tcp_available.add_permits(1);
+                            group.total.fetch_add(1, Ordering::Relaxed);
+                            info!(
+                                target = %profile_label,
+                                lang = %item.lang,
+                                pid = pid,
+                                port = port,
+                                "TCP worker warmed up (persistent daemon)"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                target = %profile_label,
+                                lang = %item.lang,
+                                error = %e,
+                                "Failed to connect to TCP daemon after spawn"
+                            );
+                        }
                     }
                 }
             });
@@ -511,16 +925,104 @@ impl WorkerPool {
 
     /// Pre-scale workers for a given command/lang up to `target` count.
     ///
-    /// Spawns workers eagerly so they're ready before file dispatch begins.
-    /// Uses `compare_exchange` on `total` for concurrent-safe slot claiming.
-    /// Stops early if a spawn fails.
+    /// Delegates to [`pre_scale_with_overrides`] using the pool's default
+    /// engine overrides.
     pub async fn pre_scale(&self, command: &CommandName, lang: &LanguageCode3, target: usize) {
+        self.pre_scale_with_overrides(command, lang, target, &self.config.engine_overrides)
+            .await;
+    }
+
+    /// Pre-scale workers with explicit engine overrides.
+    ///
+    /// Spawns workers eagerly so they're ready before file dispatch begins.
+    /// The `engine_overrides` must match the overrides that dispatch will use
+    /// (typically from the job's `CommonOptions`), otherwise the pre-scaled
+    /// worker will have a different key than what dispatch looks up.
+    ///
+    /// **TCP worker shortcut:** If a TCP worker is already discovered from the
+    /// registry for this profile/lang, pre-scale is a no-op — the worker is
+    /// already running and ready. This eliminates the TOCTOU race, ready
+    /// timeout, and cold-start delay that motivated pre-scale in the first
+    /// place.
+    ///
+    /// For GPU-profile commands, pre-creates the `SharedGpuWorker` so all
+    /// concurrent file dispatches hit the fast path (no spawn race).
+    /// For non-GPU commands, uses `compare_exchange` on `total` for
+    /// concurrent-safe slot claiming.
+    pub async fn pre_scale_with_overrides(
+        &self,
+        command: &CommandName,
+        lang: &LanguageCode3,
+        target: usize,
+        engine_overrides: &str,
+    ) {
         let target = target.min(self.config.max_workers_per_key);
-        let Some(worker_target) = WorkerTarget::for_command(command) else {
-            warn!(command = %command, lang = %lang, "Skipping pre-scale for unknown command target");
+        let Some(profile) = WorkerProfile::for_command(command) else {
+            warn!(command = %command, lang = %lang, "Skipping pre-scale for unknown command profile");
             return;
         };
-        let group = self.get_or_create_group(&worker_target, lang, &self.config.engine_overrides);
+
+        // TCP worker shortcut: if a TCP worker already exists for this
+        // profile/lang, skip spawning — the worker is already running.
+        if profile.is_concurrent() {
+            let tcp_key = (lang.clone(), engine_overrides.to_owned());
+            if self.gpu_tcp_workers.lock().await.contains_key(&tcp_key) {
+                info!(
+                    command = %command,
+                    lang = %lang,
+                    "GPU TCP worker already discovered, skipping pre-scale"
+                );
+                return;
+            }
+        } else {
+            let key: WorkerKey = (profile, lang.clone(), engine_overrides.to_owned());
+            let has_tcp = {
+                let groups = self.groups.lock().unwrap();
+                groups.get(&key).is_some_and(|g| {
+                    !g.tcp_workers.lock().unwrap().is_empty()
+                })
+            };
+            if has_tcp {
+                info!(
+                    command = %command,
+                    lang = %lang,
+                    profile = %profile.label(),
+                    "TCP worker already discovered, skipping pre-scale"
+                );
+                return;
+            }
+        }
+
+        // GPU workers use the shared concurrent worker map. Pre-creating the
+        // worker here ensures it's ready before file dispatch begins, avoiding
+        // the TOCTOU race in `get_or_create_gpu_worker` where multiple tasks
+        // would each try to spawn their own worker process.
+        if profile.is_concurrent() {
+            match self
+                .get_or_create_gpu_worker(lang, engine_overrides)
+                .await
+            {
+                Ok(_) => {
+                    info!(
+                        command = %command,
+                        lang = %lang,
+                        engine_overrides = %engine_overrides,
+                        "GPU worker pre-scaled (ready for concurrent dispatch)"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        command = %command,
+                        lang = %lang,
+                        error = %e,
+                        "GPU worker pre-scale failed"
+                    );
+                }
+            }
+            return;
+        }
+
+        let group = self.get_or_create_group(&profile, lang, engine_overrides);
 
         loop {
             let current = group.total.load(Ordering::Relaxed);
@@ -529,14 +1031,14 @@ impl WorkerPool {
             }
 
             match self
-                .try_spawn_into_group(&group, &worker_target, lang, &self.config.engine_overrides)
+                .try_spawn_into_group(&group, &profile, lang, &self.config.engine_overrides)
                 .await
             {
                 Ok(true) => {}      // Keep going
                 Ok(false) => break, // At capacity
                 Err(e) => {
                     warn!(
-                        target = %worker_target.label(),
+                        target = %profile.label(),
                         lang = %lang,
                         current = group.total.load(Ordering::Relaxed),
                         target = target,
@@ -553,9 +1055,39 @@ impl WorkerPool {
     ///
     /// Idle workers are shut down immediately.  Checked-out workers (currently
     /// processing a request) are logged as warnings -- they'll be killed when
-    /// the `CheckedOutWorker` RAII guard drops.
+    /// the `CheckedOutWorker` RAII guard drops. Shared GPU workers are shut
+    /// down via their concurrent shutdown path. TCP workers are disconnected
+    /// but not killed (they are managed by the OS service manager).
     pub async fn shutdown(&self) {
         self.cancel.cancel();
+
+        // Shut down shared GPU workers (stdio).
+        {
+            let mut gpu_workers = self.gpu_workers.lock().await;
+            for ((lang, overrides), worker) in gpu_workers.drain() {
+                info!(
+                    lang = %lang,
+                    engine_overrides = %overrides,
+                    pid = %worker.pid(),
+                    "Shutting down GPU worker"
+                );
+                worker.shutdown().await;
+            }
+        }
+
+        // Disconnect shared TCP GPU workers (does not kill the daemon).
+        {
+            let mut tcp_gpu_workers = self.gpu_tcp_workers.lock().await;
+            for ((lang, overrides), worker) in tcp_gpu_workers.drain() {
+                info!(
+                    lang = %lang,
+                    engine_overrides = %overrides,
+                    pid = %worker.pid(),
+                    "Disconnecting TCP GPU worker"
+                );
+                worker.shutdown().await;
+            }
+        }
 
         let all_groups: Vec<(WorkerKey, Arc<WorkerGroup>)> = {
             let mut groups = self.groups.lock().unwrap();
@@ -596,36 +1128,102 @@ impl WorkerPool {
         }
     }
 
+}
+
+/// Layer 2: kill idle workers when the pool is dropped without calling
+/// `shutdown()`. This catches test code and panic unwinds where the pool
+/// goes out of scope without graceful shutdown.
+///
+/// GPU workers behind `tokio::sync::Mutex` cannot be locked outside a
+/// runtime, but their inner `WorkerHandle` will be dropped when Arc
+/// refcounts hit zero — triggering `WorkerHandle::Drop` (SIGTERM+SIGKILL).
+impl Drop for WorkerPool {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+
+        // Drain all groups and kill workers synchronously.
+        // This works even outside a tokio context.
+        if let Ok(mut groups) = self.groups.lock() {
+            for (_, group) in groups.drain() {
+                if let Ok(mut idle) = group.idle.lock() {
+                    for handle in idle.drain(..) {
+                        // WorkerHandle::Drop sends SIGTERM+SIGKILL.
+                        drop(handle);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl WorkerPool {
     /// Check if there are idle workers for a given `(command, lang)` key.
     ///
     /// Used by the memory gate to skip the system memory check when reusable
     /// workers already exist -- those workers are already loaded, so no new
-    /// memory allocation is needed.
+    /// memory allocation is needed. Checks both stdio and TCP workers.
     pub fn has_idle_workers(&self, command: &CommandName, lang: &LanguageCode3) -> bool {
-        let Some(target) = WorkerTarget::for_command(command) else {
+        let Some(profile) = WorkerProfile::for_command(command) else {
             return false;
         };
+
+        // GPU profile workers are always "available" (shared, concurrent).
+        if profile.is_concurrent() {
+            // Check TCP GPU workers first.
+            if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock() {
+                if tcp_gpu_workers.keys().any(|(l, _)| l == lang) {
+                    return true;
+                }
+            }
+            let gpu_workers = self.gpu_workers.try_lock().ok();
+            if let Some(gpu_workers) = gpu_workers {
+                return gpu_workers.keys().any(|(l, _)| l == lang);
+            }
+            return false;
+        }
+
         let groups = self.groups.lock().unwrap();
-        groups.iter().any(|((group_target, group_lang, _), group)| {
-            *group_target == target && group_lang == lang && !group.idle.lock().unwrap().is_empty()
+        groups.iter().any(|((group_profile, group_lang, _), group)| {
+            if *group_profile != profile || group_lang != lang {
+                return false;
+            }
+            !group.idle.lock().unwrap().is_empty()
+                || !group.tcp_workers.lock().unwrap().is_empty()
         })
     }
 
     /// Number of active workers (total across all keys, including checked-out).
+    ///
+    /// Counts sequential group workers, shared GPU workers, and TCP workers.
     pub fn worker_count(&self) -> usize {
-        let groups = self.groups.lock().unwrap();
-        groups
-            .values()
-            .map(|g| g.total.load(Ordering::Relaxed))
-            .sum()
+        let groups_count: usize = {
+            let groups = self.groups.lock().unwrap();
+            groups
+                .values()
+                .map(|g| g.total.load(Ordering::Relaxed))
+                .sum()
+        };
+        let gpu_count = self
+            .gpu_workers
+            .try_lock()
+            .map(|g| g.len())
+            .unwrap_or(0);
+        let tcp_gpu_count = self
+            .gpu_tcp_workers
+            .try_lock()
+            .map(|g| g.len())
+            .unwrap_or(0);
+        groups_count + gpu_count + tcp_gpu_count
     }
 
-    /// Active worker keys: `["infer:asr:eng (2 total, 1 idle)", ...]`.
+    /// Active worker keys: `["profile:stanza:eng (2 total, 1 idle)", ...]`.
+    ///
+    /// Includes both sequential group workers and shared GPU workers.
     pub fn worker_keys(&self) -> Vec<String> {
         let groups = self.groups.lock().unwrap();
         let mut keys: Vec<String> = groups
             .iter()
-            .map(|((target, lang, engine_overrides), group)| {
+            .map(|((profile, lang, engine_overrides), group)| {
                 let total = group.total.load(Ordering::Relaxed);
                 let idle = group.idle.lock().unwrap().len();
                 let suffix = if engine_overrides.is_empty() {
@@ -635,18 +1233,46 @@ impl WorkerPool {
                 };
                 format!(
                     "{}:{lang}{suffix} ({total} total, {idle} idle)",
-                    target.label()
+                    profile.label()
                 )
             })
             .collect();
+        drop(groups);
+
+        if let Ok(gpu_workers) = self.gpu_workers.try_lock() {
+            for ((lang, engine_overrides), _worker) in gpu_workers.iter() {
+                let suffix = if engine_overrides.is_empty() {
+                    String::new()
+                } else {
+                    format!(":{}", engine_overrides)
+                };
+                keys.push(format!(
+                    "profile:gpu:{lang}{suffix} (1 total, shared)"
+                ));
+            }
+        }
+
+        if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock() {
+            for ((lang, engine_overrides), _worker) in tcp_gpu_workers.iter() {
+                let suffix = if engine_overrides.is_empty() {
+                    String::new()
+                } else {
+                    format!(":{}", engine_overrides)
+                };
+                keys.push(format!(
+                    "profile:gpu:{lang}{suffix} (1 total, tcp-shared)"
+                ));
+            }
+        }
+
         keys.sort();
         keys
     }
 
-    /// Summary of idle workers: `["infer:fa:eng:pid=1234:transport=stdio", ...]`.
+    /// Summary of idle workers: `["profile:stanza:eng:pid=1234:transport=stdio", ...]`.
     ///
-    /// Only reports idle workers (checked-out workers are invisible).
-    /// The total count (including checked-out) is available via `worker_count()`.
+    /// Reports idle sequential workers and shared GPU workers. Checked-out
+    /// sequential workers are invisible; use `worker_count()` for full totals.
     pub fn worker_summary(&self) -> Vec<String> {
         let groups = self.groups.lock().unwrap();
         let mut summary = Vec::new();
@@ -655,19 +1281,57 @@ impl WorkerPool {
             for worker in idle.iter() {
                 summary.push(format!(
                     "{}:{}:pid={}:transport={}",
-                    worker.target_label(),
+                    worker.profile_label(),
                     worker.lang(),
                     worker.pid(),
                     worker.transport()
                 ));
             }
         }
+        drop(groups);
+
+        if let Ok(gpu_workers) = self.gpu_workers.try_lock() {
+            for ((lang, _engine_overrides), worker) in gpu_workers.iter() {
+                summary.push(format!(
+                    "profile:gpu:{}:pid={}:transport=stdio:concurrent",
+                    lang,
+                    worker.pid()
+                ));
+            }
+        }
+
+        if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock() {
+            for ((lang, _engine_overrides), worker) in tcp_gpu_workers.iter() {
+                summary.push(format!(
+                    "profile:gpu:{}:pid={}:transport=tcp:concurrent",
+                    lang,
+                    worker.pid()
+                ));
+            }
+        }
+
+        // Include TCP workers from sequential groups.
+        {
+            let groups = self.groups.lock().unwrap();
+            for group in groups.values() {
+                let tcp = group.tcp_workers.lock().unwrap();
+                for worker in tcp.iter() {
+                    summary.push(format!(
+                        "{}:{}:pid={}:transport=tcp",
+                        worker.profile_label(),
+                        worker.lang(),
+                        worker.pid()
+                    ));
+                }
+            }
+        }
+
         summary.sort();
         summary
     }
 }
 
-/// Map one V2 task family onto the existing worker bootstrap target space.
+/// Map one V2 task family onto the existing worker bootstrap profile space.
 fn infer_task_for_execute_v2(task: InferenceTaskV2) -> Result<InferTask, WorkerError> {
     match task {
         InferenceTaskV2::Morphosyntax => Ok(InferTask::Morphosyntax),
@@ -686,12 +1350,12 @@ fn execute_v2_worker_key(
     lang: &LanguageCode3,
     request: &ExecuteRequestV2,
     default_engine_overrides: &str,
-) -> Result<WorkerKey, WorkerError> {
+) -> Result<(WorkerProfile, LanguageCode3, String), WorkerError> {
     let infer_task = infer_task_for_execute_v2(request.task)?;
     let engine_overrides =
         execute_v2_engine_overrides(request).unwrap_or_else(|| default_engine_overrides.to_owned());
     Ok((
-        WorkerTarget::infer_task(infer_task),
+        WorkerProfile::for_task(infer_task),
         lang.clone(),
         engine_overrides,
     ))
@@ -745,9 +1409,9 @@ mod tests {
     }
 
     /// The V2 execute path should reuse the established infer-task worker
-    /// targets instead of inventing a separate bootstrap namespace.
+    /// profiles instead of inventing a separate bootstrap namespace.
     #[test]
-    fn maps_forced_alignment_execute_v2_to_fa_worker_target() {
+    fn maps_forced_alignment_execute_v2_to_fa_worker_profile() {
         assert_eq!(
             infer_task_for_execute_v2(InferenceTaskV2::ForcedAlignment).unwrap(),
             InferTask::Fa
@@ -774,7 +1438,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(key.0, WorkerTarget::infer_task(InferTask::Asr));
+        assert_eq!(key.0, WorkerProfile::for_task(InferTask::Asr));
         assert_eq!(key.1, LanguageCode3::from("fra"));
         assert_eq!(key.2, r#"{"asr":"whisper"}"#);
     }
@@ -796,7 +1460,7 @@ mod tests {
             execute_v2_worker_key(&LanguageCode3::from("eng"), &request, r#"{"fa":"whisper"}"#)
                 .unwrap();
 
-        assert_eq!(key.0, WorkerTarget::infer_task(InferTask::Fa));
+        assert_eq!(key.0, WorkerProfile::for_task(InferTask::Fa));
         assert_eq!(key.1, LanguageCode3::from("eng"));
         assert_eq!(key.2, r#"{"fa":"wave2vec"}"#);
     }

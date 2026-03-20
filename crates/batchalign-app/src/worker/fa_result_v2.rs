@@ -14,6 +14,7 @@
 use batchalign_chat_ops::fa::{FaTimingMode, FaWord, WordTiming, parse_fa_response};
 use batchalign_chat_ops::nlp::{FaIndexedTiming, FaRawResponse, FaRawToken};
 
+use crate::api::DurationMs;
 use crate::types::worker_v2::{ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2};
 
 /// Parse one staged V2 FA execute response into the established FA timing
@@ -21,7 +22,7 @@ use crate::types::worker_v2::{ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2}
 pub fn parse_forced_alignment_result_v2(
     response: &ExecuteResponseV2,
     original_words: &[FaWord],
-    audio_start_ms: u64,
+    audio_start_ms: DurationMs,
     timing_mode: FaTimingMode,
 ) -> Result<Vec<Option<WordTiming>>, String> {
     match &response.outcome {
@@ -46,7 +47,7 @@ pub fn parse_forced_alignment_result_v2(
                 .iter()
                 .map(|token| FaRawToken {
                     text: token.text.clone(),
-                    time_s: token.time_s,
+                    time_s: token.time_s.0,
                 })
                 .collect(),
         },
@@ -56,8 +57,8 @@ pub fn parse_forced_alignment_result_v2(
                 .iter()
                 .map(|timing| {
                     timing.as_ref().map(|timing| FaIndexedTiming {
-                        start_ms: timing.start_ms,
-                        end_ms: timing.end_ms,
+                        start_ms: timing.start_ms.0,
+                        end_ms: timing.end_ms.0,
                         confidence: timing.confidence,
                     })
                 })
@@ -116,7 +117,7 @@ pub fn parse_forced_alignment_result_v2(
     let raw_json = serde_json::to_string(&raw_response).map_err(|error| {
         format!("failed to serialize staged FA V2 response for parsing: {error}")
     })?;
-    parse_fa_response(&raw_json, original_words, audio_start_ms, timing_mode)
+    parse_fa_response(&raw_json, original_words, audio_start_ms.0, timing_mode)
 }
 
 #[cfg(test)]
@@ -125,6 +126,7 @@ mod tests {
     use batchalign_chat_ops::fa::{FaTimingMode, FaWord};
     use batchalign_chat_ops::indices::{UtteranceIdx, WordIdx};
 
+    use crate::api::{DurationMs, DurationSeconds};
     use crate::types::worker_v2::{
         ExecuteOutcomeV2, ExecuteResponseV2, IndexedWordTimingResultV2, IndexedWordTimingV2,
         TaskResultV2, WhisperTokenTimingResultV2, WhisperTokenTimingV2, WorkerRequestIdV2,
@@ -153,22 +155,22 @@ mod tests {
                     tokens: vec![
                         WhisperTokenTimingV2 {
                             text: "hello".into(),
-                            time_s: 0.10,
+                            time_s: DurationSeconds(0.10),
                         },
                         WhisperTokenTimingV2 {
                             text: "world".into(),
-                            time_s: 0.35,
+                            time_s: DurationSeconds(0.35),
                         },
                     ],
                 },
             )),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let timings = parse_forced_alignment_result_v2(
             &response,
             &make_words(&["hello", "world"]),
-            1_000,
+            DurationMs(1_000),
             FaTimingMode::Continuous,
         )
         .expect("V2 whisper token result should parse");
@@ -187,21 +189,21 @@ mod tests {
                 IndexedWordTimingResultV2 {
                     indexed_timings: vec![
                         Some(IndexedWordTimingV2 {
-                            start_ms: 25,
-                            end_ms: 75,
+                            start_ms: DurationMs(25),
+                            end_ms: DurationMs(75),
                             confidence: Some(0.9),
                         }),
                         None,
                     ],
                 },
             )),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let timings = parse_forced_alignment_result_v2(
             &response,
             &make_words(&["hello", "world"]),
-            500,
+            DurationMs(500),
             FaTimingMode::WithPauses,
         )
         .expect("V2 indexed timing result should parse");
@@ -223,13 +225,13 @@ mod tests {
                     }],
                 },
             )),
-            elapsed_s: 0.01,
+            elapsed_s: DurationSeconds(0.01),
         };
 
         let error = parse_forced_alignment_result_v2(
             &response,
             &make_words(&["hello"]),
-            0,
+            DurationMs(0),
             FaTimingMode::Continuous,
         )
         .expect_err("translation result should be rejected");

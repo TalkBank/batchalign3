@@ -142,6 +142,55 @@ fn test_extract_nlp_words_retrace_skipped_for_mor() {
 }
 
 #[test]
+fn test_extract_nlp_words_single_word_retrace_skipped_for_mor() {
+    // Single-word retraces (no angle brackets) must also be excluded from %mor.
+    // Brian's bug report: "cup [/] cup" produces %mor with TWO noun|cup entries.
+    let input = "\
+@UTF8
+@Begin
+@Languages:\teng
+@Participants:\tCHI Target_Child
+@ID:\teng|test|CHI||female|||Target_Child|||
+*CHI:\tcup [/] cup .
+@End
+";
+    let result = t::extract_nlp_words(input, "mor").unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+    let words: Vec<&str> = parsed[0]["words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["text"].as_str().unwrap())
+        .collect();
+    // Only the non-retraced "cup" should appear
+    assert_eq!(words, vec!["cup"]);
+}
+
+#[test]
+fn test_extract_nlp_words_single_word_revision_skipped_for_mor() {
+    // [//] revision: "the" is revised to "this" — only "this" in %mor
+    let input = "\
+@UTF8
+@Begin
+@Languages:\teng
+@Participants:\tCHI Target_Child
+@ID:\teng|test|CHI||female|||Target_Child|||
+*CHI:\tthe [//] this is nice .
+@End
+";
+    let result = t::extract_nlp_words(input, "mor").unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+    let words: Vec<&str> = parsed[0]["words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["text"].as_str().unwrap())
+        .collect();
+    // "the" is retraced (revised), should be excluded
+    assert_eq!(words, vec!["this", "is", "nice"]);
+}
+
+#[test]
 fn test_extract_nlp_words_retrace_kept_for_wor() {
     let input = "\
 @UTF8

@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batchalign_app::api::NumSpeakers;
+use batchalign_app::api::{DurationSeconds, NumSpeakers};
 use batchalign_app::types::worker_v2::{
     ArtifactRefV2, AsrBackendV2, AsrInputV2, AsrRequestV2, ExecuteOutcomeV2, ExecuteRequestV2,
     ExecuteResponseV2, FaBackendV2, FaTextModeV2, ForcedAlignmentRequestV2, InferenceTaskV2,
@@ -23,7 +23,7 @@ use batchalign_app::types::worker_v2::{
     WorkerArtifactIdV2,
 };
 use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
-use batchalign_app::worker::{InferTask, WorkerTarget};
+use batchalign_app::worker::WorkerProfile;
 use common::resolve_python;
 use serde::Deserialize;
 use serde_json::Value;
@@ -453,16 +453,16 @@ fn validate_execute_response_invariants(
     file: &str,
     response: &ExecuteResponseV2,
 ) -> Result<(), String> {
-    if response.elapsed_s < 0.0 {
+    if response.elapsed_s.0 < 0.0 {
         return Err(format!(
             "response fixture {file} had negative elapsed_s {}",
-            response.elapsed_s
+            response.elapsed_s.0
         ));
     }
 
     match (&response.outcome, &response.result) {
         (ExecuteOutcomeV2::Success, Some(result)) => {
-            if response.elapsed_s <= 0.0 {
+            if response.elapsed_s.0 <= 0.0 {
                 return Err(format!(
                     "success response fixture {file} must record elapsed_s > 0"
                 ));
@@ -509,7 +509,7 @@ fn validate_task_result_shape(result: &TaskResultV2) -> Result<(), String> {
             if value.chunks.is_empty() {
                 return Err("whisper chunk result must contain at least one chunk".into());
             }
-            let mut previous_end = 0.0;
+            let mut previous_end = DurationSeconds(0.0);
             for (index, chunk) in value.chunks.iter().enumerate() {
                 if chunk.end_s < chunk.start_s {
                     return Err(format!("whisper chunk {index} ended before it started"));
@@ -541,9 +541,9 @@ fn validate_task_result_shape(result: &TaskResultV2) -> Result<(), String> {
             if value.tokens.is_empty() {
                 return Err("whisper token timing result must contain at least one token".into());
             }
-            let mut previous_time = 0.0;
+            let mut previous_time = DurationSeconds(0.0);
             for (index, token) in value.tokens.iter().enumerate() {
-                if !token.time_s.is_finite() {
+                if !token.time_s.0.is_finite() {
                     return Err(format!("whisper token {index} had a non-finite timestamp"));
                 }
                 if index > 0 && token.time_s < previous_time {
@@ -830,7 +830,7 @@ async fn worker_execute_v2_returns_typed_invalid_payload_for_mismatched_task_mat
     let config = WorkerConfig {
         python_path: python,
         test_echo: true,
-        target: WorkerTarget::infer_task(InferTask::Morphosyntax),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         ready_timeout_s: 30,
         ..Default::default()

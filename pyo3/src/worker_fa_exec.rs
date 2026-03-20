@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use batchalign_app::api::{DurationMs, DurationSeconds};
 use batchalign_app::types::worker_v2::{
     ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2, FaBackendV2, FaTextModeV2,
     ForcedAlignmentRequestV2, IndexedWordTimingResultV2, IndexedWordTimingV2, InferenceTaskV2,
@@ -92,7 +93,7 @@ fn error_response(
         request_id: request.request_id.clone(),
         outcome: ExecuteOutcomeV2::Error { code, message },
         result: None,
-        elapsed_s: started_at.elapsed().as_secs_f64(),
+        elapsed_s: DurationSeconds(started_at.elapsed().as_secs_f64()),
     }
 }
 
@@ -105,7 +106,7 @@ fn success_response(
         request_id: request.request_id.clone(),
         outcome: ExecuteOutcomeV2::Success,
         result: Some(result),
-        elapsed_s: started_at.elapsed().as_secs_f64(),
+        elapsed_s: DurationSeconds(started_at.elapsed().as_secs_f64()),
     }
 }
 
@@ -135,7 +136,7 @@ fn parse_whisper_tokens(
                     .to_owned(),
             ));
         }
-        normalized.push(WhisperTokenTimingV2 { text, time_s });
+        normalized.push(WhisperTokenTimingV2 { text, time_s: DurationSeconds(time_s) });
     }
     Ok(WhisperTokenTimingResultV2 { tokens: normalized })
 }
@@ -161,8 +162,8 @@ fn parse_indexed_timings(
             ));
         }
         indexed_timings[index] = Some(IndexedWordTimingV2 {
-            start_ms,
-            end_ms,
+            start_ms: DurationMs(start_ms),
+            end_ms: DurationMs(end_ms),
             confidence: None,
         });
     }

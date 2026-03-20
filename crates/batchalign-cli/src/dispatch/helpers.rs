@@ -33,6 +33,9 @@ pub(super) async fn poll_and_write_incrementally(
     let mut consecutive_failures: u32 = 0;
     let mut poll_interval = POLL_MIN;
     let mut last_completed: i64 = 0;
+    let mut last_health_poll = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(10))
+        .unwrap_or_else(std::time::Instant::now);
 
     loop {
         match client.get_job(server_url, job_id).await {
@@ -112,6 +115,14 @@ pub(super) async fn poll_and_write_incrementally(
                     });
                 }
             }
+        }
+
+        // Poll health on a slower cadence (~5s) for TUI metrics
+        if last_health_poll.elapsed() >= std::time::Duration::from_secs(5) {
+            if let Ok(h) = client.health_check(server_url).await {
+                progress.update_health(&h);
+            }
+            last_health_poll = std::time::Instant::now();
         }
 
         tokio::time::sleep(Duration::from_secs_f64(poll_interval)).await;
@@ -211,7 +222,7 @@ pub(super) fn finish_terminal_job(
     let detail = terminal_job_detail(info, error_details);
     print_job_terminal_failure(info, error_details, total_files, out_dir);
     Err(CliError::JobFailed {
-        job_id: info.job_id.to_string(),
+        job_id: info.job_id.clone(),
         status: info.status.to_string(),
         detail,
     })

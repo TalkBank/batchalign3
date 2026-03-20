@@ -25,6 +25,7 @@ use crate::types::worker_v2::{
 };
 
 use super::artifacts_v2::{PreparedArtifactErrorV2, PreparedArtifactStoreV2};
+use crate::api::DurationMs;
 
 /// Prepared text payload that Rust writes for one V2 forced-alignment request.
 ///
@@ -121,9 +122,9 @@ pub enum ForcedAlignmentRequestBuildErrorV2 {
     #[error("forced-alignment infer item has invalid audio window start={start_ms} end={end_ms}")]
     InvalidAudioWindow {
         /// Inclusive start of the FA audio window.
-        start_ms: u64,
+        start_ms: DurationMs,
         /// Exclusive end of the FA audio window.
-        end_ms: u64,
+        end_ms: DurationMs,
     },
 
     /// Rust-owned prepared-artifact creation failed.
@@ -154,8 +155,8 @@ pub async fn build_forced_alignment_request_v2(
         .extract_prepared_audio_segment_f32le(
             &input.ids.audio_ref_id,
             Path::new(&input.infer_item.audio_path),
-            input.infer_item.audio_start_ms,
-            input.infer_item.audio_end_ms,
+            DurationMs(input.infer_item.audio_start_ms),
+            DurationMs(input.infer_item.audio_end_ms),
         )
         .await?;
 
@@ -230,8 +231,8 @@ fn validate_fa_infer_item(
 
     if infer_item.audio_end_ms <= infer_item.audio_start_ms {
         return Err(ForcedAlignmentRequestBuildErrorV2::InvalidAudioWindow {
-            start_ms: infer_item.audio_start_ms,
-            end_ms: infer_item.audio_end_ms,
+            start_ms: DurationMs(infer_item.audio_start_ms),
+            end_ms: DurationMs(infer_item.audio_end_ms),
         });
     }
 

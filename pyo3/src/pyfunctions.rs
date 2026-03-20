@@ -6,7 +6,7 @@ use talkbank_model::model::Line;
 
 use crate::build::build_chat_inner;
 use crate::metadata::serialize_extracted_words;
-use crate::parse::{parse_alignment_domain, parse_lenient_pure, parse_strict_pure};
+use crate::parse::{parse_tier_domain, parse_lenient_pure, parse_strict_pure};
 use crate::tier_ops::add_dependent_tiers_inner;
 
 #[derive(serde::Serialize)]
@@ -78,7 +78,7 @@ pub(crate) fn parse_and_serialize(py: Python<'_>, chat_text: &str) -> PyResult<S
 /// Raises `ValueError` if parsing fails or domain is invalid.
 #[pyfunction]
 pub(crate) fn extract_nlp_words(py: Python<'_>, chat_text: &str, domain: &str) -> PyResult<String> {
-    let domain = parse_alignment_domain(domain)?;
+    let domain = parse_tier_domain(domain)?;
     py.detach(|| -> Result<String, String> {
         let chat_file = parse_strict_pure(chat_text)?;
         let extracted = crate::extract::extract_words(&chat_file, domain);

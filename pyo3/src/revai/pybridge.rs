@@ -68,7 +68,7 @@ pub(crate) fn rev_get_timed_words(
         let transcript = client
             .transcribe_fixed_poll(&path, &opts, 15)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        let timed_words = extract_timed_words(&transcript);
+        let timed_words = extract_timed_words(&transcript.transcript);
         serde_json::to_string(&timed_words)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     })
@@ -158,7 +158,7 @@ pub(crate) fn rev_poll_timed_words(
         let transcript = client
             .poll_and_download(&jid, poll_secs, poll_secs)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        let timed_words = extract_timed_words(&transcript);
+        let timed_words = extract_timed_words(&transcript.transcript);
         serde_json::to_string(&timed_words)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     })

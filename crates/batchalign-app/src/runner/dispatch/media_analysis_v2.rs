@@ -25,6 +25,8 @@ use crate::worker::opensmile_request_v2::{
 };
 use crate::worker::pool::WorkerPool;
 
+use crate::api::{ContentType, LanguageCode3, NumWorkers};
+
 use super::MediaAnalysisDispatchPlan;
 
 /// Shared runtime dependencies for top-level media-analysis dispatch.
@@ -32,7 +34,7 @@ pub(in crate::runner) struct MediaAnalysisDispatchRuntime {
     /// Worker pool used for typed V2 media-analysis requests.
     pub pool: Arc<WorkerPool>,
     /// Maximum number of file tasks to run concurrently for this job.
-    pub num_workers: usize,
+    pub num_workers: NumWorkers,
 }
 
 /// Dispatch per-file media-analysis commands through typed worker protocol V2.
@@ -42,7 +44,7 @@ pub(in crate::runner) async fn dispatch_media_analysis_v2(
     runtime: MediaAnalysisDispatchRuntime,
     plan: MediaAnalysisDispatchPlan,
 ) {
-    let file_sem = Arc::new(Semaphore::new(runtime.num_workers));
+    let file_sem = Arc::new(Semaphore::new(runtime.num_workers.0.max(1)));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -87,7 +89,7 @@ async fn process_one_media_analysis_file_v2(
     plan: &MediaAnalysisDispatchPlan,
 ) -> FileTaskOutcome {
     let job_id = &job.identity.job_id;
-    let correlation_id = job.identity.correlation_id.as_str();
+    let correlation_id = &*job.identity.correlation_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
     let lifecycle = FileRunTracker::new(store, job_id, filename);
@@ -101,11 +103,11 @@ async fn process_one_media_analysis_file_v2(
         )
         .await;
 
-    let original_audio_path =
+    let original_audio_path: PathBuf =
         if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
             job.filesystem.source_paths[file_index].clone()
         } else {
-            format!("{}/input/{filename}", job.filesystem.staging_dir)
+            job.filesystem.staging_dir.join("input").join(filename)
         };
     let output_paths = job.filesystem.output_paths.clone();
     let staging_dir = job.filesystem.staging_dir.clone();
@@ -136,10 +138,10 @@ async fn process_one_media_analysis_file_v2(
                 let write_path = if job.filesystem.paths_mode && file_index < output_paths.len() {
                     apply_result_filename(&output_paths[file_index], &result_filename)
                 } else {
-                    format!("{staging_dir}/output/{result_filename}")
+                    staging_dir.join("output").join(&result_filename)
                 };
 
-                if let Some(parent) = Path::new(&write_path).parent() {
+                if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
                 if let Err(error) = tokio::fs::write(&write_path, output_text).await {
@@ -153,7 +155,7 @@ async fn process_one_media_analysis_file_v2(
                 lifecycle
                     .complete_with_result(
                         result_filename.clone().into(),
-                        output_type.as_str(),
+                        output_type,
                         finished_at,
                     )
                     .await;
@@ -215,30 +217,16 @@ enum DispatchFailure {
     Terminal(String, FailureCategory),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MediaAnalysisOutputType {
-    Csv,
-    Text,
-}
-
-impl MediaAnalysisOutputType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Csv => "csv",
-            Self::Text => "text",
-        }
-    }
-}
 
 async fn dispatch_one_media_analysis_attempt(
     job: &RunnerJobSnapshot,
     pool: &Arc<WorkerPool>,
     file_index: usize,
     filename: &str,
-    original_audio_path: &str,
+    original_audio_path: &Path,
     plan: &MediaAnalysisDispatchPlan,
-) -> Result<(String, String, MediaAnalysisOutputType), DispatchFailure> {
-    let audio_path = ensure_wav::ensure_wav(Path::new(original_audio_path), None)
+) -> Result<(String, String, ContentType), DispatchFailure> {
+    let audio_path = ensure_wav::ensure_wav(original_audio_path, None)
         .await
         .map_err(|error| {
             DispatchFailure::Terminal(
@@ -265,7 +253,7 @@ async fn dispatch_opensmile_attempt(
     filename: &str,
     audio_path: &Path,
     feature_set: &str,
-) -> Result<(String, String, MediaAnalysisOutputType), DispatchFailure> {
+) -> Result<(String, String, ContentType), DispatchFailure> {
     let artifacts = PreparedArtifactRuntimeV2::new("opensmile_v2").map_err(|error| {
         DispatchFailure::Terminal(
             format!("failed to create openSMILE V2 artifact runtime: {error}"),
@@ -294,7 +282,10 @@ async fn dispatch_opensmile_attempt(
     })?;
 
     let response = pool
-        .dispatch_execute_v2(&job.dispatch.lang, &request)
+        .dispatch_execute_v2(
+            &job.dispatch.lang.resolve_or(&LanguageCode3::from("eng")),
+            &request,
+        )
         .await
         .map_err(|error| {
             DispatchFailure::RetryableWorker(error.to_string(), classify_worker_error(&error))
@@ -334,7 +325,7 @@ async fn dispatch_opensmile_attempt(
     Ok((
         opensmile_result_filename(filename),
         format_opensmile_csv(&result),
-        MediaAnalysisOutputType::Csv,
+        ContentType::Csv,
     ))
 }
 
@@ -344,7 +335,7 @@ async fn dispatch_avqi_attempt(
     file_index: usize,
     filename: &str,
     cs_audio_path: &Path,
-) -> Result<(String, String, MediaAnalysisOutputType), DispatchFailure> {
+) -> Result<(String, String, ContentType), DispatchFailure> {
     let sv_audio_path = resolve_avqi_sv_path(cs_audio_path).ok_or_else(|| {
         DispatchFailure::Terminal(
             format!("AVQI input {filename} is missing a paired .sv. audio file name"),
@@ -388,7 +379,10 @@ async fn dispatch_avqi_attempt(
     })?;
 
     let response = pool
-        .dispatch_execute_v2(&job.dispatch.lang, &request)
+        .dispatch_execute_v2(
+            &job.dispatch.lang.resolve_or(&LanguageCode3::from("eng")),
+            &request,
+        )
         .await
         .map_err(|error| {
             DispatchFailure::RetryableWorker(error.to_string(), classify_worker_error(&error))
@@ -428,7 +422,7 @@ async fn dispatch_avqi_attempt(
     Ok((
         avqi_result_filename(filename),
         format_avqi_report(&result),
-        MediaAnalysisOutputType::Text,
+        ContentType::Text,
     ))
 }
 

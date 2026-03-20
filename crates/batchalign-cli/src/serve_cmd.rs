@@ -51,6 +51,13 @@ pub async fn start(
         cfg.host = host.clone();
     }
 
+    if let Some(workers) = args.workers {
+        cfg.max_workers_per_job = workers as i32;
+    }
+    if let Some(timeout) = args.timeout {
+        cfg.audio_task_timeout_s = timeout;
+    }
+
     if let Some(ref warmup) = args.warmup {
         apply_warmup_flag(warmup, &mut cfg);
     }
@@ -94,7 +101,24 @@ pub async fn start(
             verbose,
             engine_overrides: engine_overrides.unwrap_or("").to_string(),
             runtime: worker_runtime,
-            ..PoolConfig::default()
+            max_workers_per_key: if cfg.max_workers_per_key > 0 {
+                cfg.max_workers_per_key as usize
+            } else {
+                PoolConfig::default().max_workers_per_key
+            },
+            ready_timeout_s: if cfg.worker_ready_timeout_s > 0 {
+                cfg.worker_ready_timeout_s
+            } else {
+                PoolConfig::default().ready_timeout_s
+            },
+            max_total_workers: if cfg.max_total_workers > 0 {
+                cfg.max_total_workers as usize
+            } else {
+                0 // auto-compute from available RAM
+            },
+            audio_task_timeout_s: cfg.audio_task_timeout_s,
+            analysis_task_timeout_s: cfg.analysis_task_timeout_s,
+            worker_registry_path: cfg.worker_registry_path.clone(),
         };
         batchalign_app::serve_with_runtime(
             cfg,
@@ -146,6 +170,14 @@ pub async fn start(
         // Forward engine overrides to the background server process.
         if let Some(overrides) = engine_overrides {
             cmd.args(["--engine-overrides", overrides]);
+        }
+        // Forward workers to the background server process.
+        if let Some(workers) = args.workers {
+            cmd.args(["--workers", &workers.to_string()]);
+        }
+        // Forward timeout to the background server process.
+        if let Some(timeout) = args.timeout {
+            cmd.args(["--timeout", &timeout.to_string()]);
         }
 
         cmd.stdout(std::process::Stdio::null());

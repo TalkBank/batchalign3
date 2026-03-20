@@ -1,0 +1,20 @@
+[Unit]
+Description=Batchalign3 Worker (%i)
+After=network.target
+
+[Service]
+Type=simple
+# Instance name format: PROFILE-LANG (e.g. gpu-eng, stanza-eng, io-fra)
+# The ExecStartPre extracts profile and lang from the instance name.
+ExecStart=/bin/bash -c 'PROFILE="${0%%-*}"; LANG="${0#*-}"; exec __BATCHALIGN3_BIN__ worker start --profile "$PROFILE" --lang "$LANG"' %i
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=batchalign3-worker-%i
+
+# Environment
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

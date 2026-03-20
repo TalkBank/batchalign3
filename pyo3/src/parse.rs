@@ -1,7 +1,7 @@
 //! Pure-Rust parse helpers (no PyResult — safe for use in allow_threads closures).
 
 use pyo3::PyResult;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::Line;
 
 pub use batchalign_chat_ops::fa::strip_timing_from_content;
@@ -97,12 +97,12 @@ pub(crate) fn strip_timing_on_chat_file(chat_file: &mut talkbank_model::model::C
     }
 }
 
-pub(crate) fn parse_alignment_domain(domain: &str) -> PyResult<AlignmentDomain> {
+pub(crate) fn parse_tier_domain(domain: &str) -> PyResult<TierDomain> {
     match domain {
-        "mor" => Ok(AlignmentDomain::Mor),
-        "wor" => Ok(AlignmentDomain::Wor),
-        "pho" => Ok(AlignmentDomain::Pho),
-        "sin" => Ok(AlignmentDomain::Sin),
+        "mor" => Ok(TierDomain::Mor),
+        "wor" => Ok(TierDomain::Wor),
+        "pho" => Ok(TierDomain::Pho),
+        "sin" => Ok(TierDomain::Sin),
         _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
             "Invalid domain: {domain:?}. Must be one of: mor, wor, pho, sin"
         ))),

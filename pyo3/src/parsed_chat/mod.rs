@@ -16,7 +16,7 @@ use crate::ParsedChat;
 use crate::build::build_chat_inner;
 use crate::metadata::{extract_metadata_from_chat_file_pure, serialize_extracted_words};
 use crate::parse::{
-    errors_to_json, parse_alignment_domain, parse_lenient_with_warnings, parse_strict_pure,
+    errors_to_json, parse_tier_domain, parse_lenient_with_warnings, parse_strict_pure,
     strip_timing_on_chat_file,
 };
 
@@ -248,10 +248,10 @@ impl ParsedChat {
     fn py_extract_nlp_words(
         &self,
         py: Python<'_>,
-        domain: talkbank_model::PythonAlignmentDomain,
+        domain: talkbank_model::PythonTierDomain,
     ) -> PyResult<String> {
         let domain_name = domain.data;
-        let domain = parse_alignment_domain(&domain_name)?;
+        let domain = parse_tier_domain(&domain_name)?;
         let inner = &self.inner;
         Ok(py.detach(|| {
             let extracted = crate::extract::extract_words(inner, domain);
