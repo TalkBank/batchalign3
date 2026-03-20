@@ -153,6 +153,14 @@ async fn probe_workers(
     let pool = Arc::new(WorkerPool::new(pool_config));
     pool.start_background_tasks();
 
+    // Discover pre-started TCP workers from the registry file.
+    // This happens before capability probing and warmup so discovered
+    // workers are available immediately — no spawn delay.
+    let discovered = pool.discover_from_registry().await;
+    if discovered > 0 {
+        info!(discovered, "Pre-started TCP workers integrated into pool");
+    }
+
     let worker_caps = pool
         .detect_capabilities()
         .await

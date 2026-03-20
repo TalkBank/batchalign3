@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::api::{HealthResponse, HealthStatus};
+use crate::api::{HealthResponse, HealthStatus, MemoryMb};
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -49,6 +49,14 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
     let live_worker_keys = state.workers.pool.worker_keys();
     let worker_summary = state.workers.pool.worker_summary();
 
+    // System memory snapshot for the dashboard memory panel.
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let total_mb = MemoryMb(sys.total_memory() / (1024 * 1024));
+    let available_mb = MemoryMb(sys.available_memory() / (1024 * 1024));
+    let used_mb = MemoryMb(total_mb.0.saturating_sub(available_mb.0));
+    let gate_mb = state.environment.config.memory_gate_mb;
+
     Json(HealthResponse {
         status: HealthStatus::Ok,
         version: state.build.version.clone(),
@@ -80,5 +88,9 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
         memory_gate_aborts,
         build_hash: state.build.build_hash.clone(),
         warmup_status: state.workers.pool.warmup_status(),
+        system_memory_total_mb: total_mb,
+        system_memory_available_mb: available_mb,
+        system_memory_used_mb: used_mb,
+        memory_gate_threshold_mb: gate_mb,
     })
 }

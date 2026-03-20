@@ -20,7 +20,7 @@ result retrieval, and local daemon lifecycle.
 | `serve_cmd.rs` | `batchalign3 serve` (start/stop/status) |
 | `output.rs` | Write results to filesystem with path traversal protection |
 | `progress.rs` | Terminal progress bars (indicatif) and `ProgressSink` boundary |
-| `tui/` | ratatui TUI dashboard with reducer-owned `AppState` |
+| `tui/` | ratatui TUI dashboard with reducer-owned `AppState`, pipeline phase dots, health metrics |
 
 ## Key Commands
 

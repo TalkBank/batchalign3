@@ -83,10 +83,10 @@ Re-exports `ChatFile` and `LanguageCode` for downstream convenience.
 ## Design Principles
 
 - **No string hacking** — all CHAT operations through AST manipulation
-- **Provenance types** — `ChatRawText` vs `ChatCleanedText` prevent mixing raw/cleaned text
-- **Domain-aware extraction** — `AlignmentDomain` selects which word properties to extract
+- **Provenance types** — `ChatRawText` vs `ChatCleanedText` (CHAT direction) and `AsrRawText` → `AsrNormalizedText` → `ChatWordText` (ASR direction) prevent mixing text at different pipeline stages
+- **Domain-aware extraction** — `TierDomain` selects which word properties to extract
 - **Alignment validation** — %mor word count must match main tier word count before injection
-- **Content walker** — `for_each_leaf()` / `for_each_leaf_mut()` from `talkbank-model` centralizes
+- **Content walker** — `walk_words()` / `walk_words_mut()` from `talkbank-model` centralizes
   UtteranceContent/BracketedItem traversal. Callers provide only leaf-handling closures.
   Used by `extract.rs`, `fa/extraction.rs`, `fa/injection.rs`, `fa/postprocess.rs`.
 
@@ -97,7 +97,8 @@ into utterances ready for CHAT assembly. Sub-modules:
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | Pipeline (`process_raw_asr`), types (`AsrWord`, `Utterance`, `AsrOutput`), retokenization |
+| `asr_types.rs` | Provenance newtypes: `AsrRawText`, `AsrNormalizedText`, `ChatWordText`, `AsrTimestampSecs`, `SpeakerIndex` |
+| `mod.rs` | Pipeline (`process_raw_asr`), types (`AsrWord`, `Utterance`, `AsrOutput`, `AsrElementKind`), retokenization |
 | `compounds.rs` | 3,584 compound word pairs, `merge_compounds()` with O(1) HashSet lookup |
 | `num2text.rs` | Number-to-words expansion via NUM2LANG tables (12 languages) |
 | `num2chinese.rs` | Chinese/Japanese number converter (simplified + traditional, up to 10^48) |
@@ -127,4 +128,4 @@ Data files in `data/`: `compounds.json` (3,660 pairs, 76 duplicates), `num2lang.
 `names.json` (~6,700 proper names), `abbrev.json` (~400 abbreviations).
 
 ---
-Last Updated: 2026-03-13
+Last Updated: 2026-03-18

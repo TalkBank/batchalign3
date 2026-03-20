@@ -13,6 +13,8 @@ pub(crate) use db_helpers::{
 };
 pub(crate) use dispatch::LeaseRenewalOutcome;
 
+use std::path::PathBuf;
+
 use crate::api::{JobId, JobInfo, JobListItem, JobStatus};
 use tracing::warn;
 
@@ -21,7 +23,12 @@ use crate::error::ServerError;
 use crate::ws::WsEvent;
 
 impl JobStore {
-    const LOCAL_LEASE_TTL_S: f64 = 300.0;
+    /// Seconds before a locally-dispatched file lease is considered orphaned.
+    /// Reads from `ServerConfig::local_lease_ttl_s` at construction; this
+    /// method provides a convenience accessor for query code.
+    fn local_lease_ttl_s(&self) -> f64 {
+        self.config().local_lease_ttl_s as f64
+    }
     pub(crate) const LOCAL_LEASE_HEARTBEAT_S: u64 = 60;
 
     /// Look up a job by ID.
@@ -67,7 +74,7 @@ impl JobStore {
             .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
 
         // Clean up staged content after releasing the jobs lock.
-        if !staging_dir.is_empty() {
+        if !staging_dir.as_os_str().is_empty() {
             let _ = tokio::fs::remove_dir_all(&staging_dir).await;
         }
 
@@ -183,9 +190,11 @@ mod tests {
                 fa_engine: "wav2vec_fa".into(),
                 utr_engine: None,
                 utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
                 pauses: false,
                 wor: true.into(),
                 merge_abbrev: false.into(),
+                media_dir: None,
             }),
             _ => CommandOptions::Morphotag(MorphotagOptions {
                 common: CommonOptions::default(),
@@ -198,11 +207,11 @@ mod tests {
         Job {
             identity: JobIdentity {
                 job_id: id.into(),
-                correlation_id: format!("test-{id}"),
+                correlation_id: format!("test-{id}").into(),
             },
             dispatch: JobDispatchConfig {
                 command: command.into(),
-                lang: "eng".into(),
+                lang: crate::api::LanguageSpec::Resolved(crate::api::LanguageCode3::from("eng")),
                 num_speakers: crate::api::NumSpeakers(1),
                 options,
                 runtime_state: std::collections::BTreeMap::new(),
@@ -211,12 +220,12 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: String::new(),
-                source_dir: String::new(),
+                source_dir: PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: filenames.into_iter().map(FileName::from).collect(),
                 has_chat,
-                staging_dir: String::new(),
+                staging_dir: PathBuf::new(),
                 paths_mode: false,
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),
@@ -337,7 +346,7 @@ mod tests {
 
         let mut job = make_job("j1", "morphotag", vec!["a.cha".into()]);
         job.execution.status = JobStatus::Completed;
-        job.filesystem.staging_dir = staging_dir.to_string_lossy().into_owned();
+        job.filesystem.staging_dir = staging_dir.clone();
         store.submit(job).await.unwrap();
 
         store.delete(&JobId::from("j1")).await.unwrap();

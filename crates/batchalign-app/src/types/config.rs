@@ -9,16 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::LanguageCode3;
-
-// ---------------------------------------------------------------------------
-// Domain newtypes (config-specific)
-// ---------------------------------------------------------------------------
-
-numeric_id!(
-    /// Memory amount measured in megabytes.
-    pub MemoryMb(u64) [Eq]
-);
+use crate::api::{LanguageCode3, MemoryMb};
 
 /// Runtime-owned filesystem layout resolved from env/home defaults at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +178,64 @@ pub struct ServerConfig {
     /// Seconds between worker health checks. 0 = use pool default (30).
     #[serde(default = "default_worker_health_interval_s")]
     pub worker_health_interval_s: u64,
+
+    /// Maximum Python worker processes per (profile, lang, engine) key.
+    /// 0 = use built-in default (8). Reduces GPU memory pressure on smaller machines.
+    #[serde(default)]
+    pub max_workers_per_key: i32,
+
+    /// Hard ceiling on total workers across all keys. Prevents OOM when many
+    /// different (profile, lang, engine) keys are active simultaneously.
+    /// 0 = auto-compute from available RAM (available_memory / 4GB, capped at 32).
+    #[serde(default)]
+    pub max_total_workers: i32,
+
+    /// Seconds to wait for a Python worker to become ready after spawn.
+    /// Default: 120.
+    #[serde(default = "default_worker_ready_timeout_s")]
+    pub worker_ready_timeout_s: u64,
+
+    /// Maximum HTTP request body size in megabytes. Default: 100.
+    #[serde(default = "default_max_body_bytes_mb")]
+    pub max_body_bytes_mb: MemoryMb,
+
+    /// Seconds to wait for memory to become available before rejecting a job.
+    /// Default: 120. 0 = reject immediately if below gate.
+    #[serde(default = "default_memory_gate_timeout_s")]
+    pub memory_gate_timeout_s: u64,
+
+    /// Seconds between memory gate polling checks. Default: 5.
+    #[serde(default = "default_memory_gate_poll_s")]
+    pub memory_gate_poll_s: u64,
+
+    /// Low-memory warning threshold in MB. Default: 4096.
+    #[serde(default = "default_memory_warning_mb")]
+    pub memory_warning_mb: MemoryMb,
+
+    /// Number of threads in the GPU worker's thread pool for concurrent
+    /// inference requests. Default: 4.
+    #[serde(default = "default_gpu_thread_pool_size")]
+    pub gpu_thread_pool_size: u32,
+
+    /// Seconds before a locally-dispatched file lease is considered orphaned.
+    /// Default: 300.
+    #[serde(default = "default_local_lease_ttl_s")]
+    pub local_lease_ttl_s: u64,
+
+    /// Timeout in seconds for audio-heavy worker tasks (ASR, FA, speaker).
+    /// 0 = use built-in default (1800). Increase for very long recordings.
+    #[serde(default)]
+    pub audio_task_timeout_s: u64,
+
+    /// Timeout in seconds for lightweight analysis tasks (OpenSMILE, AVQI).
+    /// 0 = use built-in default (120).
+    #[serde(default)]
+    pub analysis_task_timeout_s: u64,
+
+    /// Path to the worker registry file for discovering pre-started TCP
+    /// workers. Empty string (default) uses `~/.batchalign3/workers.json`.
+    #[serde(default)]
+    pub worker_registry_path: String,
 }
 
 fn default_lang() -> LanguageCode3 {
@@ -228,6 +277,34 @@ fn default_worker_health_interval_s() -> u64 {
     30
 }
 
+fn default_worker_ready_timeout_s() -> u64 {
+    300
+}
+
+fn default_max_body_bytes_mb() -> MemoryMb {
+    MemoryMb(100)
+}
+
+fn default_memory_gate_timeout_s() -> u64 {
+    120
+}
+
+fn default_memory_gate_poll_s() -> u64 {
+    5
+}
+
+fn default_memory_warning_mb() -> MemoryMb {
+    MemoryMb(4096)
+}
+
+fn default_gpu_thread_pool_size() -> u32 {
+    4
+}
+
+fn default_local_lease_ttl_s() -> u64 {
+    300
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -245,6 +322,18 @@ impl Default for ServerConfig {
             memory_gate_mb: MemoryMb(2048),
             worker_idle_timeout_s: default_worker_idle_timeout_s(),
             worker_health_interval_s: default_worker_health_interval_s(),
+            max_workers_per_key: 0,
+            max_total_workers: 0,
+            worker_ready_timeout_s: default_worker_ready_timeout_s(),
+            max_body_bytes_mb: default_max_body_bytes_mb(),
+            memory_gate_timeout_s: default_memory_gate_timeout_s(),
+            memory_gate_poll_s: default_memory_gate_poll_s(),
+            memory_warning_mb: default_memory_warning_mb(),
+            gpu_thread_pool_size: default_gpu_thread_pool_size(),
+            local_lease_ttl_s: default_local_lease_ttl_s(),
+            audio_task_timeout_s: 0,
+            analysis_task_timeout_s: 0,
+            worker_registry_path: String::new(),
         }
     }
 }
@@ -289,6 +378,14 @@ impl ServerConfig {
                 self.job_ttl_days
             ));
             self.job_ttl_days = 1;
+        }
+        if self.memory_gate_poll_s == 0 {
+            warnings.push("memory_gate_poll_s must be >= 1, defaulting to 1".into());
+            self.memory_gate_poll_s = 1;
+        }
+        if self.gpu_thread_pool_size == 0 {
+            warnings.push("gpu_thread_pool_size must be >= 1, defaulting to 1".into());
+            self.gpu_thread_pool_size = 1;
         }
         warnings
     }
@@ -355,6 +452,16 @@ mod tests {
         assert!(cfg.auto_daemon);
         assert_eq!(cfg.worker_idle_timeout_s, 600);
         assert_eq!(cfg.worker_health_interval_s, 30);
+        assert_eq!(cfg.max_workers_per_key, 0);
+        assert_eq!(cfg.worker_ready_timeout_s, 300);
+        assert_eq!(cfg.max_body_bytes_mb, MemoryMb(100));
+        assert_eq!(cfg.memory_gate_timeout_s, 120);
+        assert_eq!(cfg.memory_gate_poll_s, 5);
+        assert_eq!(cfg.memory_warning_mb, MemoryMb(4096));
+        assert_eq!(cfg.gpu_thread_pool_size, 4);
+        assert_eq!(cfg.local_lease_ttl_s, 300);
+        assert_eq!(cfg.audio_task_timeout_s, 0);
+        assert_eq!(cfg.analysis_task_timeout_s, 0);
     }
 
     #[test]
@@ -395,12 +502,16 @@ auto_daemon: true
         let mut cfg = ServerConfig {
             max_concurrent_jobs: -1,
             job_ttl_days: 0,
+            memory_gate_poll_s: 0,
+            gpu_thread_pool_size: 0,
             ..Default::default()
         };
         let warnings = cfg.validate();
         assert_eq!(cfg.max_concurrent_jobs, 0);
         assert_eq!(cfg.job_ttl_days, 1);
-        assert_eq!(warnings.len(), 2);
+        assert_eq!(cfg.memory_gate_poll_s, 1);
+        assert_eq!(cfg.gpu_thread_pool_size, 1);
+        assert_eq!(warnings.len(), 4);
     }
 
     #[test]

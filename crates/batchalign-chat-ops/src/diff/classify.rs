@@ -3,7 +3,7 @@
 //! Takes the raw DP alignment between before/after utterance fingerprints
 //! and classifies each pair into an [`UtteranceDelta`].
 
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, Line};
 
 use crate::dp_align::{AlignResult, MatchMode, align};
@@ -115,8 +115,8 @@ fn classify_same_words(
 ///    (adjacent ExtraPayload + ExtraReference from the DP aligner).
 /// 5. Classify each result into an [`UtteranceDelta`].
 pub fn diff_chat(before: &ChatFile, after: &ChatFile) -> Vec<UtteranceDelta> {
-    let before_utts = extract::extract_words(before, AlignmentDomain::Mor);
-    let after_utts = extract::extract_words(after, AlignmentDomain::Mor);
+    let before_utts = extract::extract_words(before, TierDomain::Mor);
+    let after_utts = extract::extract_words(after, TierDomain::Mor);
 
     let before_fps: Vec<String> = before_utts.iter().map(utterance_fingerprint).collect();
     let after_fps: Vec<String> = after_utts.iter().map(utterance_fingerprint).collect();

@@ -64,7 +64,7 @@ pub(crate) async fn process_benchmark(
     } = request;
 
     let transcribed_chat =
-        process_transcribe(audio_path, services, transcribe_options, progress).await?;
+        process_transcribe(audio_path, services, transcribe_options, progress, None).await?;
     process_compare(
         &transcribed_chat,
         gold_text,

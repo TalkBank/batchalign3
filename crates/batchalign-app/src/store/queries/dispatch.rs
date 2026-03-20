@@ -26,7 +26,7 @@ impl JobStore {
         let now = unix_now();
         let claimed = self
             .registry
-            .claim_ready_queued_jobs(now, self.node_id(), Self::LOCAL_LEASE_TTL_S)
+            .claim_ready_queued_jobs(now, self.node_id(), self.local_lease_ttl_s())
             .await;
 
         for claimed in &claimed.claimed_leases {
@@ -68,7 +68,7 @@ impl JobStore {
         let now = unix_now();
         let renewed_lease = self
             .registry
-            .renew_job_lease(job_id, self.node_id(), now, Self::LOCAL_LEASE_TTL_S)
+            .renew_job_lease(job_id, self.node_id(), now, self.local_lease_ttl_s())
             .await;
 
         if let Some(lease) = renewed_lease.clone()

@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::api::{DurationMs, DurationSeconds};
+
 // ---------------------------------------------------------------------------
 // Top-level containers
 // ---------------------------------------------------------------------------
@@ -122,9 +124,9 @@ pub struct AsrTokenTrace {
     /// Token text.
     pub value: String,
     /// Start time in seconds.
-    pub ts: f64,
+    pub ts: DurationSeconds,
     /// End time in seconds.
-    pub end_ts: f64,
+    pub end_ts: DurationSeconds,
     /// Token type ("text", "punctuation", etc.).
     pub token_type: String,
 }
@@ -179,9 +181,9 @@ pub struct FaTimelineTrace {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FaGroupTrace {
     /// Audio start time in ms.
-    pub audio_start_ms: u64,
+    pub audio_start_ms: DurationMs,
     /// Audio end time in ms.
-    pub audio_end_ms: u64,
+    pub audio_end_ms: DurationMs,
     /// Utterance indices covered by this group.
     pub utterance_indices: Vec<usize>,
     /// Words in this group.

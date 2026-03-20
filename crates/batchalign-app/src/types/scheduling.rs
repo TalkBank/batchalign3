@@ -33,10 +33,10 @@ string_id!(
     pub WorkUnitId
 );
 
-numeric_id!(
-    /// Duration measured in milliseconds.
-    pub DurationMs(u64) [Eq]
-);
+// `DurationMs` is defined in domain.rs alongside the other core numeric
+// newtypes and re-exported here so that `crate::scheduling::DurationMs`
+// paths continue to resolve unchanged.
+pub use super::domain::DurationMs;
 
 /// A schedulable unit of work within the control plane.
 ///

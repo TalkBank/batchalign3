@@ -8,7 +8,7 @@
 //! `CompareAnalysisEngine` from batchalign2.
 
 use talkbank_model::Span;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{DependentTier, Line, NonEmptyString, UserDefinedDependentTier};
 
 use crate::dp_align::{self, AlignResult, MatchMode};
@@ -112,8 +112,8 @@ fn conform_with_mapping(words: &[String]) -> (Vec<String>, Vec<usize>) {
 /// Returns per-utterance comparison annotations and aggregate metrics.
 pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> CompareResult {
     // 1. Extract words from both files
-    let main_utts = extract::extract_words(main_file, AlignmentDomain::Mor);
-    let gold_utts = extract::extract_words(gold_file, AlignmentDomain::Mor);
+    let main_utts = extract::extract_words(main_file, TierDomain::Mor);
+    let gold_utts = extract::extract_words(gold_file, TierDomain::Mor);
 
     // 2. Flatten words, filtering punctuation and fillers
     let (main_words, main_info) = flatten_words(&main_utts);

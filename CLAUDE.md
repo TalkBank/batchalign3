@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-20
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -64,15 +64,20 @@ make build-release
 | Rust CLI (`crates/batchalign-cli/`, `crates/batchalign-app/`, etc.) | `cargo build -p batchalign-cli` or `make build-rust` |
 | PyO3 bridge or chat-ops (`pyo3/`, `crates/batchalign-chat-ops/`) | `make build-python` (rebuilds `batchalign_core` native extension) |
 | REST API types (`types/api.rs`, `ToSchema` derives) | `bash scripts/generate_dashboard_api_types.sh` (regenerates `openapi.json` + `frontend/src/generated/api.ts`) |
+| Worker IPC types (`types/worker_v2.rs`, `morphosyntax/mod.rs`, etc.) | `make generate-ipc-types` (regenerates `ipc-schema/` + `batchalign/generated/`) |
 | Everything | `make build` |
 
 **API schema discipline:** When you modify any Rust struct with `#[derive(ToSchema)]` or change route signatures in `routes/`, you **must** run `bash scripts/generate_dashboard_api_types.sh` and commit the regenerated `openapi.json` and `frontend/src/generated/api.ts`. CI will fail on API drift otherwise. Verify with `bash scripts/check_dashboard_api_drift.sh`.
 
-**Docs and diagrams discipline:** When a change materially affects code
-structure, ownership boundaries, concurrency shape, or user-visible control
-flow, update the relevant developer-facing book pages and Mermaid diagrams in
-the same change. Do not leave the book describing an architecture that no
-longer exists.
+**IPC type discipline:** When you modify any Rust struct with `#[derive(schemars::JsonSchema)]` that crosses the Python worker boundary, you **must** run `make generate-ipc-types` and commit the regenerated `ipc-schema/` and `batchalign/generated/` files. `make ci-local` and `make check-ipc-drift` verify schemas are current. See `book/src/developer/ipc-type-sync.md` for the full workflow and `book/src/developer/ipc-union-migration.md` for the roadmap to full codegen.
+
+**Docs and diagrams discipline:** When a change affects code structure,
+CLI options, data flow, or user-visible behavior, update **both** the
+user-facing book pages (`book/src/user-guide/`, especially `cli-reference.md`)
+**and** the developer-facing architecture pages (`book/src/architecture/`) in
+the same change. Include Mermaid diagrams to explain how options, data, and
+language information flow through the pipeline. Do not leave the book
+describing behavior that no longer exists or omitting new CLI options.
 
 **mdBook/Mermaid gotcha:** Be careful with raw angle brackets in Markdown and
 Mermaid labels. mdBook can treat them as HTML and emit warnings or render
@@ -83,22 +88,29 @@ arguments in surrounding prose or code spans instead of raw Mermaid labels.
 
 ## Build and Test Commands
 
-```bash
-# Run all tests
-uv run pytest
-make test                    # runs both Python and Rust tests
+**ML tests are excluded by default.** `cargo nextest run` and `uv run pytest` both run only fast unit tests. ML/golden tests must be opted into explicitly. See `book/src/developer/testing.md` for the full testing strategy.
 
-# Run specific test file
-uv run pytest batchalign/tests/test_worker.py -v
+```bash
+# Fast tests only (default — no models, safe, parallel)
+uv run pytest
+cargo nextest run --workspace
+make test                    # runs both
+
+# ML tests (serialized, real models — run only when relevant)
+cargo nextest run --profile ml
+
+# Specific ML submodule
+cargo nextest run --profile ml -E 'binary_id(batchalign-app::ml_golden) & test(golden::)'
+
+# Python golden/integration
+uv run pytest -m golden
+uv run pytest -m integration
 
 # Type checking (run before committing)
 uv run mypy
 
 # Rust tests (PyO3 crate)
 cargo nextest run --manifest-path pyo3/Cargo.toml
-
-# Rust tests (workspace — app, CLI, chat-ops)
-cargo nextest run --workspace
 
 # Build wheels for release packaging
 uv build --wheel
@@ -258,7 +270,7 @@ Rust CLI (batchalign3) → Rust Server (crates/)
 | DP alignment | `dp_align.rs` | Hirschberg sequence alignment (WER, retokenization) |
 | WER computation | `wer_conform.rs` | Word normalization for WER evaluation |
 | Retokenization | `retokenize/` | Character-level DP for Stanza word splits/merges |
-| ASR post-processing | `asr_postprocess/` | Compound merging, number expansion, Cantonese normalization, retokenization |
+| ASR post-processing | `asr_postprocess/` | Compound merging, number expansion, Cantonese normalization, retokenization, disfluency/retrace detection |
 | Utterance segmentation | `utseg.rs` | Boundary assignment computation |
 | Translation injection | `translate.rs` | %xtra tier injection |
 | Coreference injection | `coref.rs` | Sparse %xcoref tier injection |
@@ -367,7 +379,7 @@ After pulling changes in `talkbank-tools`, rebuild: `make build-python`
 
 ### Content Walker (from talkbank-model)
 
-`for_each_leaf()` / `for_each_leaf_mut()` centralize recursive traversal of `UtteranceContent` (24 variants) and `BracketedItem` (22 variants). Domain-aware gating: `Some(Mor)` skips retrace groups, `Some(Pho|Sin)` skips PhoGroup/SinGroup, `None` recurses all. Used extensively by `batchalign-chat-ops` (word extraction, FA injection/postprocess).
+`walk_words()` / `walk_words_mut()` centralize recursive traversal of `UtteranceContent` (24 variants) and `BracketedItem` (22 variants). Domain-aware gating: `Some(Mor)` skips retrace groups, `Some(Pho|Sin)` skips PhoGroup/SinGroup, `None` recurses all. Used extensively by `batchalign-chat-ops` (word extraction, FA injection/postprocess).
 
 ## Rust Coding Standards
 
@@ -410,6 +422,30 @@ For all Rust code in `crates/` and `pyo3/`.
 ### Git
 Conventional Commits format: `<type>[scope]: <description>`
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
+
+## Safety: Local ML Model Execution
+
+**Running batchalign3 with ML models (transcribe, align, morphotag) on a developer machine is dangerous.** Each Whisper model instance consumes 2–5 GB RAM on MPS/CUDA. The auto-tuner (`compute_job_workers()`) and `DEFAULT_MAX_WORKERS_PER_KEY = 8` can spawn multiple concurrent inference requests that exhaust GPU/system memory, causing **unrecoverable kernel-level OOM crashes**.
+
+**Rules for local runs:**
+
+- Process **one file at a time** first as a smoke test
+- For large corpus runs (>5 files or >1 GB audio), use net (M3 Ultra, 256 GB) instead of a developer machine
+- Use `--workers 1` to limit concurrent files per job (wired to `max_workers_per_job` in `ServerConfig`)
+- Use `--timeout N` to increase the audio task timeout for very long recordings (default: 1800s = 30 minutes)
+- The actual per-key pool ceiling is `max_workers_per_key` in `ServerConfig` (default: 8, configurable in `server.yaml`)
+
+**Known crash incidents:**
+- 2026-03-19: 47-file transcription (14 GB audio) with default settings caused kernel OOM on 64 GB machine
+- See `docs/postmortems/` for additional incidents
+
+## No-Op CLI Flags Are Banned
+
+**Do not add CLI flags that are parsed but silently ignored.** If a flag exists, it must be wired to actual behavior. If a flag cannot be implemented yet, either:
+1. Remove it entirely
+2. Emit a clear warning: `"--flag is not yet implemented and has no effect"`
+
+No-op flags are dangerous because users (and AI assistants) rely on them expecting behavior that never happens. The existing BA2 compatibility no-ops (`--adaptive-workers`, `--pool`, `--shared-models`, etc.) in `global_opts.rs` are technical debt that must be resolved — either implement them or remove them.
 
 ## Known Issues
 

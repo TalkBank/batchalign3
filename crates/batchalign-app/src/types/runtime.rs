@@ -8,6 +8,8 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
+use crate::api::MemoryMb;
+
 /// Raw TOML content, embedded at compile time.
 const TOML_SRC: &str = include_str!("../../../../batchalign/runtime_constants.toml");
 
@@ -97,33 +99,33 @@ pub fn max_thread_workers() -> usize {
 }
 
 /// Per-command base memory (MB) — non-free-threaded (process workers).
-pub fn command_base_mb_process() -> HashMap<&'static str, u64> {
+pub fn command_base_mb_process() -> HashMap<&'static str, MemoryMb> {
     CONSTANTS
         .command_base_mb
         .process
         .iter()
-        .map(|(k, &v)| (k.as_str(), v))
+        .map(|(k, &v)| (k.as_str(), MemoryMb(v)))
         .collect()
 }
 
 /// Per-command base memory (MB) — free-threaded (thread workers, shared models).
-pub fn command_base_mb_threaded() -> HashMap<&'static str, u64> {
+pub fn command_base_mb_threaded() -> HashMap<&'static str, MemoryMb> {
     CONSTANTS
         .command_base_mb
         .threaded
         .iter()
-        .map(|(k, &v)| (k.as_str(), v))
+        .map(|(k, &v)| (k.as_str(), MemoryMb(v)))
         .collect()
 }
 
 /// Fallback per-worker memory budget (MB) when a command is not listed.
-pub fn default_base_mb() -> u64 {
-    CONSTANTS.memory.default_base_mb
+pub fn default_base_mb() -> MemoryMb {
+    MemoryMb(CONSTANTS.memory.default_base_mb)
 }
 
 /// Additional memory budget (MB) allocated per file queued to a worker.
-pub fn mb_per_file_mb() -> u64 {
-    CONSTANTS.memory.mb_per_file_mb
+pub fn mb_per_file_mb() -> MemoryMb {
+    MemoryMb(CONSTANTS.memory.mb_per_file_mb)
 }
 
 /// Multiplier applied to the static memory budget to account for transient
@@ -169,8 +171,8 @@ mod tests {
 
     #[test]
     fn memory_constants_are_sane() {
-        assert!(default_base_mb() > 0);
-        assert!(mb_per_file_mb() > 0);
+        assert!(default_base_mb().0 > 0);
+        assert!(mb_per_file_mb().0 > 0);
         assert!(loading_overhead() > 1.0);
     }
 

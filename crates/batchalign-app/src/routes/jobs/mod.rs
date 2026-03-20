@@ -26,7 +26,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::api::{CommandName, FileName, JobInfo, JobStatus, JobSubmission};
+use crate::api::{CommandName, CorrelationId, FileName, JobInfo, JobStatus, JobSubmission};
 use axum::extract::State;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -72,7 +72,7 @@ fn command_supported(command: &CommandName, capabilities: &[String]) -> bool {
     capabilities.iter().any(|c| c.as_str() == command.as_ref())
 }
 
-fn sanitize_correlation_id(raw: &str) -> Option<String> {
+fn sanitize_correlation_id(raw: &str) -> Option<CorrelationId> {
     let mut out = String::new();
     for ch in raw.chars() {
         if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
@@ -82,16 +82,16 @@ fn sanitize_correlation_id(raw: &str) -> Option<String> {
             }
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() { None } else { Some(CorrelationId::from(out)) }
 }
 
-fn correlation_id_from_headers(headers: &HeaderMap, fallback: &str) -> String {
+fn correlation_id_from_headers(headers: &HeaderMap, fallback: &str) -> CorrelationId {
     headers
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .and_then(sanitize_correlation_id)
-        .unwrap_or_else(|| fallback.to_string())
+        .unwrap_or_else(|| CorrelationId::from(fallback.to_string()))
 }
 
 fn supported_command_list(capabilities: &[String]) -> Vec<String> {
@@ -258,17 +258,17 @@ pub(crate) async fn submit_job(
         source: JobSourceContext {
             submitted_by: addr.ip().to_string(),
             submitted_by_name: resolve_hostname(&addr.ip()),
-            source_dir: submission.source_dir.clone(),
+            source_dir: submission.source_dir.clone().into(),
         },
         filesystem: JobFilesystemConfig {
             filenames: filenames.clone(),
             has_chat,
-            staging_dir,
+            staging_dir: staging_dir.into(),
             paths_mode,
-            source_paths,
-            output_paths,
+            source_paths: source_paths.into_iter().map(Into::into).collect(),
+            output_paths: output_paths.into_iter().map(Into::into).collect(),
             before_paths: if submission.paths_mode {
-                submission.before_paths.clone()
+                submission.before_paths.iter().map(|p| p.clone().into()).collect()
             } else {
                 Vec::new()
             },

@@ -9,8 +9,8 @@ use crate::options::CommandOptions;
 use crate::scheduling::{FailureCategory, LeaseRecord};
 
 use super::domain::{
-    CommandName, ContentType, DurationSeconds, FileName, HealthStatus, JobId, LanguageCode3,
-    NodeId, UnixTimestamp,
+    CommandName, ContentType, DurationSeconds, FileName, HealthStatus, JobId, LanguageSpec,
+    MemoryMb, NodeId, UnixTimestamp,
 };
 use super::request::default_lang;
 use super::status::{FileProgressStage, FileStatusKind, JobStatus};
@@ -121,9 +121,9 @@ pub struct JobInfo {
     /// debugging and operator review without reconstructing a lossy CLI string.
     #[schema(value_type = serde_json::Value)]
     pub options: CommandOptions,
-    /// 3-letter ISO language code.  Defaults to `"eng"` when absent in JSON.
+    /// Language specification: a resolved ISO 639-3 code or `"auto"`.
     #[serde(default = "default_lang")]
-    pub lang: LanguageCode3,
+    pub lang: LanguageSpec,
     /// Client's original input directory path, used for display in the
     /// dashboard and CLI output.  May be empty for content-mode submissions.
     #[serde(default)]
@@ -202,9 +202,9 @@ pub struct JobListItem {
     pub status: JobStatus,
     /// Batchalign command (e.g. "morphotag", "align").
     pub command: CommandName,
-    /// 3-letter ISO language code.  Defaults to `"eng"` when absent in JSON.
+    /// Language specification: a resolved ISO 639-3 code or `"auto"`.
     #[serde(default = "default_lang")]
-    pub lang: LanguageCode3,
+    pub lang: LanguageSpec,
     /// Client's original input directory path, for display.
     #[serde(default)]
     pub source_dir: String,
@@ -340,6 +340,23 @@ pub struct HealthResponse {
     /// fully ready for low-latency jobs.
     #[serde(default)]
     pub warmup_status: crate::worker::pool::WarmupStatus,
+
+    // ── System memory snapshot ──────────────────────────────────────────
+    /// Total physical memory in MB.
+    #[serde(default)]
+    pub system_memory_total_mb: MemoryMb,
+    /// Available memory in MB (free + reclaimable).  On macOS this is
+    /// `free + purgeable` which can undercount; see `sysinfo` docs.
+    #[serde(default)]
+    pub system_memory_available_mb: MemoryMb,
+    /// Used memory in MB (`total - available`).
+    #[serde(default)]
+    pub system_memory_used_mb: MemoryMb,
+    /// Memory gate threshold in MB from server config.  0 means the gate
+    /// is disabled.  The dashboard uses this to show how close available
+    /// memory is to the blocking threshold.
+    #[serde(default)]
+    pub memory_gate_threshold_mb: MemoryMb,
 }
 
 pub(crate) fn default_cache_backend() -> String {

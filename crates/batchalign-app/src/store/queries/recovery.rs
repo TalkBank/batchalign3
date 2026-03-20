@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::{FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp};
+use crate::api::{ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -91,7 +91,11 @@ impl JobStore {
                             if fs_status.is_terminal() {
                                 results.push(FileResultEntry {
                                     filename: FileName::from(fs_row.filename.clone()),
-                                    content_type: fs_row.content_type.clone(),
+                                    content_type: match fs_row.content_type.as_str() {
+                                        "csv" => ContentType::Csv,
+                                        "text" => ContentType::Text,
+                                        _ => ContentType::Chat,
+                                    },
                                     error: fs_row.error.clone(),
                                 });
                             }
@@ -102,14 +106,14 @@ impl JobStore {
                             identity: JobIdentity {
                                 job_id: job_id_newtype.clone(),
                                 correlation_id: if row.correlation_id.is_empty() {
-                                    row.job_id.clone()
+                                    row.job_id.clone().into()
                                 } else {
-                                    row.correlation_id
+                                    row.correlation_id.into()
                                 },
                             },
                             dispatch: JobDispatchConfig {
                                 command: row.command.clone().into(),
-                                lang: row.lang.into(),
+                                lang: crate::api::LanguageSpec::parse_from_db(&row.lang),
                                 num_speakers: NumSpeakers(row.num_speakers),
                                 options: row.options,
                                 runtime_state: std::collections::BTreeMap::new(),
@@ -118,15 +122,15 @@ impl JobStore {
                             source: JobSourceContext {
                                 submitted_by: row.submitted_by,
                                 submitted_by_name: row.submitted_by_name,
-                                source_dir: row.source_dir,
+                                source_dir: row.source_dir.into(),
                             },
                             filesystem: JobFilesystemConfig {
                                 filenames: row.filenames.into_iter().map(FileName::from).collect(),
                                 has_chat: row.has_chat,
-                                staging_dir: row.staging_dir,
+                                staging_dir: row.staging_dir.into(),
                                 paths_mode: row.paths_mode,
-                                source_paths: row.source_paths,
-                                output_paths: row.output_paths,
+                                source_paths: row.source_paths.into_iter().map(Into::into).collect(),
+                                output_paths: row.output_paths.into_iter().map(Into::into).collect(),
                                 before_paths: Vec::new(),
                                 media_mapping: row.media_mapping,
                                 media_subdir: row.media_subdir,

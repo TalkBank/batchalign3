@@ -13,12 +13,12 @@ impl JobStore {
     pub async fn submit(&self, job: Job) -> Result<(), ServerError> {
         let persist = NewJobRecord {
             job_id: String::from(job.identity.job_id.clone()),
-            correlation_id: job.identity.correlation_id.clone(),
+            correlation_id: job.identity.correlation_id.to_string(),
             command: String::from(job.dispatch.command.clone()),
-            lang: String::from(job.dispatch.lang.clone()),
+            lang: job.dispatch.lang.to_string(),
             num_speakers: job.dispatch.num_speakers.0,
             status: job.execution.status.to_string(),
-            staging_dir: job.filesystem.staging_dir.clone(),
+            staging_dir: job.filesystem.staging_dir.to_string_lossy().into_owned(),
             filenames: job
                 .filesystem
                 .filenames
@@ -30,13 +30,13 @@ impl JobStore {
             options: job.dispatch.options.clone(),
             media_mapping: job.filesystem.media_mapping.clone(),
             media_subdir: job.filesystem.media_subdir.clone(),
-            source_dir: job.source.source_dir.clone(),
+            source_dir: job.source.source_dir.to_string_lossy().into_owned(),
             submitted_by: job.source.submitted_by.clone(),
             submitted_by_name: job.source.submitted_by_name.clone(),
             submitted_at: job.schedule.submitted_at.0,
             paths_mode: job.filesystem.paths_mode,
-            source_paths: job.filesystem.source_paths.clone(),
-            output_paths: job.filesystem.output_paths.clone(),
+            source_paths: job.filesystem.source_paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            output_paths: job.filesystem.output_paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
         };
         let job_id = job.identity.job_id.clone();
         let correlation_id = job.identity.correlation_id.clone();

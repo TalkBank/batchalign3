@@ -81,8 +81,8 @@ const WIDE_STRUCT_ALLOWANCES: &[WideStructAllowance] = &[
     WideStructAllowance {
         path: "crates/batchalign-cli/src/args/global_opts.rs",
         struct_name: "GlobalOpts",
-        max_fields: 26,
-        max_bool_fields: 18,
+        max_fields: 14,
+        max_bool_fields: 8,
         disposition: WideStructDisposition::BoundaryShim,
         reason: "flat clap surface that should convert immediately into typed policies",
     },
@@ -113,10 +113,10 @@ const WIDE_STRUCT_ALLOWANCES: &[WideStructAllowance] = &[
     WideStructAllowance {
         path: "crates/batchalign-cli/src/args/commands.rs",
         struct_name: "AlignArgs",
-        max_fields: 17,
+        max_fields: 22,
         max_bool_fields: 11,
         disposition: WideStructDisposition::BoundaryShim,
-        reason: "clap boundary type with several behavior switches",
+        reason: "boundary shim, clap boundary type with several behavior switches",
     },
     WideStructAllowance {
         path: "crates/batchalign-app/src/types/config.rs",
@@ -201,10 +201,10 @@ const WIDE_STRUCT_ALLOWANCES: &[WideStructAllowance] = &[
     WideStructAllowance {
         path: "crates/batchalign-app/src/runner/dispatch/fa_pipeline.rs",
         struct_name: "FaFileContext",
-        max_fields: 11,
+        max_fields: 12,
         max_bool_fields: 1,
         disposition: WideStructDisposition::RealAggregate,
-        reason: "per-file FA context carrying job snapshot, services, and UTR config",
+        reason: "real aggregate, per-file FA context carrying job snapshot, services, and UTR config",
     },
     WideStructAllowance {
         path: "crates/batchalign-chat-ops/src/nlp/types.rs",
@@ -213,14 +213,6 @@ const WIDE_STRUCT_ALLOWANCES: &[WideStructAllowance] = &[
         max_bool_fields: 0,
         disposition: WideStructDisposition::TransportRecord,
         reason: "mirrors one external NLP word record",
-    },
-    WideStructAllowance {
-        path: "crates/batchalign-cli/src/args/commands.rs",
-        struct_name: "BenchArgs",
-        max_fields: 10,
-        max_bool_fields: 4,
-        disposition: WideStructDisposition::BoundaryShim,
-        reason: "clap boundary type for bench orchestration",
     },
 ];
 

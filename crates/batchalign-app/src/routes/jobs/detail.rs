@@ -2,23 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::api::{
-    ContentType, FileName, FileResult, FileStatusKind, JobId, JobInfo, JobResultResponse, JobStatus,
-};
+use crate::api::{ContentType, FileName, FileResult, FileStatusKind, JobId, JobInfo, JobResultResponse, JobStatus};
 use axum::Json;
 use axum::extract::{Path, State};
 
 use crate::AppState;
 use crate::error::ServerError;
-
-/// Parse a content-type string (`"chat"` or `"csv"`) into the [`ContentType`] enum.
-/// Falls back to `ContentType::Chat` for unrecognized values.
-fn parse_content_type(s: &str) -> ContentType {
-    match s {
-        "csv" => ContentType::Csv,
-        _ => ContentType::Chat,
-    }
-}
 
 /// Return full detail for a single job, including per-file statuses.
 ///
@@ -100,7 +89,7 @@ pub(crate) async fn get_results(
             .map(|r| FileResult {
                 filename: r.filename.clone(),
                 content: String::new(),
-                content_type: parse_content_type(&r.content_type),
+                content_type: r.content_type,
                 error: r.error.clone(),
             })
             .collect();
@@ -112,11 +101,11 @@ pub(crate) async fn get_results(
     }
 
     // Content mode — read from staging dir
-    let output_dir = format!("{}/output", detail.staging_dir);
+    let output_dir = detail.staging_dir.join("output");
     let mut files = Vec::new();
     for r in &detail.results {
         let content = if r.error.is_none() {
-            let path = format!("{}/{}", output_dir, r.filename);
+            let path = output_dir.join(&*r.filename);
             tokio::fs::read_to_string(&path).await.unwrap_or_default()
         } else {
             String::new()
@@ -124,7 +113,7 @@ pub(crate) async fn get_results(
         files.push(FileResult {
             filename: r.filename.clone(),
             content,
-            content_type: parse_content_type(&r.content_type),
+            content_type: r.content_type,
             error: r.error.clone(),
         });
     }
@@ -215,11 +204,11 @@ pub(crate) async fn get_single_result(
             ServerError::FileNotFound(format!("Result for {filename} not found in job {job_id}"))
         })?;
 
-    let content_type = parse_content_type(&result_entry.content_type);
+    let content_type = result_entry.content_type;
     let out_filename = result_entry.filename.clone();
 
     let content = if !detail.paths_mode {
-        let path = format!("{}/output/{out_filename}", detail.staging_dir);
+        let path = detail.staging_dir.join("output").join(&*out_filename);
         tokio::fs::read_to_string(&path).await.unwrap_or_default()
     } else {
         String::new()

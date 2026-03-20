@@ -1,10 +1,12 @@
 //! Job struct, associated types, and conflict detection.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 use crate::api::{
-    CommandName, DurationSeconds, FileName, FileProgressStage, FileStatusEntry, FileStatusKind,
-    JobId, JobInfo, JobListItem, JobStatus, LanguageCode3, NodeId, NumSpeakers, UnixTimestamp,
+    CommandName, ContentType, CorrelationId, DurationSeconds, FileName, FileProgressStage,
+    FileStatusEntry, FileStatusKind, JobId, JobInfo, JobListItem, JobStatus, LanguageSpec, NodeId,
+    NumSpeakers, UnixTimestamp,
 };
 use crate::options::CommandOptions;
 use crate::scheduling::LeaseRecord;
@@ -49,7 +51,7 @@ pub struct JobIdentity {
     /// UUID v4 uniquely identifying this job. Immutable after creation.
     pub job_id: JobId,
     /// Client-supplied correlation ID for tracing across services.
-    pub correlation_id: String,
+    pub correlation_id: CorrelationId,
 }
 
 /// Immutable dispatch-time configuration for one job.
@@ -57,8 +59,9 @@ pub struct JobIdentity {
 pub struct JobDispatchConfig {
     /// The batchalign command to run.
     pub command: CommandName,
-    /// ISO 639-3 language code for the worker task.
-    pub lang: LanguageCode3,
+    /// Language specification — may be `Auto` (for ASR auto-detection) or
+    /// a resolved ISO 639-3 code.
+    pub lang: LanguageSpec,
     /// Expected number of speakers in the audio workflow.
     pub num_speakers: NumSpeakers,
     /// Typed command options captured at submission time.
@@ -77,7 +80,7 @@ pub struct JobSourceContext {
     /// Human-readable hostname resolved from `submitted_by`.
     pub submitted_by_name: String,
     /// Client-visible source directory used for display and locality hints.
-    pub source_dir: String,
+    pub source_dir: PathBuf,
 }
 
 /// File lists and storage layout for one job.
@@ -88,15 +91,15 @@ pub struct JobFilesystemConfig {
     /// Parallel CHAT/media markers for [`Self::filenames`].
     pub has_chat: Vec<bool>,
     /// Server-local temporary directory for staged input/output content.
-    pub staging_dir: String,
+    pub staging_dir: PathBuf,
     /// Whether the job reads and writes directly on the filesystem.
     pub paths_mode: bool,
     /// Absolute source paths parallel to [`Self::filenames`] in paths mode.
-    pub source_paths: Vec<String>,
+    pub source_paths: Vec<PathBuf>,
     /// Absolute output paths parallel to [`Self::filenames`] in paths mode.
-    pub output_paths: Vec<String>,
+    pub output_paths: Vec<PathBuf>,
     /// Optional "before" paths parallel to [`Self::source_paths`].
-    pub before_paths: Vec<String>,
+    pub before_paths: Vec<PathBuf>,
     /// Key into the server's configured media-mapping roots.
     pub media_mapping: String,
     /// Optional subdirectory within the selected media mapping.
@@ -172,7 +175,7 @@ pub(crate) struct CompletedFileOutput {
     /// Logical result filename returned to clients.
     pub filename: FileName,
     /// MIME-like content type stored with the result.
-    pub content_type: String,
+    pub content_type: ContentType,
 }
 
 /// Failure details for one terminal file error.
@@ -216,7 +219,7 @@ pub struct RunnerJobIdentity {
     /// Job identifier for logging and downstream APIs.
     pub job_id: JobId,
     /// Correlation identifier for structured logs.
-    pub correlation_id: String,
+    pub correlation_id: CorrelationId,
 }
 
 /// Immutable dispatch-time configuration for one job.
@@ -224,8 +227,8 @@ pub struct RunnerJobIdentity {
 pub struct RunnerDispatchConfig {
     /// Command being executed.
     pub command: CommandName,
-    /// Primary job language.
-    pub lang: LanguageCode3,
+    /// Language specification — may be `Auto` for ASR auto-detection.
+    pub lang: LanguageSpec,
     /// Speaker-count hint for audio workflows.
     pub num_speakers: NumSpeakers,
     /// Typed command options captured at submission time.
@@ -242,19 +245,19 @@ pub struct RunnerFilesystemConfig {
     /// Whether the job reads and writes directly on the filesystem.
     pub paths_mode: bool,
     /// Source paths parallel to [`PendingJobFile::file_index`].
-    pub source_paths: Vec<String>,
+    pub source_paths: Vec<PathBuf>,
     /// Output paths parallel to [`PendingJobFile::file_index`].
-    pub output_paths: Vec<String>,
+    pub output_paths: Vec<PathBuf>,
     /// Optional "before" paths parallel to [`PendingJobFile::file_index`].
-    pub before_paths: Vec<String>,
+    pub before_paths: Vec<PathBuf>,
     /// Staging directory for uploaded content mode.
-    pub staging_dir: String,
+    pub staging_dir: PathBuf,
     /// Media-mapping key for server-side audio lookup.
     pub media_mapping: String,
     /// Subdirectory within the selected media mapping.
     pub media_subdir: String,
     /// Client-provided source directory, used for media locality fallback.
-    pub source_dir: String,
+    pub source_dir: PathBuf,
 }
 
 /// Immutable runner-facing snapshot of job state.
@@ -462,7 +465,7 @@ impl Job {
         file_status.progress_stage = None;
         self.execution.results.push(FileResultEntry {
             filename: FileName::from(filename),
-            content_type: "chat".into(),
+            content_type: ContentType::Chat,
             error: Some(failure.message.clone()),
         });
         self.execution.completed_files += 1;
@@ -751,7 +754,7 @@ impl Job {
             command: self.dispatch.command.clone(),
             options: self.dispatch.options.clone(),
             lang: self.dispatch.lang.clone(),
-            source_dir: self.source.source_dir.clone(),
+            source_dir: self.source.source_dir.to_string_lossy().into_owned(),
             total_files: self.total_files() as i64,
             completed_files: self.execution.completed_files,
             current_file: None,
@@ -794,7 +797,7 @@ impl Job {
             status: self.execution.status,
             command: self.dispatch.command.clone(),
             lang: self.dispatch.lang.clone(),
-            source_dir: self.source.source_dir.clone(),
+            source_dir: self.source.source_dir.to_string_lossy().into_owned(),
             total_files: self.total_files() as i64,
             completed_files: self.execution.completed_files,
             error_files,
@@ -906,10 +909,10 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
         .filenames
         .iter()
         .map(|fn_| {
-            let path = if incoming.source.source_dir.is_empty() {
+            let path = if incoming.source.source_dir.as_os_str().is_empty() {
                 String::from(fn_.clone())
             } else {
-                format!("{}/{fn_}", incoming.source.source_dir)
+                format!("{}/{fn_}", incoming.source.source_dir.display())
             };
             (incoming.source.submitted_by.clone(), path)
         })
@@ -921,10 +924,10 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
             continue;
         }
         for fn_ in &active.filesystem.filenames {
-            let path = if active.source.source_dir.is_empty() {
+            let path = if active.source.source_dir.as_os_str().is_empty() {
                 String::from(fn_.clone())
             } else {
-                format!("{}/{fn_}", active.source.source_dir)
+                format!("{}/{fn_}", active.source.source_dir.display())
             };
             let key = (active.source.submitted_by.clone(), path);
             if incoming_keys.contains(&key) {
@@ -958,11 +961,11 @@ mod tests {
         Job {
             identity: JobIdentity {
                 job_id: JobId::from(job_id),
-                correlation_id: format!("corr-{job_id}"),
+                correlation_id: CorrelationId::from(format!("corr-{job_id}")),
             },
             dispatch: JobDispatchConfig {
                 command: CommandName::from("morphotag"),
-                lang: LanguageCode3::from("eng"),
+                lang: LanguageSpec::Resolved(crate::api::LanguageCode3::from("eng")),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Morphotag(crate::options::MorphotagOptions {
                     common: crate::options::CommonOptions::default(),
@@ -1060,12 +1063,12 @@ mod tests {
         retry_file.progress_stage = Some(FileProgressStage::Aligning);
         job.execution.results.push(FileResultEntry {
             filename: FileName::from("a.cha"),
-            content_type: "chat".into(),
+            content_type: ContentType::Chat,
             error: None,
         });
         job.execution.results.push(FileResultEntry {
             filename: FileName::from("b.cha"),
-            content_type: "chat".into(),
+            content_type: ContentType::Chat,
             error: Some("boom".into()),
         });
         job.schedule.completed_at = Some(UnixTimestamp(20.0));
@@ -1214,7 +1217,7 @@ mod tests {
             UnixTimestamp(12.0),
             Some(CompletedFileOutput {
                 filename: FileName::from("a.cha"),
-                content_type: "chat".into(),
+                content_type: ContentType::Chat,
             })
         ));
 

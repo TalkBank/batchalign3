@@ -6,8 +6,9 @@
 /// Declare a `String`-wrapping newtype with serde-transparent serialization.
 ///
 /// Derives: `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`, `Serialize`,
-/// `Deserialize`, `ToSchema`, plus `Display`, `From<String>`, `From<&str>`,
-/// `Into<String>`, `Deref<Target=str>`, `AsRef<str>`, `PartialEq<&str>`.
+/// `Deserialize`, `ToSchema`, `JsonSchema`, plus `Display`, `From<String>`,
+/// `From<&str>`, `Into<String>`, `Deref<Target=str>`, `AsRef<str>`,
+/// `PartialEq<&str>`.
 macro_rules! string_id {
     ($(#[$meta:meta])* $vis:vis $name:ident) => {
         $(#[$meta])*
@@ -15,6 +16,7 @@ macro_rules! string_id {
             Debug, Clone, PartialEq, Eq, Hash,
             serde::Serialize, serde::Deserialize,
             utoipa::ToSchema,
+            schemars::JsonSchema,
         )]
         #[serde(transparent)]
         $vis struct $name(pub String);
@@ -91,6 +93,7 @@ macro_rules! numeric_id {
             Debug, Clone, Copy, PartialEq, PartialOrd,
             serde::Serialize, serde::Deserialize,
             utoipa::ToSchema,
+            schemars::JsonSchema,
         )]
         #[serde(transparent)]
         $vis struct $name(pub $inner);

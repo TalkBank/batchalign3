@@ -21,19 +21,21 @@ use tower_http::trace::TraceLayer;
 
 use crate::AppState;
 
-const MAX_BODY_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Build the main router with all routes and middleware.
 ///
 /// Layer order (bottom-up execution, outermost runs first):
 /// 1. CORS — outermost, runs first on every request
-/// 2. Body limit — reject oversized requests early
+/// 2. Body limit — reject oversized requests early (from config `max_body_bytes_mb`)
 /// 3. Catch panic — convert panics to 500 instead of connection reset
 /// 4. Timeout — 5-minute request timeout
 /// 5. Trace — structured request/response logging with latency
 /// 6. Compression — gzip/brotli response compression (innermost)
 pub fn router(state: Arc<AppState>) -> Router {
+    let max_body_bytes =
+        state.environment.config.max_body_bytes_mb.0 as usize * 1024 * 1024;
+
     Router::new()
         .merge(health::router())
         .merge(jobs::router())
@@ -51,7 +53,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             REQUEST_TIMEOUT,
         ))
         .layer(CatchPanicLayer::new())
-        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+        .layer(RequestBodyLimitLayer::new(max_body_bytes))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

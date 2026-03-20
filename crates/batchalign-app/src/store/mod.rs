@@ -23,12 +23,13 @@ pub(crate) use queries::{
     AttemptFinishRecord, AttemptStartRecord, PersistedFileUpdate, PersistedJobUpdate,
 };
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::{
-    CommandName, FileName, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus,
-    LanguageCode3, NodeId, UnixTimestamp,
+    CommandName, ContentType, FileName, FileProgressStage, FileStatusEntry, FileStatusKind,
+    JobStatus, LanguageCode3, NodeId, UnixTimestamp,
 };
 use crate::config::ServerConfig;
 use crate::scheduling::FailureCategory;
@@ -45,25 +46,14 @@ use registry::JobRegistry;
 // Memory pressure thresholds
 // ---------------------------------------------------------------------------
 
-/// Emit a warning log when available memory drops below this threshold (in MB).
-///
-/// Set below the default `memory_gate_mb` critical threshold (2048 MB) but high
-/// enough to give operators early notice before the gate starts blocking jobs.
-/// 4 GB is roughly one Stanza model load worth of headroom.
-const MEMORY_WARNING_MB: u64 = 4096;
+/// Default warning threshold when no config is provided (in MB).
+const DEFAULT_MEMORY_WARNING_MB: u64 = 4096;
 
-/// Maximum seconds the memory gate will poll before rejecting a job (in seconds).
-///
-/// Two minutes is long enough for a single in-flight job to finish and free RAM,
-/// but short enough that the submitting client does not time out waiting for a
-/// response. Matches the Python server's timeout.
-const MEMORY_GATE_TIMEOUT_S: u64 = 120;
+/// Default timeout when no config is provided (in seconds).
+const DEFAULT_MEMORY_GATE_TIMEOUT_S: u64 = 120;
 
-/// Polling interval inside the memory gate retry loop (in seconds).
-///
-/// 5 seconds balances responsiveness (resume quickly after memory frees) against
-/// the cost of `sysinfo::System::refresh_memory()` calls.
-const MEMORY_GATE_POLL_S: u64 = 5;
+/// Default polling interval when no config is provided (in seconds).
+const DEFAULT_MEMORY_GATE_POLL_S: u64 = 5;
 
 /// Assumed memory budget per concurrent job slot (in MB) for auto-tuning.
 ///
@@ -231,9 +221,8 @@ pub struct OperationalCounters {
 pub struct FileResultEntry {
     /// Basename of the file (matches the corresponding `FileStatus::filename`).
     pub filename: FileName,
-    /// MIME type of the result content (e.g. `"text/plain"` for CHAT output).
-    /// May be empty for errored files.
-    pub content_type: String,
+    /// Content discriminator for the result file.
+    pub content_type: ContentType,
     /// Error message if processing failed for this file; `None` on success.
     pub error: Option<String>,
 }
@@ -257,7 +246,7 @@ pub struct JobDetail {
     pub paths_mode: bool,
     /// Server-local directory containing staged result files.  Empty in paths
     /// mode.
-    pub staging_dir: String,
+    pub staging_dir: PathBuf,
     /// Per-file result entries for files that have reached a terminal state.
     pub results: Vec<FileResultEntry>,
     /// Current status of every file in the job, for returning alongside results.
@@ -376,6 +365,9 @@ fn auto_max_concurrent_from(available_mb: u64, by_cpu: usize) -> usize {
 /// new memory allocation is needed. This prevents the deadlock where idle
 /// workers consume all RAM yet are the exact workers the new job needs.
 ///
+/// The `config` parameter supplies tunable timeout/poll/warning thresholds
+/// from `ServerConfig`. When `None`, built-in defaults are used.
+///
 /// Returns available memory in MB, or `Err(ServerError::MemoryPressure)` if
 /// memory stays critically low past the timeout.
 pub(crate) async fn memory_gate(
@@ -384,7 +376,18 @@ pub(crate) async fn memory_gate(
     command: Option<&CommandName>,
     lang: Option<&LanguageCode3>,
     critical_mb: u64,
+    config: Option<&ServerConfig>,
 ) -> Result<Option<u64>, ServerError> {
+    let timeout_s = config
+        .map(|c| c.memory_gate_timeout_s)
+        .unwrap_or(DEFAULT_MEMORY_GATE_TIMEOUT_S);
+    let poll_s = config
+        .map(|c| c.memory_gate_poll_s)
+        .unwrap_or(DEFAULT_MEMORY_GATE_POLL_S);
+    let warning_mb = config
+        .map(|c| c.memory_warning_mb.0)
+        .unwrap_or(DEFAULT_MEMORY_WARNING_MB);
+
     // Gate disabled when threshold is 0.
     if critical_mb == 0 {
         return Ok(available_memory_mb());
@@ -410,24 +413,31 @@ pub(crate) async fn memory_gate(
     };
 
     if avail >= critical_mb {
-        if avail < MEMORY_WARNING_MB {
+        if avail < warning_mb {
             warn!(available_mb = avail, context = context, "Memory pressure");
         }
         return Ok(Some(avail));
     }
 
+    // If timeout_s is 0, reject immediately without polling.
+    if timeout_s == 0 {
+        return Err(ServerError::MemoryPressure(format!(
+            "Insufficient memory ({avail} MB available, need {critical_mb} MB). {context}"
+        )));
+    }
+
     warn!(
         available_mb = avail,
         context = context,
-        timeout_s = MEMORY_GATE_TIMEOUT_S,
+        timeout_s = timeout_s,
         "Memory critically low, waiting for recovery"
     );
 
     let deadline =
-        tokio::time::Instant::now() + tokio::time::Duration::from_secs(MEMORY_GATE_TIMEOUT_S);
+        tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_s);
 
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(MEMORY_GATE_POLL_S)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(poll_s)).await;
         let current = available_memory_mb();
         match current {
             Some(a) if a >= critical_mb => {

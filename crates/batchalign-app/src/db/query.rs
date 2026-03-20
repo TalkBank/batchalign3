@@ -215,15 +215,7 @@ impl TryFrom<AttemptRow> for AttemptRecord {
 fn default_options_for_command(command: &CommandName) -> CommandOptions {
     use crate::options::*;
     match command.as_ref() {
-        "align" => CommandOptions::Align(AlignOptions {
-            common: CommonOptions::default(),
-            fa_engine: "wav2vec_fa".into(),
-            utr_engine: None,
-            utr_overlap_strategy: UtrOverlapStrategy::default(),
-            pauses: false,
-            wor: true.into(),
-            merge_abbrev: false.into(),
-        }),
+        "align" => CommandOptions::Align(AlignOptions::default()),
         "transcribe" => CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
             asr_engine: "rev".into(),

@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::api::LanguageCode3;
+use crate::api::{DurationMs, LanguageCode3};
 use batchalign_chat_ops::CacheTaskName;
 use batchalign_chat_ops::fa::{AudioIdentity, FaEngineType, FaTimingMode};
 use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, MwtDict, TokenizationMode};
@@ -187,7 +187,7 @@ pub struct AudioContext<'a> {
     /// Content-based identity for cache keying (hash of audio content).
     pub audio_identity: &'a AudioIdentity,
     /// Total duration of the audio file in milliseconds, if known.
-    pub total_audio_ms: Option<u64>,
+    pub total_audio_ms: Option<DurationMs>,
 }
 
 /// Forced alignment processing parameters.
@@ -199,7 +199,7 @@ pub struct FaParams {
     /// How to handle pause timing (`Continuous` vs `WithPauses`).
     pub timing_mode: FaTimingMode,
     /// Maximum FA group duration in milliseconds.
-    pub max_group_ms: u64,
+    pub max_group_ms: DurationMs,
     /// Which FA engine to use (`WhisperFa` or `Wave2Vec`).
     pub engine: FaEngineType,
     /// Cache lookup policy.

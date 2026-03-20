@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use talkbank_model::Span;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{
     ChatFile, DependentTier, Line, NonEmptyString, UserDefinedDependentTier,
 };
@@ -27,7 +27,7 @@ use crate::extract;
 /// Unlike morphosyntax/translate where each item is one utterance,
 /// each `CorefBatchItem` contains ALL sentences from one file because
 /// coreference resolution needs cross-sentence context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CorefBatchItem {
     /// List of sentences, each a list of words.
     pub sentences: Vec<Vec<String>>,
@@ -37,7 +37,7 @@ pub struct CorefBatchItem {
 ///
 /// Used for injection into `%xcoref` tiers and for backwards-compatible
 /// wire format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CorefAnnotation {
     /// Index into the `sentences` array of the corresponding `CorefBatchItem`.
     pub sentence_idx: usize,
@@ -72,7 +72,7 @@ pub struct CorefResponse {
 /// | false    | true   | `N)`     |
 /// | true     | true   | `(N)`    |
 /// | false    | false  | `N`      |
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ChainRef {
     /// Chain identifier (0-based, assigned by Stanza).
     pub chain_id: usize,
@@ -186,7 +186,7 @@ pub fn collect_coref_payloads(chat_file: &ChatFile) -> (CorefBatchItem, Vec<usiz
         let mut words = Vec::new();
         extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
 
