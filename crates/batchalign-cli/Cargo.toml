@@ -10,6 +10,10 @@ repository.workspace = true
 name = "batchalign3"
 path = "src/main.rs"
 
+[features]
+default = ["embed-dashboard"]
+embed-dashboard = ["batchalign-app/embed-dashboard"]
+
 [dependencies]
 batchalign-app = { workspace = true }
 batchalign-chat-ops = { workspace = true }

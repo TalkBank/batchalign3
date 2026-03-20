@@ -28,7 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Shared batchalign crates
 batchalign-chat-ops = { path = "../crates/batchalign-chat-ops" }
 batchalign-revai = { path = "../crates/batchalign-revai" }
-batchalign-cli = { path = "../crates/batchalign-cli" }
+batchalign-cli = { path = "../crates/batchalign-cli", default-features = false }
 batchalign-app = { path = "../crates/batchalign-app" }
 
 # CLI runtime

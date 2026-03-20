@@ -6,6 +6,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Embed the React dashboard (frontend/dist/) into the binary at compile time.
+# Requires `make build-dashboard` first. Without this feature, the dashboard is
+# served from $BATCHALIGN_DASHBOARD_DIR or ~/.batchalign3/dashboard/ only.
+embed-dashboard = ["dep:include_dir"]
+
 [dependencies]
 batchalign-chat-ops = { workspace = true }
 batchalign-revai = { workspace = true }
@@ -34,7 +41,7 @@ async-trait = { workspace = true }
 blake3 = { workspace = true }
 moka = { workspace = true }
 fs2 = { workspace = true }
-include_dir = { workspace = true }
+include_dir = { workspace = true, optional = true }
 tempfile = "3"
 
 [dev-dependencies]

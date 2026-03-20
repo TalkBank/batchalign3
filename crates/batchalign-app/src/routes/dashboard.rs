@@ -12,16 +12,26 @@
 use std::path::PathBuf;
 
 use axum::Router;
+#[cfg(feature = "embed-dashboard")]
 use axum::extract::Path;
+#[cfg(feature = "embed-dashboard")]
 use axum::http::{StatusCode, header};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{Html, Redirect};
+#[cfg(feature = "embed-dashboard")]
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+#[cfg(feature = "embed-dashboard")]
 use include_dir::{Dir, include_dir};
 use tower_http::services::ServeDir;
 
 use crate::config::RuntimeLayout;
 
 /// Dashboard SPA files embedded at compile time from `frontend/dist/`.
+///
+/// Only available when built with `--features embed-dashboard` (requires
+/// `make build-dashboard` first). Without this feature, the dashboard is
+/// served from `$BATCHALIGN_DASHBOARD_DIR` or `~/.batchalign3/dashboard/`.
+#[cfg(feature = "embed-dashboard")]
 static EMBEDDED_DASHBOARD: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../frontend/dist");
 
 /// Find an on-disk dashboard directory, if one exists.
@@ -52,6 +62,7 @@ pub(crate) fn find_dashboard_dir_for(
 }
 
 /// Infer MIME type from file extension.
+#[cfg(feature = "embed-dashboard")]
 fn mime_for_path(path: &str) -> &'static str {
     if path.ends_with(".html") {
         "text/html; charset=utf-8"
@@ -80,6 +91,7 @@ fn mime_for_path(path: &str) -> &'static str {
 ///
 /// Falls back to `index.html` for SPA client-side routing (any path that
 /// doesn't match a real embedded file gets the SPA shell).
+#[cfg(feature = "embed-dashboard")]
 fn serve_embedded(path: &str) -> Response {
     // Try exact file first
     if let Some(file) = EMBEDDED_DASHBOARD.get_file(path) {
@@ -110,16 +122,19 @@ fn serve_embedded(path: &str) -> Response {
 }
 
 /// Handler for `/dashboard` (no trailing path).
+#[cfg(feature = "embed-dashboard")]
 async fn embedded_dashboard_root() -> Response {
     serve_embedded("index.html")
 }
 
 /// Handler for `/dashboard/{rest}` — SPA catch-all with embedded files.
+#[cfg(feature = "embed-dashboard")]
 async fn embedded_dashboard_catchall(Path(rest): Path<String>) -> Response {
     serve_embedded(&rest)
 }
 
 /// Handler for `/assets/{rest}` — serves JS/CSS bundles from embedded files.
+#[cfg(feature = "embed-dashboard")]
 async fn embedded_assets(Path(rest): Path<String>) -> Response {
     let path = format!("assets/{rest}");
     if let Some(file) = EMBEDDED_DASHBOARD.get_file(&path) {
@@ -156,13 +171,45 @@ where
             .nest_service("/assets", assets_dir)
             .nest_service("/dashboard", serve_dir)
     } else {
-        // No on-disk dashboard — serve from embedded binary assets
-        Router::new()
-            .route("/", get(root_redirect))
-            .route("/dashboard", get(embedded_dashboard_root))
-            .route("/dashboard/{*rest}", get(embedded_dashboard_catchall))
-            .route("/assets/{*rest}", get(embedded_assets))
+        router_without_disk_dashboard()
     }
+}
+
+/// Dashboard router when no on-disk directory is available.
+///
+/// With `embed-dashboard`: serves from the binary-embedded `frontend/dist/`.
+/// Without: returns a simple HTML message directing the user to build or install it.
+#[cfg(feature = "embed-dashboard")]
+fn router_without_disk_dashboard<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/", get(root_redirect))
+        .route("/dashboard", get(embedded_dashboard_root))
+        .route("/dashboard/{*rest}", get(embedded_dashboard_catchall))
+        .route("/assets/{*rest}", get(embedded_assets))
+}
+
+#[cfg(not(feature = "embed-dashboard"))]
+fn router_without_disk_dashboard<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    async fn no_dashboard() -> Html<&'static str> {
+        Html(
+            "<!doctype html><html><body>\
+             <h1>Dashboard not available</h1>\
+             <p>Build it with <code>make build-dashboard</code>, \
+             or set <code>BATCHALIGN_DASHBOARD_DIR</code>.</p>\
+             </body></html>",
+        )
+    }
+
+    Router::new()
+        .route("/", get(root_redirect))
+        .route("/dashboard", get(no_dashboard))
+        .route("/dashboard/{*rest}", get(no_dashboard))
 }
 
 /// Build the dashboard router, auto-detecting the SPA asset directory.
@@ -263,6 +310,7 @@ mod tests {
         handle.abort();
     }
 
+    #[cfg(feature = "embed-dashboard")]
     #[tokio::test]
     async fn embedded_dashboard_serves_index() {
         // Force embedded mode by passing None (no on-disk dir)
@@ -285,6 +333,7 @@ mod tests {
         handle.abort();
     }
 
+    #[cfg(feature = "embed-dashboard")]
     #[tokio::test]
     async fn embedded_dashboard_spa_fallback() {
         let app = router_with_dashboard_dir::<()>(None);
@@ -304,6 +353,7 @@ mod tests {
         handle.abort();
     }
 
+    #[cfg(feature = "embed-dashboard")]
     #[tokio::test]
     async fn embedded_assets_served_with_cache_headers() {
         let app = router_with_dashboard_dir::<()>(None);
