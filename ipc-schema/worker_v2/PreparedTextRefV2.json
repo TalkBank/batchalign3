@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PreparedTextRefV2",
+  "description": "File-backed prepared text artifact.",
+  "type": "object",
+  "required": [
+    "byte_len",
+    "byte_offset",
+    "encoding",
+    "id",
+    "path"
+  ],
+  "properties": {
+    "byte_len": {
+      "description": "Byte length inside the artifact file.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "byte_offset": {
+      "description": "Byte offset inside the artifact file.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "encoding": {
+      "description": "Encoding used by the file content.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PreparedTextEncodingV2"
+        }
+      ]
+    },
+    "id": {
+      "description": "Stable artifact id referenced by request payloads.",
+      "type": "string"
+    },
+    "path": {
+      "description": "Filesystem path to the prepared artifact.",
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "PreparedTextEncodingV2": {
+      "description": "Encoding used for prepared text artifacts.",
+      "oneOf": [
+        {
+          "description": "UTF-8 JSON text stored on disk.",
+          "type": "string",
+          "enum": [
+            "utf8_json"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-.PHONY: build build-rust build-python build-dashboard sync test test-rust test-python lint clean ci-local install-hooks
+.PHONY: build build-rust build-python build-dashboard sync test test-rust test-python lint clean ci-local install-hooks generate-ipc-types check-ipc-drift
 
 # Full dev build: dashboard (embedded in binary) + PyO3 + Rust CLI (debug).
 # Dashboard must be built first — Rust compilation embeds frontend/dist/ into the binary.
@@ -38,6 +38,15 @@ lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 	uv run mypy
 
+# Regenerate Python Pydantic models from Rust IPC types via JSON Schema.
+# Run after changing any Rust struct/enum with JsonSchema that crosses the Python boundary.
+generate-ipc-types:
+	bash scripts/generate_ipc_types.sh
+
+# Check that Rust IPC schemas are up to date. Exits non-zero on drift.
+check-ipc-drift:
+	bash scripts/check_ipc_type_drift.sh
+
 # Fast local CI: checks that mirror the CI pipeline (no tests).
 ci-local:
 	@echo "==> fmt check"
@@ -48,6 +57,8 @@ ci-local:
 	cargo check --workspace
 	@echo "==> mypy (strict)"
 	uv run mypy
+	@echo "==> IPC schema drift"
+	bash scripts/check_ipc_type_drift.sh
 	@echo "✓ ci-local passed"
 
 # Install git hooks (pre-push).

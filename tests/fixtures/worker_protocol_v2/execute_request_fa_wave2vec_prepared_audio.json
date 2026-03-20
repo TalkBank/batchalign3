@@ -3,13 +3,11 @@
   "task": "forced_alignment",
   "payload": {
     "kind": "forced_alignment",
-    "data": {
-      "backend": "wave2vec",
-      "payload_ref_id": "inline-ref-0003",
-      "audio_ref_id": "audio-ref-0003",
-      "text_mode": "space_joined",
-      "pauses": false
-    }
+    "backend": "wave2vec",
+    "payload_ref_id": "inline-ref-0003",
+    "audio_ref_id": "audio-ref-0003",
+    "text_mode": "space_joined",
+    "pauses": false
   },
   "attachments": [
     {

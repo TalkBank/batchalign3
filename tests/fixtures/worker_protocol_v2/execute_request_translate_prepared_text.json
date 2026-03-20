@@ -3,12 +3,10 @@
   "task": "translate",
   "payload": {
     "kind": "translate",
-    "data": {
-      "source_lang": "eng",
-      "target_lang": "spa",
-      "payload_ref_id": "text-ref-0003",
-      "item_count": 2
-    }
+    "source_lang": "eng",
+    "target_lang": "spa",
+    "payload_ref_id": "text-ref-0003",
+    "item_count": 2
   },
   "attachments": [
     {

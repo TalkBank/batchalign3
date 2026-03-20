@@ -22,6 +22,16 @@ expression: sub
     "lazy_audio": true,
     "fa_engine": "wav2vec_fa",
     "utr_overlap_strategy": "auto",
+    "utr_two_pass": {
+      "ca_markers": "enabled",
+      "max_exclusion_density": 0.3,
+      "tight_buffer_ms": 500,
+      "match_mode": {
+        "fuzzy": {
+          "threshold": 0.85
+        }
+      }
+    },
     "pauses": true,
     "wor": true,
     "merge_abbrev": false

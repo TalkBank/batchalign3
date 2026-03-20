@@ -3,11 +3,9 @@
   "task": "coref",
   "payload": {
     "kind": "coref",
-    "data": {
-      "lang": "eng",
-      "payload_ref_id": "text-ref-0006",
-      "item_count": 2
-    }
+    "lang": "eng",
+    "payload_ref_id": "text-ref-0006",
+    "item_count": 2
   },
   "attachments": [
     {

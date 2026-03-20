@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HelloResponseV2",
+  "description": "Initial V2 handshake response sent by Python.",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "runtime",
+    "worker_pid"
+  ],
+  "properties": {
+    "protocol_version": {
+      "description": "Agreed protocol version.",
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0.0
+    },
+    "runtime": {
+      "description": "Runtime metadata needed by the pool.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkerRuntimeInfoV2"
+        }
+      ]
+    },
+    "worker_pid": {
+      "description": "OS process id of the worker.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "definitions": {
+    "WorkerRuntimeInfoV2": {
+      "description": "Runtime information returned during the V2 handshake.",
+      "type": "object",
+      "required": [
+        "free_threaded",
+        "python_version"
+      ],
+      "properties": {
+        "free_threaded": {
+          "description": "Whether the runtime is free-threaded.",
+          "type": "boolean"
+        },
+        "python_version": {
+          "description": "Python runtime version used by the worker.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

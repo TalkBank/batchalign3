@@ -5,7 +5,7 @@
 //! Rust and Python must agree on.
 
 use batchalign_app::api::*;
-use batchalign_app::config::{MemoryMb, ServerConfig};
+use batchalign_app::config::ServerConfig;
 use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 use std::collections::BTreeMap;
 
@@ -64,9 +64,11 @@ fn snapshot_job_submission_with_files() {
             fa_engine: "wav2vec_fa".into(),
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: true,
             wor: true.into(),
             merge_abbrev: false.into(),
+            media_dir: None,
         }),
         paths_mode: false,
         source_paths: vec![],
@@ -257,6 +259,10 @@ fn snapshot_health_response() {
         build_hash: "0.10.0-abc1234-1700000000".into(),
         node_id: NodeId::default(),
         warmup_status: batchalign_app::worker::pool::WarmupStatus::Complete,
+        system_memory_total_mb: MemoryMb(65536),
+        system_memory_available_mb: MemoryMb(32768),
+        system_memory_used_mb: MemoryMb(32768),
+        memory_gate_threshold_mb: MemoryMb(2048),
     };
     insta::assert_json_snapshot!("health_response", health);
 }
@@ -292,6 +298,7 @@ fn snapshot_server_config_full() {
         memory_gate_mb: MemoryMb(2048),
         worker_idle_timeout_s: 300,
         worker_health_interval_s: 15,
+        ..Default::default()
     };
     insta::assert_json_snapshot!("server_config_full", cfg);
 }

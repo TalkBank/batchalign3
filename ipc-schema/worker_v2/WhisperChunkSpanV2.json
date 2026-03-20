@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WhisperChunkSpanV2",
+  "description": "One raw Whisper chunk span returned by Python.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
+  "type": "object",
+  "required": [
+    "end_s",
+    "start_s",
+    "text"
+  ],
+  "properties": {
+    "end_s": {
+      "description": "End timestamp in seconds.",
+      "type": "number",
+      "format": "double"
+    },
+    "start_s": {
+      "description": "Start timestamp in seconds.",
+      "type": "number",
+      "format": "double"
+    },
+    "text": {
+      "description": "Surface text for the chunk.",
+      "type": "string"
+    }
+  }
+}

@@ -3,16 +3,12 @@
   "task": "asr",
   "payload": {
     "kind": "asr",
-    "data": {
-      "lang": "yue",
-      "backend": "hk_tencent",
-      "input": {
-        "kind": "provider_media",
-        "data": {
-          "media_path": "/tmp/example.wav",
-          "num_speakers": 2
-        }
-      }
+    "lang": "yue",
+    "backend": "hk_tencent",
+    "input": {
+      "kind": "provider_media",
+      "media_path": "/tmp/example.wav",
+      "num_speakers": 2
     }
   },
   "attachments": []

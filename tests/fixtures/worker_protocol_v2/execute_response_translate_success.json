@@ -5,16 +5,14 @@
   },
   "result": {
     "kind": "translation_result",
-    "data": {
-      "items": [
-        {
-          "raw_translation": "hola mundo"
-        },
-        {
-          "error": "Translation failed: rate limited"
-        }
-      ]
-    }
+    "items": [
+      {
+        "raw_translation": "hola mundo"
+      },
+      {
+        "error": "Translation failed: rate limited"
+      }
+    ]
   },
   "elapsed_s": 0.12
 }

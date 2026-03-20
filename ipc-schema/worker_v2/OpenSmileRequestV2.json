@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenSmileRequestV2",
+  "description": "V2 openSMILE request payload.",
+  "type": "object",
+  "required": [
+    "audio_ref_id",
+    "feature_level",
+    "feature_set"
+  ],
+  "properties": {
+    "audio_ref_id": {
+      "description": "Reference to the prepared audio attachment.",
+      "type": "string"
+    },
+    "feature_level": {
+      "description": "Requested openSMILE feature-level name.",
+      "type": "string"
+    },
+    "feature_set": {
+      "description": "Requested openSMILE feature-set name.",
+      "type": "string"
+    }
+  }
+}

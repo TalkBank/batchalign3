@@ -3,16 +3,12 @@
   "task": "speaker",
   "payload": {
     "kind": "speaker",
-    "data": {
-      "backend": "nemo",
-      "input": {
-        "kind": "prepared_audio",
-        "data": {
-          "audio_ref_id": "audio-ref-speaker-0002"
-        }
-      },
-      "expected_speakers": 3
-    }
+    "backend": "nemo",
+    "input": {
+      "kind": "prepared_audio",
+      "audio_ref_id": "audio-ref-speaker-0002"
+    },
+    "expected_speakers": 3
   },
   "attachments": [
     {

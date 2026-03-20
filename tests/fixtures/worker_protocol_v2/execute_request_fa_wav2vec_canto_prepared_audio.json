@@ -3,13 +3,11 @@
   "task": "forced_alignment",
   "payload": {
     "kind": "forced_alignment",
-    "data": {
-      "backend": "wav2vec_canto",
-      "payload_ref_id": "inline-ref-0004",
-      "audio_ref_id": "audio-ref-0004",
-      "text_mode": "char_joined",
-      "pauses": false
-    }
+    "backend": "wav2vec_canto",
+    "payload_ref_id": "inline-ref-0004",
+    "audio_ref_id": "audio-ref-0004",
+    "text_mode": "char_joined",
+    "pauses": false
   },
   "attachments": [
     {
@@ -17,8 +15,8 @@
       "id": "inline-ref-0004",
       "value": {
         "words": [
-          "天",
-          "氣"
+          "\u5929",
+          "\u6c23"
         ],
         "word_ids": [
           "u0w0",

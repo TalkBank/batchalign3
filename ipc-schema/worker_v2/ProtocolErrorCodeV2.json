@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProtocolErrorCodeV2",
+  "description": "Error category for protocol-level failures.",
+  "oneOf": [
+    {
+      "description": "Worker/runtime does not understand the requested protocol version.",
+      "type": "string",
+      "enum": [
+        "unsupported_protocol"
+      ]
+    },
+    {
+      "description": "Request payload shape was invalid for the task.",
+      "type": "string",
+      "enum": [
+        "invalid_payload"
+      ]
+    },
+    {
+      "description": "Required attachment was not supplied.",
+      "type": "string",
+      "enum": [
+        "missing_attachment"
+      ]
+    },
+    {
+      "description": "Attachment existed logically but could not be read.",
+      "type": "string",
+      "enum": [
+        "attachment_unreadable"
+      ]
+    },
+    {
+      "description": "Model or SDK runtime for the task is unavailable.",
+      "type": "string",
+      "enum": [
+        "model_unavailable"
+      ]
+    },
+    {
+      "description": "Runtime failed while executing the task.",
+      "type": "string",
+      "enum": [
+        "runtime_failure"
+      ]
+    }
+  ]
+}

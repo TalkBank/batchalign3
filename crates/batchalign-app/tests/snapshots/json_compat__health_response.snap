@@ -38,5 +38,9 @@ expression: health
   "forced_terminal_errors": 0,
   "memory_gate_aborts": 0,
   "build_hash": "0.10.0-abc1234-1700000000",
-  "warmup_status": "complete"
+  "warmup_status": "complete",
+  "system_memory_total_mb": 65536,
+  "system_memory_available_mb": 32768,
+  "system_memory_used_mb": 32768,
+  "memory_gate_threshold_mb": 2048
 }

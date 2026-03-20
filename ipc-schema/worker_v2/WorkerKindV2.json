@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WorkerKindV2",
+  "description": "Worker role selected during the protocol handshake.",
+  "oneOf": [
+    {
+      "description": "Stateless inference worker process.",
+      "type": "string",
+      "enum": [
+        "infer"
+      ]
+    }
+  ]
+}

@@ -3,15 +3,11 @@
   "task": "asr",
   "payload": {
     "kind": "asr",
-    "data": {
-      "lang": "eng",
-      "backend": "local_whisper",
-      "input": {
-        "kind": "prepared_audio",
-        "data": {
-          "audio_ref_id": "audio-ref-0001"
-        }
-      }
+    "lang": "eng",
+    "backend": "local_whisper",
+    "input": {
+      "kind": "prepared_audio",
+      "audio_ref_id": "audio-ref-0001"
     }
   },
   "attachments": [

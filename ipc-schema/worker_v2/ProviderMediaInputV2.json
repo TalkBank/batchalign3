@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProviderMediaInputV2",
+  "description": "Temporary cloud-provider media input retained during migration.",
+  "type": "object",
+  "required": [
+    "media_path",
+    "num_speakers"
+  ],
+  "properties": {
+    "media_path": {
+      "description": "Media file path readable by the worker host.",
+      "type": "string"
+    },
+    "num_speakers": {
+      "description": "Expected number of speakers for diarization-aware providers.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  }
+}

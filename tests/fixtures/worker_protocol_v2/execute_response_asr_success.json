@@ -5,22 +5,20 @@
   },
   "result": {
     "kind": "whisper_chunk_result",
-    "data": {
-      "lang": "eng",
-      "text": "hello world",
-      "chunks": [
-        {
-          "text": "hello",
-          "start_s": 0.0,
-          "end_s": 0.52
-        },
-        {
-          "text": "world",
-          "start_s": 0.52,
-          "end_s": 1.03
-        }
-      ]
-    }
+    "lang": "eng",
+    "text": "hello world",
+    "chunks": [
+      {
+        "text": "hello",
+        "start_s": 0.0,
+        "end_s": 0.52
+      },
+      {
+        "text": "world",
+        "start_s": 0.52,
+        "end_s": 1.03
+      }
+    ]
   },
   "elapsed_s": 0.84
 }

@@ -5,18 +5,16 @@
   },
   "result": {
     "kind": "utseg_result",
-    "data": {
-      "items": [
-        {
-          "trees": [
-            "(ROOT (S hello world))"
-          ]
-        },
-        {
-          "error": "Invalid batch item"
-        }
-      ]
-    }
+    "items": [
+      {
+        "trees": [
+          "(ROOT (S hello world))"
+        ]
+      },
+      {
+        "error": "Invalid batch item"
+      }
+    ]
   },
   "elapsed_s": 0.18
 }

@@ -21,7 +21,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, FiniteFloat, StringConstraints, model_validator
 
-from batchalign.inference._domain_types import LanguageCode, NumSpeakers
+from batchalign.inference._domain_types import LanguageCode, NumSpeakers, SpeakerId
 from batchalign.worker._types import WorkerJSONValue
 
 WorkerRequestIdV2: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
@@ -210,63 +210,52 @@ ArtifactRefV2: TypeAlias = Annotated[
 
 
 class PreparedAudioInputV2(BaseModel):
-    """Reference to a prepared audio attachment."""
+    """Reference to a prepared audio attachment (internally tagged)."""
 
+    kind: Literal["prepared_audio"] = "prepared_audio"
     audio_ref_id: WorkerArtifactIdV2
 
 
 class ProviderMediaInputV2(BaseModel):
-    """Temporary cloud-provider media input retained during migration."""
+    """Temporary cloud-provider media input (internally tagged)."""
 
+    kind: Literal["provider_media"] = "provider_media"
     media_path: WorkerArtifactPathV2
     num_speakers: NumSpeakers
 
 
 class SubmittedJobInputV2(BaseModel):
-    """Previously submitted provider job id."""
+    """Previously submitted provider job id (internally tagged)."""
 
+    kind: Literal["submitted_job"] = "submitted_job"
     provider_job_id: WorkerArtifactIdV2
 
 
-class PreparedAudioAsrInputV2(BaseModel):
-    """ASR request input that references prepared audio."""
-
-    kind: Literal["prepared_audio"] = "prepared_audio"
-    data: PreparedAudioInputV2
-
-
-class ProviderMediaAsrInputV2(BaseModel):
-    """ASR request input that keeps a provider-local media path."""
-
-    kind: Literal["provider_media"] = "provider_media"
-    data: ProviderMediaInputV2
-
-
-class SubmittedJobAsrInputV2(BaseModel):
-    """ASR request input that polls an existing provider job."""
-
-    kind: Literal["submitted_job"] = "submitted_job"
-    data: SubmittedJobInputV2
-
+# Backward-compatible aliases for ASR input wrappers.
+PreparedAudioAsrInputV2 = PreparedAudioInputV2
+ProviderMediaAsrInputV2 = ProviderMediaInputV2
+SubmittedJobAsrInputV2 = SubmittedJobInputV2
 
 AsrInputV2: TypeAlias = Annotated[
-    PreparedAudioAsrInputV2 | ProviderMediaAsrInputV2 | SubmittedJobAsrInputV2,
+    PreparedAudioInputV2 | ProviderMediaInputV2 | SubmittedJobInputV2,
     Field(discriminator="kind"),
 ]
-"""Backend-specific ASR input transport."""
+"""Backend-specific ASR input transport (internally tagged on ``kind``)."""
 
 
 class AsrRequestV2(BaseModel):
-    """V2 ASR request payload."""
+    """V2 ASR request payload (internally tagged as ``"asr"``)."""
 
+    kind: Literal["asr"] = "asr"
     lang: LanguageCode
     backend: AsrBackendV2
     input: AsrInputV2
 
 
 class ForcedAlignmentRequestV2(BaseModel):
-    """V2 forced-alignment request payload."""
+    """V2 forced-alignment request payload (internally tagged as ``"forced_alignment"``)."""
 
+    kind: Literal["forced_alignment"] = "forced_alignment"
     backend: FaBackendV2
     payload_ref_id: WorkerArtifactIdV2
     audio_ref_id: WorkerArtifactIdV2
@@ -275,24 +264,27 @@ class ForcedAlignmentRequestV2(BaseModel):
 
 
 class MorphosyntaxRequestV2(BaseModel):
-    """V2 morphosyntax request payload."""
+    """V2 morphosyntax request payload (internally tagged as ``"morphosyntax"``)."""
 
+    kind: Literal["morphosyntax"] = "morphosyntax"
     lang: LanguageCode
     payload_ref_id: WorkerArtifactIdV2
     item_count: int = Field(ge=0)
 
 
 class UtsegRequestV2(BaseModel):
-    """V2 utterance-segmentation request payload."""
+    """V2 utterance-segmentation request payload (internally tagged as ``"utseg"``)."""
 
+    kind: Literal["utseg"] = "utseg"
     lang: LanguageCode
     payload_ref_id: WorkerArtifactIdV2
     item_count: int = Field(ge=0)
 
 
 class TranslateRequestV2(BaseModel):
-    """V2 translation request payload."""
+    """V2 translation request payload (internally tagged as ``"translate"``)."""
 
+    kind: Literal["translate"] = "translate"
     source_lang: LanguageCode
     target_lang: LanguageCode
     payload_ref_id: WorkerArtifactIdV2
@@ -300,129 +292,82 @@ class TranslateRequestV2(BaseModel):
 
 
 class CorefRequestV2(BaseModel):
-    """V2 coreference request payload."""
+    """V2 coreference request payload (internally tagged as ``"coref"``)."""
 
+    kind: Literal["coref"] = "coref"
     lang: LanguageCode
     payload_ref_id: WorkerArtifactIdV2
     item_count: int = Field(ge=0)
 
 
 class SpeakerRequestV2(BaseModel):
-    """V2 speaker diarization request payload."""
+    """V2 speaker diarization request payload (internally tagged as ``"speaker"``)."""
 
+    kind: Literal["speaker"] = "speaker"
     backend: SpeakerBackendV2
     input: "SpeakerInputV2"
     expected_speakers: NumSpeakers | None = None
 
 
 class OpenSmileRequestV2(BaseModel):
-    """V2 openSMILE request payload."""
+    """V2 openSMILE request payload (internally tagged as ``"opensmile"``)."""
 
+    kind: Literal["opensmile"] = "opensmile"
     audio_ref_id: WorkerArtifactIdV2
     feature_set: str = "eGeMAPSv02"
     feature_level: str = "functionals"
 
 
 class AvqiRequestV2(BaseModel):
-    """V2 AVQI request payload."""
+    """V2 AVQI request payload (internally tagged as ``"avqi"``)."""
 
+    kind: Literal["avqi"] = "avqi"
     cs_audio_ref_id: WorkerArtifactIdV2
     sv_audio_ref_id: WorkerArtifactIdV2
 
 
 class SpeakerPreparedAudioInputV2(BaseModel):
-    """Prepared-audio speaker input owned by Rust."""
+    """Prepared-audio speaker input owned by Rust (internally tagged)."""
 
+    kind: Literal["prepared_audio"] = "prepared_audio"
     audio_ref_id: WorkerArtifactIdV2
 
 
-class SpeakerPreparedAudioRefInputV2(BaseModel):
-    """Tagged wrapper for prepared-audio speaker requests."""
+# Backward-compatible alias.
+SpeakerPreparedAudioRefInputV2 = SpeakerPreparedAudioInputV2
 
-    kind: Literal["prepared_audio"] = "prepared_audio"
-    data: SpeakerPreparedAudioInputV2
-
-
-SpeakerInputV2 = SpeakerPreparedAudioRefInputV2
-"""Speaker input transport for the live V2 boundary."""
-
-
-class AsrTaskRequestV2(BaseModel):
-    """Tagged wrapper for an ASR execute payload."""
-
-    kind: Literal["asr"] = "asr"
-    data: AsrRequestV2
-
-
-class ForcedAlignmentTaskRequestV2(BaseModel):
-    """Tagged wrapper for a forced-alignment execute payload."""
-
-    kind: Literal["forced_alignment"] = "forced_alignment"
-    data: ForcedAlignmentRequestV2
-
-
-class MorphosyntaxTaskRequestV2(BaseModel):
-    """Tagged wrapper for a morphosyntax execute payload."""
-
-    kind: Literal["morphosyntax"] = "morphosyntax"
-    data: MorphosyntaxRequestV2
-
-
-class UtsegTaskRequestV2(BaseModel):
-    """Tagged wrapper for an utterance-segmentation execute payload."""
-
-    kind: Literal["utseg"] = "utseg"
-    data: UtsegRequestV2
-
-
-class TranslateTaskRequestV2(BaseModel):
-    """Tagged wrapper for a translation execute payload."""
-
-    kind: Literal["translate"] = "translate"
-    data: TranslateRequestV2
-
-
-class CorefTaskRequestV2(BaseModel):
-    """Tagged wrapper for a coreference execute payload."""
-
-    kind: Literal["coref"] = "coref"
-    data: CorefRequestV2
-
-
-class SpeakerTaskRequestV2(BaseModel):
-    """Tagged wrapper for a speaker execute payload."""
-
-    kind: Literal["speaker"] = "speaker"
-    data: SpeakerRequestV2
-
-
-class OpenSmileTaskRequestV2(BaseModel):
-    """Tagged wrapper for an openSMILE execute payload."""
-
-    kind: Literal["opensmile"] = "opensmile"
-    data: OpenSmileRequestV2
-
-
-class AvqiTaskRequestV2(BaseModel):
-    """Tagged wrapper for an AVQI execute payload."""
-
-    kind: Literal["avqi"] = "avqi"
-    data: AvqiRequestV2
-
-
-TaskRequestV2: TypeAlias = Annotated[
-    AsrTaskRequestV2
-    | ForcedAlignmentTaskRequestV2
-    | MorphosyntaxTaskRequestV2
-    | UtsegTaskRequestV2
-    | TranslateTaskRequestV2
-    | CorefTaskRequestV2
-    | SpeakerTaskRequestV2
-    | OpenSmileTaskRequestV2
-    | AvqiTaskRequestV2,
+SpeakerInputV2: TypeAlias = Annotated[
+    SpeakerPreparedAudioInputV2,
     Field(discriminator="kind"),
 ]
-"""Typed execute payload carried by one V2 request."""
+"""Speaker input transport (internally tagged on ``kind``)."""
+
+
+# Backward-compatible aliases: with internally tagged unions, the inner
+# request structs carry the ``kind`` field directly — no wrapper needed.
+AsrTaskRequestV2 = AsrRequestV2
+ForcedAlignmentTaskRequestV2 = ForcedAlignmentRequestV2
+MorphosyntaxTaskRequestV2 = MorphosyntaxRequestV2
+UtsegTaskRequestV2 = UtsegRequestV2
+TranslateTaskRequestV2 = TranslateRequestV2
+CorefTaskRequestV2 = CorefRequestV2
+SpeakerTaskRequestV2 = SpeakerRequestV2
+OpenSmileTaskRequestV2 = OpenSmileRequestV2
+AvqiTaskRequestV2 = AvqiRequestV2
+
+TaskRequestV2: TypeAlias = Annotated[
+    AsrRequestV2
+    | ForcedAlignmentRequestV2
+    | MorphosyntaxRequestV2
+    | UtsegRequestV2
+    | TranslateRequestV2
+    | CorefRequestV2
+    | SpeakerRequestV2
+    | OpenSmileRequestV2
+    | AvqiRequestV2,
+    Field(discriminator="kind"),
+]
+"""Typed execute request payload (internally tagged on ``kind``)."""
 
 
 class ExecuteRequestV2(BaseModel):
@@ -449,8 +394,9 @@ class WhisperChunkSpanV2(BaseModel):
 
 
 class WhisperChunkResultPayloadV2(BaseModel):
-    """Raw Whisper chunk output returned by Python."""
+    """Raw Whisper chunk output returned by Python (internally tagged)."""
 
+    kind: Literal["whisper_chunk_result"] = "whisper_chunk_result"
     lang: LanguageCode
     text: str
     chunks: list[WhisperChunkSpanV2]
@@ -482,13 +428,14 @@ class AsrElementV2(BaseModel):
 class AsrMonologueV2(BaseModel):
     """One speaker-attributed monologue returned by a provider backend."""
 
-    speaker: str
+    speaker: SpeakerId
     elements: list[AsrElementV2]
 
 
 class MonologueAsrResultPayloadV2(BaseModel):
-    """Provider-shaped ASR output returned as speaker monologues."""
+    """Provider-shaped ASR output returned as speaker monologues (internally tagged)."""
 
+    kind: Literal["monologue_asr_result"] = "monologue_asr_result"
     lang: LanguageCode
     monologues: list[AsrMonologueV2]
 
@@ -501,8 +448,9 @@ class WhisperTokenTimingV2(BaseModel):
 
 
 class WhisperTokenTimingResultPayloadV2(BaseModel):
-    """Raw Whisper forced-alignment token output."""
+    """Raw Whisper forced-alignment token output (internally tagged)."""
 
+    kind: Literal["whisper_token_timing_result"] = "whisper_token_timing_result"
     tokens: list[WhisperTokenTimingV2]
 
 
@@ -521,8 +469,9 @@ class IndexedWordTimingV2(BaseModel):
 
 
 class IndexedWordTimingResultPayloadV2(BaseModel):
-    """Forced-alignment indexed timing output."""
+    """Forced-alignment indexed timing output (internally tagged)."""
 
+    kind: Literal["indexed_word_timing_result"] = "indexed_word_timing_result"
     indexed_timings: list[IndexedWordTimingV2 | None]
 
 
@@ -534,8 +483,9 @@ class MorphosyntaxItemResultV2(BaseModel):
 
 
 class MorphosyntaxResultPayloadV2(BaseModel):
-    """Batched morphosyntax response payload."""
+    """Batched morphosyntax response payload (internally tagged)."""
 
+    kind: Literal["morphosyntax_result"] = "morphosyntax_result"
     items: list[MorphosyntaxItemResultV2]
 
 
@@ -547,8 +497,9 @@ class UtsegItemResultV2(BaseModel):
 
 
 class UtsegResultPayloadV2(BaseModel):
-    """Batched utterance-segmentation response payload."""
+    """Batched utterance-segmentation response payload (internally tagged)."""
 
+    kind: Literal["utseg_result"] = "utseg_result"
     items: list[UtsegItemResultV2]
 
 
@@ -560,8 +511,9 @@ class TranslationItemResultV2(BaseModel):
 
 
 class TranslationResultPayloadV2(BaseModel):
-    """Batched translation response payload."""
+    """Batched translation response payload (internally tagged)."""
 
+    kind: Literal["translation_result"] = "translation_result"
     items: list[TranslationItemResultV2]
 
 
@@ -588,8 +540,9 @@ class CorefItemResultV2(BaseModel):
 
 
 class CorefResultPayloadV2(BaseModel):
-    """Batched coreference response payload."""
+    """Batched coreference response payload (internally tagged)."""
 
+    kind: Literal["coref_result"] = "coref_result"
     items: list[CorefItemResultV2]
 
 
@@ -598,7 +551,7 @@ class SpeakerSegmentV2(BaseModel):
 
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
-    speaker: str
+    speaker: SpeakerId
 
     @model_validator(mode="after")
     def _validate_range(self) -> SpeakerSegmentV2:
@@ -608,14 +561,16 @@ class SpeakerSegmentV2(BaseModel):
 
 
 class SpeakerResultPayloadV2(BaseModel):
-    """Raw speaker diarization output returned by the model host."""
+    """Raw speaker diarization output returned by the model host (internally tagged)."""
 
+    kind: Literal["speaker_result"] = "speaker_result"
     segments: list[SpeakerSegmentV2]
 
 
 class OpenSmileResultPayloadV2(BaseModel):
-    """Raw openSMILE tabular output returned by the model host."""
+    """Raw openSMILE tabular output returned by the model host (internally tagged)."""
 
+    kind: Literal["opensmile_result"] = "opensmile_result"
     feature_set: str
     feature_level: str
     num_features: int = Field(ge=0)
@@ -627,8 +582,9 @@ class OpenSmileResultPayloadV2(BaseModel):
 
 
 class AvqiResultPayloadV2(BaseModel):
-    """Raw AVQI metrics returned by the model host."""
+    """Raw AVQI metrics returned by the model host (internally tagged)."""
 
+    kind: Literal["avqi_result"] = "avqi_result"
     avqi: FiniteFloat
     cpps: FiniteFloat
     hnr: FiniteFloat
@@ -642,98 +598,35 @@ class AvqiResultPayloadV2(BaseModel):
     error: str | None = None
 
 
-class WhisperChunkResultV2(BaseModel):
-    """Tagged wrapper for raw Whisper chunk output."""
-
-    kind: Literal["whisper_chunk_result"] = "whisper_chunk_result"
-    data: WhisperChunkResultPayloadV2
-
-
-class MonologueAsrResultV2(BaseModel):
-    """Tagged wrapper for provider-shaped speaker-monologue output."""
-
-    kind: Literal["monologue_asr_result"] = "monologue_asr_result"
-    data: MonologueAsrResultPayloadV2
-
-
-class WhisperTokenTimingResultV2(BaseModel):
-    """Tagged wrapper for raw Whisper FA token output."""
-
-    kind: Literal["whisper_token_timing_result"] = "whisper_token_timing_result"
-    data: WhisperTokenTimingResultPayloadV2
-
-
-class IndexedWordTimingResultV2(BaseModel):
-    """Tagged wrapper for indexed alignment output."""
-
-    kind: Literal["indexed_word_timing_result"] = "indexed_word_timing_result"
-    data: IndexedWordTimingResultPayloadV2
-
-
-class MorphosyntaxResultV2(BaseModel):
-    """Tagged wrapper for batched morphosyntax output."""
-
-    kind: Literal["morphosyntax_result"] = "morphosyntax_result"
-    data: MorphosyntaxResultPayloadV2
-
-
-class UtsegResultV2(BaseModel):
-    """Tagged wrapper for batched utterance-segmentation output."""
-
-    kind: Literal["utseg_result"] = "utseg_result"
-    data: UtsegResultPayloadV2
-
-
-class TranslationResultV2(BaseModel):
-    """Tagged wrapper for translation output."""
-
-    kind: Literal["translation_result"] = "translation_result"
-    data: TranslationResultPayloadV2
-
-
-class CorefResultV2(BaseModel):
-    """Tagged wrapper for batched coreference output."""
-
-    kind: Literal["coref_result"] = "coref_result"
-    data: CorefResultPayloadV2
-
-
-class SpeakerResultV2(BaseModel):
-    """Tagged wrapper for raw speaker diarization output."""
-
-    kind: Literal["speaker_result"] = "speaker_result"
-    data: SpeakerResultPayloadV2
-
-
-class OpenSmileResultV2(BaseModel):
-    """Tagged wrapper for raw openSMILE output."""
-
-    kind: Literal["opensmile_result"] = "opensmile_result"
-    data: OpenSmileResultPayloadV2
-
-
-class AvqiResultV2(BaseModel):
-    """Tagged wrapper for raw AVQI output."""
-
-    kind: Literal["avqi_result"] = "avqi_result"
-    data: AvqiResultPayloadV2
-
+# Backward-compatible aliases: with internally tagged unions, the payload
+# structs carry the ``kind`` field directly — no wrapper needed.
+WhisperChunkResultV2 = WhisperChunkResultPayloadV2
+MonologueAsrResultV2 = MonologueAsrResultPayloadV2
+WhisperTokenTimingResultV2 = WhisperTokenTimingResultPayloadV2
+IndexedWordTimingResultV2 = IndexedWordTimingResultPayloadV2
+MorphosyntaxResultV2 = MorphosyntaxResultPayloadV2
+UtsegResultV2 = UtsegResultPayloadV2
+TranslationResultV2 = TranslationResultPayloadV2
+CorefResultV2 = CorefResultPayloadV2
+SpeakerResultV2 = SpeakerResultPayloadV2
+OpenSmileResultV2 = OpenSmileResultPayloadV2
+AvqiResultV2 = AvqiResultPayloadV2
 
 TaskResultV2: TypeAlias = Annotated[
-    WhisperChunkResultV2
-    | MonologueAsrResultV2
-    | WhisperTokenTimingResultV2
-    | IndexedWordTimingResultV2
-    | MorphosyntaxResultV2
-    | UtsegResultV2
-    | TranslationResultV2
-    | CorefResultV2
-    | SpeakerResultV2
-    | OpenSmileResultV2
-    | AvqiResultV2,
+    WhisperChunkResultPayloadV2
+    | MonologueAsrResultPayloadV2
+    | WhisperTokenTimingResultPayloadV2
+    | IndexedWordTimingResultPayloadV2
+    | MorphosyntaxResultPayloadV2
+    | UtsegResultPayloadV2
+    | TranslationResultPayloadV2
+    | CorefResultPayloadV2
+    | SpeakerResultPayloadV2
+    | OpenSmileResultPayloadV2
+    | AvqiResultPayloadV2,
     Field(discriminator="kind"),
 ]
-"""Typed execute result payload."""
+"""Typed execute result payload (internally tagged on ``kind``)."""
 
 
 class ExecuteSuccessV2(BaseModel):

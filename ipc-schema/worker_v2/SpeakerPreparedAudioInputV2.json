@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SpeakerPreparedAudioInputV2",
+  "description": "Prepared-audio speaker input owned by Rust.",
+  "type": "object",
+  "required": [
+    "audio_ref_id"
+  ],
+  "properties": {
+    "audio_ref_id": {
+      "description": "Artifact id of the prepared mono PCM audio view.",
+      "type": "string"
+    }
+  }
+}

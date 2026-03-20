@@ -3,10 +3,8 @@
   "task": "avqi",
   "payload": {
     "kind": "avqi",
-    "data": {
-      "cs_audio_ref_id": "audio-ref-avqi-cs-0001",
-      "sv_audio_ref_id": "audio-ref-avqi-sv-0001"
-    }
+    "cs_audio_ref_id": "audio-ref-avqi-cs-0001",
+    "sv_audio_ref_id": "audio-ref-avqi-sv-0001"
   },
   "attachments": [
     {

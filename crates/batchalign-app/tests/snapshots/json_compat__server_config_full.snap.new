@@ -1,0 +1,42 @@
+---
+source: crates/batchalign-app/tests/json_compat.rs
+assertion_line: 303
+expression: cfg
+---
+{
+  "media_roots": [
+    "/data/media",
+    "/data/media2"
+  ],
+  "media_mappings": {
+    "aphasia-data": "/nfs/aphasia",
+    "childes-data": "/nfs/childes"
+  },
+  "default_lang": "spa",
+  "max_concurrent_jobs": 4,
+  "port": 9000,
+  "host": "0.0.0.0",
+  "max_workers_per_job": 2,
+  "job_ttl_days": 14,
+  "redis_url": "redis://net:6379/0",
+  "warmup_commands": [
+    "morphotag",
+    "align"
+  ],
+  "auto_daemon": true,
+  "memory_gate_mb": 2048,
+  "worker_idle_timeout_s": 300,
+  "worker_health_interval_s": 15,
+  "max_workers_per_key": 0,
+  "max_total_workers": 0,
+  "worker_ready_timeout_s": 300,
+  "max_body_bytes_mb": 100,
+  "memory_gate_timeout_s": 120,
+  "memory_gate_poll_s": 5,
+  "memory_warning_mb": 4096,
+  "gpu_thread_pool_size": 4,
+  "local_lease_ttl_s": 300,
+  "audio_task_timeout_s": 0,
+  "analysis_task_timeout_s": 0,
+  "worker_registry_path": ""
+}

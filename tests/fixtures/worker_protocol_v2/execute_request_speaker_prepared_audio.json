@@ -3,16 +3,12 @@
   "task": "speaker",
   "payload": {
     "kind": "speaker",
-    "data": {
-      "backend": "pyannote",
-      "input": {
-        "kind": "prepared_audio",
-        "data": {
-          "audio_ref_id": "audio-ref-speaker-0001"
-        }
-      },
-      "expected_speakers": 2
-    }
+    "backend": "pyannote",
+    "input": {
+      "kind": "prepared_audio",
+      "audio_ref_id": "audio-ref-speaker-0001"
+    },
+    "expected_speakers": 2
   },
   "attachments": [
     {

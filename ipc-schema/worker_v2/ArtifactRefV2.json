@@ -1,0 +1,174 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ArtifactRefV2",
+  "description": "Prepared artifact reference carried alongside one execute request.",
+  "oneOf": [
+    {
+      "description": "Prepared PCM audio view.",
+      "type": "object",
+      "required": [
+        "byte_len",
+        "byte_offset",
+        "channels",
+        "encoding",
+        "frame_count",
+        "id",
+        "kind",
+        "path",
+        "sample_rate_hz"
+      ],
+      "properties": {
+        "byte_len": {
+          "description": "Byte length inside the artifact file.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "byte_offset": {
+          "description": "Byte offset inside the artifact file.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "channels": {
+          "description": "Number of channels in the artifact view.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "encoding": {
+          "description": "PCM encoding for the prepared audio.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreparedAudioEncodingV2"
+            }
+          ]
+        },
+        "frame_count": {
+          "description": "Number of frames in the view.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "id": {
+          "description": "Stable artifact id referenced by request payloads.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "prepared_audio"
+          ]
+        },
+        "path": {
+          "description": "Filesystem path to the prepared artifact.",
+          "type": "string"
+        },
+        "sample_rate_hz": {
+          "description": "Sample rate in Hz.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    {
+      "description": "Prepared UTF-8 JSON or text view.",
+      "type": "object",
+      "required": [
+        "byte_len",
+        "byte_offset",
+        "encoding",
+        "id",
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "byte_len": {
+          "description": "Byte length inside the artifact file.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "byte_offset": {
+          "description": "Byte offset inside the artifact file.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "encoding": {
+          "description": "Encoding used by the file content.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreparedTextEncodingV2"
+            }
+          ]
+        },
+        "id": {
+          "description": "Stable artifact id referenced by request payloads.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "prepared_text"
+          ]
+        },
+        "path": {
+          "description": "Filesystem path to the prepared artifact.",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "description": "Small inline JSON attachment.",
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable artifact id referenced by request payloads.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "inline_json"
+          ]
+        },
+        "value": {
+          "description": "Inline JSON payload carried with the envelope."
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "PreparedAudioEncodingV2": {
+      "description": "PCM encoding used for prepared audio artifacts.",
+      "oneOf": [
+        {
+          "description": "Little-endian float32 PCM frames.",
+          "type": "string",
+          "enum": [
+            "pcm_f32le"
+          ]
+        }
+      ]
+    },
+    "PreparedTextEncodingV2": {
+      "description": "Encoding used for prepared text artifacts.",
+      "oneOf": [
+        {
+          "description": "UTF-8 JSON text stored on disk.",
+          "type": "string",
+          "enum": [
+            "utf8_json"
+          ]
+        }
+      ]
+    }
+  }
+}

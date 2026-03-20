@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ShutdownRequestV2",
+  "description": "Shutdown request sent to a V2 worker.",
+  "type": "object",
+  "required": [
+    "request_id"
+  ],
+  "properties": {
+    "request_id": {
+      "description": "Correlation id for the shutdown message.",
+      "type": "string"
+    }
+  }
+}

@@ -20,5 +20,16 @@ expression: cfg
   "auto_daemon": true,
   "memory_gate_mb": 2048,
   "worker_idle_timeout_s": 600,
-  "worker_health_interval_s": 30
+  "worker_health_interval_s": 30,
+  "max_workers_per_key": 0,
+  "worker_ready_timeout_s": 300,
+  "max_body_bytes_mb": 100,
+  "memory_gate_timeout_s": 120,
+  "memory_gate_poll_s": 5,
+  "memory_warning_mb": 4096,
+  "gpu_thread_pool_size": 4,
+  "local_lease_ttl_s": 300,
+  "audio_task_timeout_s": 0,
+  "analysis_task_timeout_s": 0,
+  "worker_registry_path": ""
 }

@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CapabilitiesResponseV2",
+  "description": "Response describing task capabilities for the worker.",
+  "type": "object",
+  "required": [
+    "engine_versions",
+    "request_id",
+    "tasks"
+  ],
+  "properties": {
+    "engine_versions": {
+      "description": "Engine version strings keyed by task name.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "request_id": {
+      "description": "Correlation id that matches the request.",
+      "type": "string"
+    },
+    "tasks": {
+      "description": "Task capabilities advertised by the runtime.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TaskCapabilityV2"
+      }
+    }
+  },
+  "definitions": {
+    "InferenceTaskV2": {
+      "description": "High-level V2 task family.",
+      "oneOf": [
+        {
+          "description": "Morphosyntax tagging.",
+          "type": "string",
+          "enum": [
+            "morphosyntax"
+          ]
+        },
+        {
+          "description": "Utterance segmentation.",
+          "type": "string",
+          "enum": [
+            "utseg"
+          ]
+        },
+        {
+          "description": "Machine translation.",
+          "type": "string",
+          "enum": [
+            "translate"
+          ]
+        },
+        {
+          "description": "Coreference annotation.",
+          "type": "string",
+          "enum": [
+            "coref"
+          ]
+        },
+        {
+          "description": "Automatic speech recognition.",
+          "type": "string",
+          "enum": [
+            "asr"
+          ]
+        },
+        {
+          "description": "Forced alignment.",
+          "type": "string",
+          "enum": [
+            "forced_alignment"
+          ]
+        },
+        {
+          "description": "Speaker diarization.",
+          "type": "string",
+          "enum": [
+            "speaker"
+          ]
+        },
+        {
+          "description": "OpenSMILE feature extraction.",
+          "type": "string",
+          "enum": [
+            "opensmile"
+          ]
+        },
+        {
+          "description": "AVQI feature extraction.",
+          "type": "string",
+          "enum": [
+            "avqi"
+          ]
+        }
+      ]
+    },
+    "TaskCapabilityV2": {
+      "description": "One task capability advertised by a V2 worker.",
+      "type": "object",
+      "required": [
+        "accepted_inputs",
+        "supports_progress_events",
+        "task"
+      ],
+      "properties": {
+        "accepted_inputs": {
+          "description": "Attachment/input kinds the task can consume.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkerAttachmentKindV2"
+          }
+        },
+        "supports_progress_events": {
+          "description": "Whether the task can emit progress events.",
+          "type": "boolean"
+        },
+        "task": {
+          "description": "Task family supported by the worker.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/InferenceTaskV2"
+            }
+          ]
+        }
+      }
+    },
+    "WorkerAttachmentKindV2": {
+      "description": "Small artifact-kind vocabulary advertised in task capabilities.",
+      "oneOf": [
+        {
+          "description": "File-backed prepared PCM audio.",
+          "type": "string",
+          "enum": [
+            "prepared_audio"
+          ]
+        },
+        {
+          "description": "File-backed prepared text/JSON.",
+          "type": "string",
+          "enum": [
+            "prepared_text"
+          ]
+        },
+        {
+          "description": "Inline JSON attachment carried inside the envelope.",
+          "type": "string",
+          "enum": [
+            "inline_json"
+          ]
+        },
+        {
+          "description": "Provider-local media path that Rust still has not replaced.",
+          "type": "string",
+          "enum": [
+            "provider_media"
+          ]
+        },
+        {
+          "description": "Previously submitted provider job identifier.",
+          "type": "string",
+          "enum": [
+            "submitted_job"
+          ]
+        }
+      ]
+    }
+  }
+}

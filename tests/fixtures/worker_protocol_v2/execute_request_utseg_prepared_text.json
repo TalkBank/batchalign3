@@ -3,11 +3,9 @@
   "task": "utseg",
   "payload": {
     "kind": "utseg",
-    "data": {
-      "lang": "eng",
-      "payload_ref_id": "text-ref-0005",
-      "item_count": 2
-    }
+    "lang": "eng",
+    "payload_ref_id": "text-ref-0005",
+    "item_count": 2
   },
   "attachments": [
     {

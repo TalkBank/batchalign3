@@ -3,11 +3,9 @@
   "task": "opensmile",
   "payload": {
     "kind": "opensmile",
-    "data": {
-      "audio_ref_id": "audio-ref-opensmile-0001",
-      "feature_set": "eGeMAPSv02",
-      "feature_level": "functionals"
-    }
+    "audio_ref_id": "audio-ref-opensmile-0001",
+    "feature_set": "eGeMAPSv02",
+    "feature_level": "functionals"
   },
   "attachments": [
     {

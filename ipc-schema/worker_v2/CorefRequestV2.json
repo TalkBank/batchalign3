@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CorefRequestV2",
+  "description": "V2 coreference request payload.",
+  "type": "object",
+  "required": [
+    "item_count",
+    "lang",
+    "payload_ref_id"
+  ],
+  "properties": {
+    "item_count": {
+      "description": "Number of document items frozen into the prepared batch payload.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "lang": {
+      "description": "Primary language routed by Rust.",
+      "type": "string"
+    },
+    "payload_ref_id": {
+      "description": "Reference to the prepared text batch payload.",
+      "type": "string"
+    }
+  }
+}

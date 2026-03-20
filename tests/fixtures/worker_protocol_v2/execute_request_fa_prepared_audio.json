@@ -3,13 +3,11 @@
   "task": "forced_alignment",
   "payload": {
     "kind": "forced_alignment",
-    "data": {
-      "backend": "whisper",
-      "payload_ref_id": "inline-ref-0002",
-      "audio_ref_id": "audio-ref-0002",
-      "text_mode": "space_joined",
-      "pauses": false
-    }
+    "backend": "whisper",
+    "payload_ref_id": "inline-ref-0002",
+    "audio_ref_id": "audio-ref-0002",
+    "text_mode": "space_joined",
+    "pauses": false
   },
   "attachments": [
     {

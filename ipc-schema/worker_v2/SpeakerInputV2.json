@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SpeakerInputV2",
+  "description": "Current input variants for speaker diarization.",
+  "oneOf": [
+    {
+      "description": "Prepared mono PCM audio owned by Rust.",
+      "type": "object",
+      "required": [
+        "audio_ref_id",
+        "kind"
+      ],
+      "properties": {
+        "audio_ref_id": {
+          "description": "Artifact id of the prepared mono PCM audio view.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "prepared_audio"
+          ]
+        }
+      }
+    }
+  ]
+}

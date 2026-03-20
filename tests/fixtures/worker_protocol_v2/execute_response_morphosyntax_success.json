@@ -5,43 +5,41 @@
   },
   "result": {
     "kind": "morphosyntax_result",
-    "data": {
-      "items": [
-        {
-          "raw_sentences": [
-            [
-              {
-                "id": 1,
-                "text": "I",
-                "lemma": "I",
-                "upos": "PRON",
-                "head": 2,
-                "deprel": "nsubj"
-              },
-              {
-                "id": 2,
-                "text": "saw",
-                "lemma": "see",
-                "upos": "VERB",
-                "head": 0,
-                "deprel": "root"
-              },
-              {
-                "id": 3,
-                "text": "it",
-                "lemma": "it",
-                "upos": "PRON",
-                "head": 2,
-                "deprel": "obj"
-              }
-            ]
+    "items": [
+      {
+        "raw_sentences": [
+          [
+            {
+              "id": 1,
+              "text": "I",
+              "lemma": "I",
+              "upos": "PRON",
+              "head": 2,
+              "deprel": "nsubj"
+            },
+            {
+              "id": 2,
+              "text": "saw",
+              "lemma": "see",
+              "upos": "VERB",
+              "head": 0,
+              "deprel": "root"
+            },
+            {
+              "id": 3,
+              "text": "it",
+              "lemma": "it",
+              "upos": "PRON",
+              "head": 2,
+              "deprel": "obj"
+            }
           ]
-        },
-        {
-          "error": "Stanza pipeline unavailable"
-        }
-      ]
-    }
+        ]
+      },
+      {
+        "error": "Stanza pipeline unavailable"
+      }
+    ]
   },
   "elapsed_s": 0.21
 }

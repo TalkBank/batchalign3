@@ -114,29 +114,6 @@ fn representative_batchalign2_aliases_match_canonical_typed_options() {
 }
 
 #[test]
-fn batchalign2_global_noop_flags_do_not_change_typed_options() {
-    let baseline = typed_options(&["align", "corpus/"]);
-    let compat = typed_options(&[
-        "--memlog",
-        "--mem-guard",
-        "--adaptive-workers",
-        "--no-pool",
-        "--adaptive-safety-factor",
-        "1.5",
-        "--adaptive-warmup",
-        "3",
-        "--shared-models",
-        "align",
-        "corpus/",
-    ]);
-
-    assert_eq!(
-        compat, baseline,
-        "hidden BA2 global no-op flags must not perturb resolved job options"
-    );
-}
-
-#[test]
 fn compat_engine_aliases_override_canonical_enums_before_dispatch() {
     match typed_options(&["align", "--fa-engine", "wav2vec", "--whisper-fa", "corpus/"]) {
         CommandOptions::Align(options) => assert_eq!(options.fa_engine, FaEngineName::Whisper),

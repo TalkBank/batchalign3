@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SubmittedJobInputV2",
+  "description": "Previously submitted provider job id.",
+  "type": "object",
+  "required": [
+    "provider_job_id"
+  ],
+  "properties": {
+    "provider_job_id": {
+      "description": "Provider job identifier to poll.",
+      "type": "string"
+    }
+  }
+}

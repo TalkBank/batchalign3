@@ -5,30 +5,28 @@
   },
   "result": {
     "kind": "monologue_asr_result",
-    "data": {
-      "lang": "yue",
-      "monologues": [
-        {
-          "speaker": "0",
-          "elements": [
-            {
-              "value": "nei5",
-              "start_s": 0.1,
-              "end_s": 0.4,
-              "kind": "text",
-              "confidence": 0.91
-            },
-            {
-              "value": "。",
-              "start_s": null,
-              "end_s": null,
-              "kind": "punctuation",
-              "confidence": null
-            }
-          ]
-        }
-      ]
-    }
+    "lang": "yue",
+    "monologues": [
+      {
+        "speaker": "0",
+        "elements": [
+          {
+            "value": "nei5",
+            "start_s": 0.1,
+            "end_s": 0.4,
+            "kind": "text",
+            "confidence": 0.91
+          },
+          {
+            "value": "\u3002",
+            "start_s": null,
+            "end_s": null,
+            "kind": "punctuation",
+            "confidence": null
+          }
+        ]
+      }
+    ]
   },
   "elapsed_s": 1.24
 }

@@ -1,8 +1,17 @@
-"""Request/Response models and worker state.
+"""Request/Response models and worker state (V1 protocol).
 
 These mirror Rust batchalign-types::worker and are the wire format
 for the stdio JSON-lines IPC protocol between the Rust server and
 stateless Python inference workers.
+
+V1 Protocol Status: FROZEN
+~~~~~~~~~~~~~~~~~~~~~~~~~
+V1 is used for morphosyntax, utseg, translate, and coref batch inference.
+All new task families (FA, ASR, speaker, opensmile, avqi) use V2
+(see ``_types_v2.py``). V1 types are not part of the Rust→Python schema
+generation pipeline and are not covered by conformance tests.
+
+Do not add new types to V1. New engines and commands should use V2.
 """
 
 from __future__ import annotations
@@ -22,6 +31,8 @@ from batchalign.inference._domain_types import (
     CommandName,
     LanguageCode,
     NumSpeakers,
+    RevAiApiKey,
+    TimestampMs,
     TranslationBackend,
 )
 
@@ -69,6 +80,29 @@ class InferTask(str, Enum):
     SPEAKER = "speaker"
 
 
+class WorkerProfile(str, Enum):
+    """Worker profile grouping related InferTasks into fewer processes.
+
+    Instead of spawning one worker per InferTask, profiles group related tasks
+    to share loaded models within a single process:
+
+    - GPU: ASR, FA, Speaker — GPU-bound models, concurrent via ThreadPoolExecutor
+    - STANZA: Morphosyntax, Utseg, Coref — Stanza NLP processors
+    - IO: Translate, OpenSMILE, AVQI — lightweight API/library calls
+    """
+
+    GPU = "gpu"
+    STANZA = "stanza"
+    IO = "io"
+
+
+PROFILE_TASKS: dict[WorkerProfile, set[str]] = {
+    WorkerProfile.GPU: {"asr", "fa", "speaker"},
+    WorkerProfile.STANZA: {"morphosyntax", "utseg", "coref"},
+    WorkerProfile.IO: {"translate", "opensmile", "avqi"},
+}
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerBootstrapRuntime:
     """Typed worker bootstrap inputs resolved once at process startup."""
@@ -76,11 +110,12 @@ class WorkerBootstrapRuntime:
     task: InferTask | None
     lang: LanguageCode
     num_speakers: NumSpeakers
+    profile: WorkerProfile | None = None
     engine_overrides: dict[str, str] = field(default_factory=dict)
     test_echo: bool = False
     verbose: int = 0
     device_policy: DevicePolicy = field(default_factory=DevicePolicy)
-    revai_api_key: str | None = None
+    revai_api_key: RevAiApiKey | None = None
 
 
 class AsrEngine(str, Enum):
@@ -164,12 +199,13 @@ class _WorkerState:
         self.num_speakers: NumSpeakers = 1
         self.started_at: float = time.monotonic()
         self.test_echo: bool = False
+        self.test_delay_ms: TimestampMs = 0
         self.ready: bool = False
         self.bootstrap: WorkerBootstrapRuntime | None = None
 
         # Stanza models for morphosyntax
-        self.stanza_pipelines: dict[str, StanzaNLP] | None = None
-        self.stanza_contexts: dict[str, TokenizerContext] | None = None
+        self.stanza_pipelines: dict[LanguageCode, StanzaNLP] | None = None
+        self.stanza_contexts: dict[LanguageCode, TokenizerContext] | None = None
         self.stanza_nlp_lock: threading.Lock | None = None
         self.stanza_version: str = ""
 
@@ -190,7 +226,7 @@ class _WorkerState:
 
         # ASR model
         self.whisper_asr_model: WhisperASRHandle | None = None
-        self.rev_api_key: str | None = None
+        self.rev_api_key: RevAiApiKey | None = None
         self.asr_engine: AsrEngine = AsrEngine.WHISPER
 
         # FA engine tracking

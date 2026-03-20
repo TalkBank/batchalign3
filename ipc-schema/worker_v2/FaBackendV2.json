@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FaBackendV2",
+  "description": "Forced-alignment backend selected by the Rust control plane.",
+  "oneOf": [
+    {
+      "description": "Whisper token-timestamp alignment.",
+      "type": "string",
+      "enum": [
+        "whisper"
+      ]
+    },
+    {
+      "description": "MMS Wave2Vec forced alignment.",
+      "type": "string",
+      "enum": [
+        "wave2vec"
+      ]
+    },
+    {
+      "description": "Cantonese Wave2Vec forced alignment.",
+      "type": "string",
+      "enum": [
+        "wav2vec_canto"
+      ]
+    }
+  ]
+}

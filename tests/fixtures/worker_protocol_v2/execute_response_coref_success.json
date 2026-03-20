@@ -5,30 +5,28 @@
   },
   "result": {
     "kind": "coref_result",
-    "data": {
-      "items": [
-        {
-          "annotations": [
-            {
-              "sentence_idx": 0,
-              "words": [
-                [
-                  {
-                    "chain_id": 0,
-                    "is_start": true,
-                    "is_end": true
-                  }
-                ],
-                []
-              ]
-            }
-          ]
-        },
-        {
-          "error": "Invalid CorefBatchItem"
-        }
-      ]
-    }
+    "items": [
+      {
+        "annotations": [
+          {
+            "sentence_idx": 0,
+            "words": [
+              [
+                {
+                  "chain_id": 0,
+                  "is_start": true,
+                  "is_end": true
+                }
+              ],
+              []
+            ]
+          }
+        ]
+      },
+      {
+        "error": "Invalid CorefBatchItem"
+      }
+    ]
   },
   "elapsed_s": 0.31
 }

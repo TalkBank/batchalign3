@@ -97,66 +97,6 @@ const SURFACE_GROUPS: &[SurfaceGroup] = &[
 
 const HIDDEN_COMPAT_CASES: &[HiddenCompatCase] = &[
     HiddenCompatCase {
-        args: &["--memlog", "version"],
-        hidden_flag: "--memlog",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--mem-guard", "version"],
-        hidden_flag: "--mem-guard",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--adaptive-workers", "version"],
-        hidden_flag: "--adaptive-workers",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--no-adaptive-workers", "version"],
-        hidden_flag: "--no-adaptive-workers",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--pool", "version"],
-        hidden_flag: "--pool",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--no-pool", "version"],
-        hidden_flag: "--no-pool",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--adaptive-safety-factor", "1.5", "version"],
-        hidden_flag: "--adaptive-safety-factor",
-        help_scope: &["--help"],
-        note: "global BA2 no-op option",
-    },
-    HiddenCompatCase {
-        args: &["--adaptive-warmup", "2", "version"],
-        hidden_flag: "--adaptive-warmup",
-        help_scope: &["--help"],
-        note: "global BA2 no-op option",
-    },
-    HiddenCompatCase {
-        args: &["--shared-models", "version"],
-        hidden_flag: "--shared-models",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
-        args: &["--no-shared-models", "version"],
-        hidden_flag: "--no-shared-models",
-        help_scope: &["--help"],
-        note: "global BA2 no-op flag",
-    },
-    HiddenCompatCase {
         args: &["align", "--whisper", "--help"],
         hidden_flag: "--whisper",
         help_scope: &["align", "--help"],

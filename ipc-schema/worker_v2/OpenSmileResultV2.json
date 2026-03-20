@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenSmileResultV2",
+  "description": "Raw openSMILE output returned by the model host.",
+  "type": "object",
+  "required": [
+    "audio_file",
+    "duration_segments",
+    "feature_level",
+    "feature_set",
+    "num_features",
+    "rows",
+    "success"
+  ],
+  "properties": {
+    "audio_file": {
+      "description": "Source audio identifier echoed by the worker.",
+      "type": "string"
+    },
+    "duration_segments": {
+      "description": "Number of result rows/segments.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "error": {
+      "description": "Optional runtime error detail.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "feature_level": {
+      "description": "Requested feature-level name.",
+      "type": "string"
+    },
+    "feature_set": {
+      "description": "Requested feature-set name.",
+      "type": "string"
+    },
+    "num_features": {
+      "description": "Number of extracted feature columns.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "rows": {
+      "description": "Tabular feature rows keyed by feature name.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "success": {
+      "description": "Whether the underlying runtime succeeded.",
+      "type": "boolean"
+    }
+  }
+}

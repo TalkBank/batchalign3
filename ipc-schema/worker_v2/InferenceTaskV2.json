@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InferenceTaskV2",
+  "description": "High-level V2 task family.",
+  "oneOf": [
+    {
+      "description": "Morphosyntax tagging.",
+      "type": "string",
+      "enum": [
+        "morphosyntax"
+      ]
+    },
+    {
+      "description": "Utterance segmentation.",
+      "type": "string",
+      "enum": [
+        "utseg"
+      ]
+    },
+    {
+      "description": "Machine translation.",
+      "type": "string",
+      "enum": [
+        "translate"
+      ]
+    },
+    {
+      "description": "Coreference annotation.",
+      "type": "string",
+      "enum": [
+        "coref"
+      ]
+    },
+    {
+      "description": "Automatic speech recognition.",
+      "type": "string",
+      "enum": [
+        "asr"
+      ]
+    },
+    {
+      "description": "Forced alignment.",
+      "type": "string",
+      "enum": [
+        "forced_alignment"
+      ]
+    },
+    {
+      "description": "Speaker diarization.",
+      "type": "string",
+      "enum": [
+        "speaker"
+      ]
+    },
+    {
+      "description": "OpenSMILE feature extraction.",
+      "type": "string",
+      "enum": [
+        "opensmile"
+      ]
+    },
+    {
+      "description": "AVQI feature extraction.",
+      "type": "string",
+      "enum": [
+        "avqi"
+      ]
+    }
+  ]
+}
