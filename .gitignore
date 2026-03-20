@@ -46,3 +46,6 @@ node_modules/
 
 # Coverage
 lcov*.info
+
+# Emacs Autosave
+\#*#
