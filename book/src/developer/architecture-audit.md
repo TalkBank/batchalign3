@@ -42,6 +42,101 @@ What still needs concentrated follow-up:
 - the test surface is much larger, but the cost and runtime of the ML-heavy
   suites now make suite tiering and ownership more important than before
 
+## Release Blockers
+
+### 1. Recovery still silently coerces persisted corruption into valid state
+
+`crates/batchalign-app/src/store/queries/recovery.rs` still converts unknown
+persisted job/file status strings into `JobStatus::Failed` /
+`FileStatusKind::Error` and drops invalid error-category parses with
+`.and_then(|raw| raw.parse().ok())`.
+
+Why this is release-blocking:
+
+- corrupt persisted state is being normalized instead of surfaced
+- forensic information is destroyed during recovery
+- operator-visible failure modes become "ordinary failure" rather than
+  "database/state corruption"
+
+### 2. Shared GPU worker ownership is still semantically wrong
+
+`crates/batchalign-app/src/worker/pool/shared_gpu.rs` says
+`SharedGpuWorker::from_handle()` "takes ownership of the child process
+lifecycle", but the actual `Child` handle comes from
+`crates/batchalign-app/src/worker/handle.rs` via `WorkerHandleParts` and is not
+retained by `SharedGpuWorker`.
+
+Why this is release-blocking:
+
+- lifecycle ownership is claimed in docs/comments but not represented in the
+  live type shape
+- concurrent GPU workers are supervised through PID/stdout side effects rather
+  than an owned child handle
+- stale/crashed cleanup cannot be made trustworthy while ownership remains
+  implicit
+
+### 3. `LanguageCode3` is not a trustworthy domain type at worker boundaries
+
+`crates/batchalign-app/src/types/domain.rs` documents `LanguageCode3` as a
+validated ISO-639-3 type, but `LanguageCode3::from_worker_lang()` accepts any
+string. Live call sites already use `""` in `crates/batchalign-app/src/fa/transport.rs`
+and `"auto"` in `crates/batchalign-app/src/runner/mod.rs`.
+
+Why this is release-blocking:
+
+- the type no longer tells reviewers or implementers what values are legal
+- dispatch keys and user-facing language semantics are overloaded into one type
+- future refactors can accidentally widen invalid-language behavior because the
+  invalid states are already encoded as first-class values
+
+## High-Leverage Refactors
+
+### 1. WebSocket notifications are still best-effort and lossy
+
+`crates/batchalign-app/src/store/queries/db_helpers.rs` serializes WS payloads
+with `serde_json::to_value(...).unwrap_or_default()` and ignores
+`self.ws_tx.send(...)`.
+
+Implication:
+
+- serialization failure degrades into empty/default JSON
+- dropped broadcast sends are invisible
+- clients and operators cannot distinguish "no update" from "update lost"
+
+### 2. Media discovery still silently skips filesystem errors
+
+`crates/batchalign-app/src/media.rs` uses `WalkDir::new(...).into_iter().filter_map(|e| e.ok())`
+and fills missing parent paths with `unwrap_or_default()`.
+
+Implication:
+
+- unreadable or malformed directory entries disappear from the scan
+- media-resolution failures look like absence rather than traversal failure
+- CLI/server behavior becomes environment-sensitive without an explicit error path
+
+### 3. Worker availability/observability still lies under contention
+
+`crates/batchalign-app/src/worker/pool/mod.rs` uses `try_lock()` fast paths for
+GPU worker presence and falls back to `false` / `0` when the lock is busy.
+
+Implication:
+
+- health/summary behavior depends on momentary contention instead of actual pool
+  state
+- operators can be told "no workers" while workers exist
+- diagnostics stay approximate exactly when the system is under pressure
+
+### 4. Rev.AI transport still drops response-body read failures
+
+`crates/batchalign-revai/src/client.rs` reads failed HTTP bodies with
+`resp.text().unwrap_or_default()`.
+
+Implication:
+
+- transport or decoding failures collapse into empty strings
+- upstream API failures become harder to debug
+- retry vs permanent-failure classification loses evidence
+
 ## Scope
 
 This audit covers:

@@ -1,7 +1,7 @@
 # Building & Development
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-20
 
 Development is supported on **Windows, macOS, and Linux**. The instructions below use Unix shell syntax; on Windows, use PowerShell or Git Bash equivalently.
 
@@ -99,6 +99,51 @@ Run the Rust test suite to verify your changes:
 ```bash
 cargo nextest run --manifest-path pyo3/Cargo.toml
 ```
+
+## Pre-push Checks
+
+Install the hook once with `make install-hooks`. On every `git push` it runs
+the checks below in order and aborts the push on the first failure.
+
+| Gate | Command | What it catches |
+| --- | --- | --- |
+| **Formatting** | `cargo fmt --all -- --check` | Unformatted Rust code that CI will reject |
+| **Clippy** | `cargo clippy --workspace --all-targets -- -D warnings` | Lint warnings promoted to errors; also proves compilation across all targets |
+| **Dashboard API drift** | `bash scripts/check_dashboard_api_drift.sh` | REST API schema out of sync with generated TypeScript (CI fails on drift) |
+
+### Why not `cargo check`?
+
+`cargo check --workspace` was removed from the hook because `cargo clippy
+--workspace --all-targets` is a strict superset — it invokes the same type
+system and borrow checker, then also runs lints. Running both just doubles
+compile time for no additional signal.
+
+### Why not mypy?
+
+mypy is run in `make ci-local` and in CI, but is excluded from the pre-push
+hook because it is noticeably slower on first run (cold transitive import
+resolution) and produces noise from vendored stub packages outside our control.
+Run it manually before committing Python changes:
+
+```bash
+uv run mypy
+# or together with clippy:
+make lint
+```
+
+### Why not IPC schema drift?
+
+IPC schema drift (`make check-ipc-drift`) is also in `make ci-local` but not
+the pre-push hook because it requires a full Rust build of the schema-generation
+binary, which is expensive. Run it manually when you change any Rust struct
+with `#[derive(schemars::JsonSchema)]` that crosses the Python worker boundary.
+
+### Cost of a CI failure
+
+CI minutes on GitHub Actions are finite and failures block merges. Each full
+Rust CI run takes 8–15 minutes. The pre-push hook's goal is to catch the
+commonest CI killers (formatting, clippy, API drift) in under a minute on
+a warm build cache.
 
 ## Type Checking
 

@@ -112,6 +112,11 @@ manifest-path = "pyo3/Cargo.toml"
 python-source = "."
 python-packages = ["batchalign"]
 features = ["pyo3/extension-module"]
+# Use the debug profile for editable installs so `uv run <anything>` rebuilds
+# the extension in seconds rather than minutes. Release wheels for distribution
+# are built explicitly via `maturin build --release` in the deploy script,
+# which overrides this setting.
+profile = "dev"
 include = [
     { path = "batchalign/runtime_constants.toml", format = "sdist" },
     { path = "batchalign/runtime_constants.toml", format = "wheel" },

@@ -66,6 +66,139 @@ Potential directions:
 - isolate environment-sensitive suites so concurrency and timeout issues are
   diagnosed as harness problems rather than product regressions
 
+## Release Blockers
+
+### 1. Split worker-dispatch identity from user language identity
+
+Current evidence:
+
+- `LanguageCode3::from_worker_lang()` accepts arbitrary strings
+- FA dispatch uses `""` as a worker key sentinel
+- runner pre-scaling uses `"auto"` as a worker key sentinel
+
+Required direction:
+
+- introduce a separate worker-target/domain type for pool keys and transport
+  routing
+- keep `LanguageCode3` strict and user/domain-facing
+- remove empty-string and `"auto"` overloads from the validated language type
+
+### 2. Make recovery parsing explicitly corruptible
+
+Current evidence:
+
+- `store/queries/recovery.rs` coerces invalid persisted state into ordinary
+  failure state
+
+Required direction:
+
+- deserialize persisted job/file state through typed enums/result wrappers
+- surface corrupt rows as a dedicated recovery/corruption state
+- preserve raw offending values for diagnosis instead of normalizing them away
+
+### 3. Give shared GPU workers real owned lifecycle supervision
+
+Current evidence:
+
+- `SharedGpuWorker` does not retain the `Child` handle it claims to own
+
+Required direction:
+
+- decide one owner for the worker child lifecycle
+- keep shutdown, health, stale-reap, and crash detection on that owned boundary
+- remove comment/type mismatches about who actually supervises the process
+
+## Type/Boundary Debt
+
+### 1. Stop using best-effort defaults at server truth boundaries
+
+Current evidence:
+
+- WS notifications default empty JSON on serialization failure
+- Rev.AI client defaults response bodies to `""`
+- media discovery defaults unreadable walk entries to "not found"
+
+Required direction:
+
+- convert these sites to explicit error/reporting paths
+- classify "lossy reporting" as correctness debt, not just observability debt
+
+### 2. Remove remaining "stringly runtime control" seams
+
+Current evidence:
+
+- persisted content-type recovery still matches raw strings
+- worker control paths still reason in terms of loosely named sentinels and
+  labels
+
+Required direction:
+
+- decode to semantic enums at the first boundary crossing
+- reserve plain strings for display/logging only
+
+## Concurrency/Lifecycle Debt
+
+### 1. Separate pool observability from pool mutation shortcuts
+
+Current evidence:
+
+- `worker_count()` / `has_available_worker()` use `try_lock()` and report
+  optimistic/approximate results under contention
+
+Required direction:
+
+- maintain explicit summary state or actor-owned counters
+- avoid turning lock contention into false absence
+
+### 2. Isolate stale/crashed-worker cleanup into one owned subsystem
+
+Current evidence:
+
+- stale cleanup, PID tracking, transport setup, and worker-key planning are
+  still spread across CLI, pool, and worker-handle code
+
+Required direction:
+
+- centralize worker liveness truth
+- keep PID files and daemon cleanup as implementation details of one lifecycle
+  owner
+
+## Test/Process Debt
+
+### 1. Add targeted regression tests for silent-failure classes
+
+Must-have cases:
+
+- corrupt persisted job/file status rows
+- WS serialization/send failure paths
+- unreadable directory entries during media walk
+- shared GPU worker child-lifecycle supervision
+- invalid/sentinel worker language keys
+- integration helpers selecting the wrong output artifact when the requested
+  path is missing (`crates/batchalign-app/tests/common/mod.rs`)
+
+### 2. Make heavy-runtime suites intentional instead of incidental
+
+Required direction:
+
+- keep ML-heavy/golden suites separate from structural correctness checks
+- make snapshot/golden regeneration ownership explicit
+- add smaller focused tests for the release-blocking boundary cases above
+
+## Deferred but Valid Radical Changes
+
+### 1. Split the registry actor into smaller state owners
+
+The current `JobRegistry` actor is materially better than open-coded mutex
+access, but it is still the central coordination point for submission,
+dispatch, lease handling, progress, cancellation, and completion.
+
+Longer-horizon direction:
+
+- split job scheduling, per-file state, and operator-facing projections into
+  narrower reducers/actors
+- stop using one central registry as the default shape of server truth
+
 ## How to use this page
 
 - Add items when a refactor reveals a larger optimization or redesign
