@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::api::{LanguageCode3, NumSpeakers};
+use crate::api::{DurationMs, DurationSeconds, LanguageCode3, NumSpeakers};
 use crate::cache::CacheBackend;
 use crate::options::{UtrEngine, UtrOverlapStrategy};
 use crate::params::CachePolicy;
@@ -29,11 +29,11 @@ pub(in crate::runner) struct UtrPassContext<'a> {
     /// Cache policy selected for the current job.
     pub cache_policy: CachePolicy,
     /// Total audio duration in milliseconds when known.
-    pub total_audio_ms: Option<u64>,
+    pub total_audio_ms: Option<DurationMs>,
     /// Maximum FA group duration in milliseconds. Used by the two-pass UTR
     /// strategy to compare FA grouping outcomes and detect the wider-window
     /// regression on non-English files.
-    pub max_group_ms: Option<u64>,
+    pub max_group_ms: Option<DurationMs>,
     /// Display filename for logging.
     pub filename: &'a str,
     /// Selected UTR backend.
@@ -61,8 +61,15 @@ impl<'a> UtrPassContext<'a> {
 
 /// Resolve the UTR overlap strategy for a specific CHAT file.
 ///
-/// `Auto` inspects the file for `+<` linkers and selects accordingly.
-/// `Global` and `TwoPass` are used as-is regardless of file content.
+/// `Auto` inspects the file for `+<` linkers and selects accordingly,
+/// with a **language-aware gate**: non-English files always use `GlobalUtr`
+/// because the two-pass strategy regresses on languages where ASR quality
+/// is lower (wider FA groups cause the overlap recovery pass to misalign).
+/// English files fall through to `select_strategy()` which inspects the
+/// file for overlap markers.
+///
+/// `Global` and `TwoPass` are used as-is regardless of file content or
+/// language — they are explicit overrides.
 ///
 /// When `total_audio_ms` and `max_group_ms` are both available, a
 /// [`GroupingContext`](batchalign_chat_ops::fa::GroupingContext) is passed to
@@ -76,8 +83,8 @@ fn resolve_strategy(
     let grouping_context = match (context.total_audio_ms, context.max_group_ms) {
         (Some(total_audio_ms), Some(max_group_ms)) => {
             Some(batchalign_chat_ops::fa::GroupingContext {
-                total_audio_ms,
-                max_group_ms,
+                total_audio_ms: total_audio_ms.0,
+                max_group_ms: max_group_ms.0,
             })
         }
         _ => None,
@@ -85,11 +92,28 @@ fn resolve_strategy(
 
     match strategy {
         UtrOverlapStrategy::Auto => {
-            batchalign_chat_ops::fa::select_strategy(chat_file, grouping_context)
+            // Language-aware gate: non-English files use GlobalUtr to avoid
+            // the two-pass regression caused by noisier ASR on non-English
+            // audio (wider FA groups → misaligned overlap recovery).
+            // Validated experimentally: language-aware auto preserves English
+            // gains (+4.3pp SBCSAE, +3.8pp Jefferson) while eliminating
+            // non-English regressions (TaiwanHakka, Welsh, German).
+            if context.lang.as_ref() != "eng" {
+                info!(
+                    lang = %context.lang,
+                    "Non-English: using GlobalUtr (language-aware auto)"
+                );
+                Box::new(batchalign_chat_ops::fa::GlobalUtr)
+            } else {
+                batchalign_chat_ops::fa::select_strategy(chat_file, grouping_context)
+            }
         }
         UtrOverlapStrategy::Global => Box::new(batchalign_chat_ops::fa::GlobalUtr),
         UtrOverlapStrategy::TwoPass => {
-            Box::new(batchalign_chat_ops::fa::TwoPassOverlapUtr { grouping_context })
+            Box::new(batchalign_chat_ops::fa::TwoPassOverlapUtr {
+                grouping_context,
+                config: batchalign_chat_ops::fa::TwoPassConfig::default(),
+            })
         }
     }
 }
@@ -141,13 +165,13 @@ pub(in crate::runner) async fn run_utr_pass(
     };
     let use_partial = context.engine.supports_partial_windows()
         && untimed_ratio < 0.5
-        && context.total_audio_ms.is_some_and(|ms| ms > 60_000);
+        && context.total_audio_ms.is_some_and(|ms| ms.0 > 60_000);
 
     if use_partial {
         let audio_ms = context
             .total_audio_ms
             .expect("partial UTR requires audio length");
-        let windows = batchalign_chat_ops::fa::find_untimed_windows(&chat_file, audio_ms, 500);
+        let windows = batchalign_chat_ops::fa::find_untimed_windows(&chat_file, audio_ms.0, 500);
 
         if windows.is_empty() {
             info!(
@@ -422,13 +446,13 @@ async fn infer_utr_asr_response(
                     .into_iter()
                     .map(|token| crate::transcribe::AsrToken {
                         text: token.text,
-                        start_s: Some(token.start_ms as f64 / 1000.0),
-                        end_s: Some(token.end_ms as f64 / 1000.0),
+                        start_s: Some(DurationSeconds(token.start_ms as f64 / 1000.0)),
+                        end_s: Some(DurationSeconds(token.end_ms as f64 / 1000.0)),
                         speaker: None,
                         confidence: None,
                     })
                     .collect(),
-                lang: context.lang.to_string(),
+                lang: context.lang.clone(),
             })
         }
         UtrEngine::Whisper | UtrEngine::Custom(_) => {
@@ -439,7 +463,7 @@ async fn infer_utr_asr_response(
                         crate::transcribe::AsrWorkerMode::LocalWhisperV2,
                     ),
                     audio_path,
-                    lang: context.lang,
+                    lang: &crate::api::LanguageSpec::Resolved(context.lang.clone()),
                     num_speakers: NumSpeakers(1),
                     rev_job_id: None,
                 },
@@ -459,8 +483,8 @@ fn asr_response_to_utr_tokens(
         .tokens
         .iter()
         .filter_map(|token| {
-            let start_ms = (token.start_s? * 1000.0).round() as u64 + offset_ms;
-            let end_ms = (token.end_s? * 1000.0).round() as u64 + offset_ms;
+            let start_ms = (token.start_s?.0 * 1000.0).round() as u64 + offset_ms;
+            let end_ms = (token.end_s?.0 * 1000.0).round() as u64 + offset_ms;
             Some(batchalign_chat_ops::fa::utr::AsrTimingToken {
                 text: token.text.clone(),
                 start_ms,

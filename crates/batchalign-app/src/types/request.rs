@@ -5,9 +5,10 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::options::CommandOptions;
+use crate::options::{AsrEngineName, CommandOptions};
+use crate::revai::try_revai_language_hint;
 
-use super::domain::{CommandName, FileName, LanguageCode3, NumSpeakers};
+use super::domain::{CommandName, FileName, LanguageCode3, LanguageSpec, NumSpeakers};
 
 // ---------------------------------------------------------------------------
 // Request models
@@ -27,9 +28,10 @@ pub struct FilePayload {
 pub struct JobSubmission {
     /// Batchalign command (align, morphotag, etc.).
     pub command: CommandName,
-    /// 3-letter ISO language code.
+    /// Language specification: a 3-letter ISO code or `"auto"` for
+    /// ASR-driven detection.
     #[serde(default = "default_lang")]
-    pub lang: LanguageCode3,
+    pub lang: LanguageSpec,
     /// Number of speakers.
     #[serde(default = "default_num_speakers")]
     pub num_speakers: NumSpeakers,
@@ -83,8 +85,8 @@ pub struct JobSubmission {
     pub before_paths: Vec<String>,
 }
 
-pub(crate) fn default_lang() -> LanguageCode3 {
-    LanguageCode3::from("eng")
+pub(crate) fn default_lang() -> LanguageSpec {
+    LanguageSpec::Resolved(LanguageCode3::from("eng"))
 }
 
 pub(crate) fn default_num_speakers() -> NumSpeakers {
@@ -102,6 +104,9 @@ impl JobSubmission {
                 self.command
             )));
         }
+
+        // Validate language support for engines the command will use.
+        self.validate_language_support()?;
 
         if self.paths_mode {
             if self.source_paths.is_empty() || self.output_paths.is_empty() {
@@ -127,9 +132,241 @@ impl JobSubmission {
         }
         Ok(())
     }
+
+    /// Check that the job's language is supported by all engines the command
+    /// will use.
+    ///
+    /// Called at job submission time to fail fast with a clear diagnostic
+    /// rather than letting errors surface deep in the pipeline (Rev.AI HTTP
+    /// 400, Whisper wrong-language transcription, Stanza model-not-found).
+    fn validate_language_support(&self) -> Result<(), ValidationError> {
+        // Auto-detect: can't validate engine support until ASR runs.
+        let lang = match &self.lang {
+            LanguageSpec::Auto => return Ok(()),
+            LanguageSpec::Resolved(code) => code,
+        };
+
+        // Commands that use ASR: transcribe, transcribe_s, align, benchmark
+        let asr_engine = match &self.options {
+            CommandOptions::Transcribe(opts) | CommandOptions::TranscribeS(opts) => {
+                Some(opts.effective_asr_engine())
+            }
+            CommandOptions::Align(opts) => {
+                // Align uses ASR for UTR pre-pass
+                Some(
+                    opts.common
+                        .engine_overrides
+                        .get("asr")
+                        .map(|v| AsrEngineName::from_wire_name(v))
+                        .unwrap_or(AsrEngineName::RevAi),
+                )
+            }
+            CommandOptions::Benchmark(opts) => Some(opts.effective_asr_engine()),
+            _ => None,
+        };
+
+        // Check Rev.AI language support
+        if let Some(AsrEngineName::RevAi) = &asr_engine {
+            if try_revai_language_hint(lang).is_none() {
+                return Err(ValidationError(format!(
+                    "Language '{}' is not supported by Rev.AI ASR. Alternatives:\n\
+                     - Use --asr-engine whisper for local Whisper ASR (supports most languages)\n\
+                     - Use --asr-engine-custom tencent for Chinese/Hakka via Tencent\n\
+                     - Check supported languages: book/src/reference/language-code-resolution.md",
+                    lang
+                )));
+            }
+        }
+
+        // Commands that use Stanza: morphotag, utseg, coref, compare
+        let uses_stanza = matches!(
+            &self.options,
+            CommandOptions::Morphotag(_)
+                | CommandOptions::Utseg(_)
+                | CommandOptions::Coref(_)
+                | CommandOptions::Compare(_)
+        );
+        if uses_stanza && !is_stanza_supported_language(lang) {
+            return Err(ValidationError(format!(
+                "Language '{}' is not supported by Stanza. Supported languages:\n\
+                 {}",
+                lang,
+                stanza_supported_languages_help()
+            )));
+        }
+
+        // Check custom ASR engine language constraints
+        if let Some(AsrEngineName::Custom(engine_name)) = &asr_engine {
+            let name = engine_name.as_str();
+            if name == "tencent" {
+                let chinese_codes = ["zho", "yue", "wuu", "nan", "hak", "cmn"];
+                if !chinese_codes.contains(&lang.as_ref()) {
+                    return Err(ValidationError(format!(
+                        "Language '{}' is not supported by Tencent ASR (Chinese variants only: {}). \
+                         Use --asr-engine whisper or --asr-engine rev instead.",
+                        lang,
+                        chinese_codes.join(", ")
+                    )));
+                }
+            } else if name == "aliyun" && lang.as_ref() != "yue" {
+                return Err(ValidationError(format!(
+                    "Language '{}' is not supported by Aliyun ASR (Cantonese 'yue' only). \
+                     Use --asr-engine whisper or --asr-engine rev instead.",
+                    lang
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Validation error for request models.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
 pub struct ValidationError(pub String);
+
+// ---------------------------------------------------------------------------
+// Stanza language support table
+// ---------------------------------------------------------------------------
+
+/// ISO 639-3 codes that Stanza supports via the `iso3_to_alpha2()` mapping in
+/// `batchalign/worker/_stanza_loading.py`. This table must be kept in sync with
+/// the Python mapping — it is the Rust-side mirror used for fast pre-validation
+/// at job submission time.
+///
+/// The table includes every 3-letter code from the Python mapping plus any
+/// 2-letter codes that would pass through unchanged (Stanza accepts its own
+/// ISO 639-1 codes directly). We only check 3-letter codes here because
+/// batchalign uses ISO 639-3 everywhere.
+const STANZA_SUPPORTED_ISO3: &[&str] = &[
+    "ara", "ben", "bul", "cat", "ces", "cmn", "cym", "dan", "deu", "ell",
+    "eng", "est", "eus", "fas", "fin", "fra", "gla", "gle", "glg", "heb",
+    "hin", "hrv", "hun", "hye", "ind", "isl", "ita", "jpn", "kan", "kat",
+    "kor", "lav", "lit", "mal", "mlt", "msa", "nld", "nor", "pol", "por",
+    "ron", "slk", "slv", "spa", "swe", "tam", "tel", "tgl", "tha", "tur",
+    "ukr", "urd", "vie", "yue", "zho",
+];
+
+/// Check whether an ISO 639-3 language code is supported by Stanza.
+fn is_stanza_supported_language(lang: &LanguageCode3) -> bool {
+    STANZA_SUPPORTED_ISO3.contains(&lang.as_ref())
+}
+
+/// Format a help string listing supported Stanza languages for error messages.
+fn stanza_supported_languages_help() -> String {
+    // Group in rows of 10 for readability.
+    STANZA_SUPPORTED_ISO3
+        .chunks(10)
+        .map(|chunk| chunk.join(", "))
+        .collect::<Vec<_>>()
+        .join(",\n  ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::{CommonOptions, MorphotagOptions, UtsegOptions};
+
+    /// Build a minimal `JobSubmission` for testing language validation.
+    fn morphotag_submission(lang: &str) -> JobSubmission {
+        JobSubmission {
+            command: CommandName::from("morphotag"),
+            lang: LanguageSpec::Resolved(LanguageCode3::from(lang)),
+            num_speakers: NumSpeakers(1),
+            files: vec![],
+            media_files: vec![],
+            media_mapping: String::new(),
+            media_subdir: String::new(),
+            source_dir: String::new(),
+            options: CommandOptions::Morphotag(MorphotagOptions {
+                common: CommonOptions::default(),
+                retokenize: false,
+                skipmultilang: false,
+                merge_abbrev: false.into(),
+            }),
+            paths_mode: false,
+            source_paths: vec![],
+            output_paths: vec![],
+            display_names: vec![],
+            debug_traces: false,
+            before_paths: vec![],
+        }
+    }
+
+    fn utseg_submission(lang: &str) -> JobSubmission {
+        JobSubmission {
+            command: CommandName::from("utseg"),
+            lang: LanguageSpec::Resolved(LanguageCode3::from(lang)),
+            num_speakers: NumSpeakers(1),
+            files: vec![],
+            media_files: vec![],
+            media_mapping: String::new(),
+            media_subdir: String::new(),
+            source_dir: String::new(),
+            options: CommandOptions::Utseg(UtsegOptions {
+                common: CommonOptions::default(),
+                merge_abbrev: Default::default(),
+            }),
+            paths_mode: false,
+            source_paths: vec![],
+            output_paths: vec![],
+            display_names: vec![],
+            debug_traces: false,
+            before_paths: vec![],
+        }
+    }
+
+    #[test]
+    fn stanza_table_is_sorted() {
+        // Keep the table sorted so binary search or visual inspection is easy.
+        let mut sorted = STANZA_SUPPORTED_ISO3.to_vec();
+        sorted.sort();
+        assert_eq!(STANZA_SUPPORTED_ISO3, sorted.as_slice());
+    }
+
+    #[test]
+    fn stanza_table_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for code in STANZA_SUPPORTED_ISO3 {
+            assert!(seen.insert(code), "duplicate Stanza language code: {code}");
+        }
+    }
+
+    #[test]
+    fn morphotag_with_supported_language_passes() {
+        let submission = morphotag_submission("eng");
+        assert!(submission.validate().is_ok());
+    }
+
+    #[test]
+    fn morphotag_with_unsupported_language_fails() {
+        let submission = morphotag_submission("xyz");
+        let err = submission.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("not supported by Stanza"),
+            "expected Stanza error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn utseg_with_unsupported_language_fails() {
+        let submission = utseg_submission("xyz");
+        let err = submission.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("not supported by Stanza"),
+            "expected Stanza error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn morphotag_with_all_supported_languages_passes() {
+        for code in STANZA_SUPPORTED_ISO3 {
+            let submission = morphotag_submission(code);
+            assert!(
+                submission.validate().is_ok(),
+                "expected language '{code}' to pass Stanza validation"
+            );
+        }
+    }
+}

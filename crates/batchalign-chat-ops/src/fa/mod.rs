@@ -19,7 +19,7 @@ mod tests;
 
 use serde::{Deserialize, Serialize};
 use talkbank_model::alignment::helpers::{
-    AlignmentDomain, ContentLeaf, for_each_leaf, word_is_alignable,
+    TierDomain, WordItem, walk_words, counts_for_tier,
 };
 use talkbank_model::model::{Bullet, ChatFile, DependentTier, Line, Utterance, Word};
 
@@ -37,8 +37,9 @@ pub use self::orchestrate::{
 };
 pub use self::postprocess::postprocess_utterance_timings;
 pub use self::utr::{
-    GlobalUtr, GroupingContext, TwoPassOverlapUtr, UtrStrategy, find_untimed_windows,
-    select_strategy, utr_asr_cache_key, utr_asr_segment_cache_key,
+    CaMarkerPolicy, GlobalUtr, GroupingContext, TwoPassConfig, TwoPassOverlapUtr, UtrMatchMode,
+    UtrStrategy, find_untimed_windows, select_strategy, utr_asr_cache_key,
+    utr_asr_segment_cache_key,
 };
 
 // ---------------------------------------------------------------------------
@@ -261,27 +262,27 @@ pub fn find_reusable_utterance_indices(chat_file: &ChatFile) -> std::collections
 /// Count Wor-alignable words in the main tier.
 pub(crate) fn count_alignable_main_words(utterance: &Utterance) -> usize {
     let mut count = 0usize;
-    for_each_leaf(
+    walk_words(
         &utterance.main.content.content,
         None,
         &mut |leaf| match leaf {
-            ContentLeaf::Word(word, _annotations) => {
-                if word_is_alignable(word, AlignmentDomain::Wor) {
+            WordItem::Word(word) => {
+                if counts_for_tier(word, TierDomain::Wor) {
                     count += 1;
                 }
             }
-            ContentLeaf::ReplacedWord(replaced) => {
+            WordItem::ReplacedWord(replaced) => {
                 if !replaced.replacement.words.is_empty() {
                     for word in &replaced.replacement.words {
-                        if word_is_alignable(word, AlignmentDomain::Wor) {
+                        if counts_for_tier(word, TierDomain::Wor) {
                             count += 1;
                         }
                     }
-                } else if word_is_alignable(&replaced.word, AlignmentDomain::Wor) {
+                } else if counts_for_tier(&replaced.word, TierDomain::Wor) {
                     count += 1;
                 }
             }
-            ContentLeaf::Separator(_) => {}
+            WordItem::Separator(_) => {}
         },
     );
     count
@@ -333,27 +334,27 @@ pub fn update_utterance_bullet(utterance: &mut Utterance) {
 /// directly into a preserved FA group without a worker roundtrip.
 pub fn collect_existing_fa_word_timings(utterance: &Utterance) -> Vec<Option<WordTiming>> {
     let mut timings = Vec::new();
-    for_each_leaf(
+    walk_words(
         &utterance.main.content.content,
         None,
         &mut |leaf| match leaf {
-            ContentLeaf::Word(word, _annotations) => {
-                if word_is_alignable(word, AlignmentDomain::Wor) {
+            WordItem::Word(word) => {
+                if counts_for_tier(word, TierDomain::Wor) {
                     timings.push(get_word_timing(word));
                 }
             }
-            ContentLeaf::ReplacedWord(replaced) => {
+            WordItem::ReplacedWord(replaced) => {
                 if !replaced.replacement.words.is_empty() {
                     for word in &replaced.replacement.words {
-                        if word_is_alignable(word, AlignmentDomain::Wor) {
+                        if counts_for_tier(word, TierDomain::Wor) {
                             timings.push(get_word_timing(word));
                         }
                     }
-                } else if word_is_alignable(&replaced.word, AlignmentDomain::Wor) {
+                } else if counts_for_tier(&replaced.word, TierDomain::Wor) {
                     timings.push(get_word_timing(&replaced.word));
                 }
             }
-            ContentLeaf::Separator(_) => {}
+            WordItem::Separator(_) => {}
         },
     );
     timings

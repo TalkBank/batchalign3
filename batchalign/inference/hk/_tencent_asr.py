@@ -37,7 +37,7 @@ L = logging.getLogger("batchalign.hk.tencent")
 # ---------------------------------------------------------------------------
 
 _recognizer: TencentRecognizer | None = None
-_lang: str = "eng"
+_lang: LanguageCode = "eng"
 
 
 # ---------------------------------------------------------------------------

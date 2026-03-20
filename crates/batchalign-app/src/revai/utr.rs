@@ -9,7 +9,7 @@ use std::path::Path;
 use batchalign_chat_ops::fa::utr::AsrTimingToken;
 use batchalign_revai::extract_timed_words;
 
-use crate::api::{LanguageCode3, NumSpeakers};
+use crate::api::{LanguageCode3, LanguageSpec, NumSpeakers};
 use crate::error::ServerError;
 
 use super::{asr::fetch_revai_transcript, load_revai_api_key};
@@ -28,19 +28,21 @@ pub(crate) async fn infer_revai_utr(
     let api_key =
         load_revai_api_key().map_err(|error| ServerError::Validation(error.to_string()))?;
     let audio_path = audio_path.to_path_buf();
-    let lang = lang.clone();
+    // UTR always uses a concrete language — wrap in LanguageSpec::Resolved
+    // for the shared fetch_revai_transcript signature.
+    let lang_spec = LanguageSpec::Resolved(lang.clone());
     let rev_job_id = rev_job_id.map(str::to_string);
 
     tokio::task::spawn_blocking(move || {
-        let transcript = fetch_revai_transcript(
+        let result = fetch_revai_transcript(
             &api_key,
             &audio_path,
-            &lang,
+            &lang_spec,
             NumSpeakers(1),
             rev_job_id.as_deref(),
         )
         .map_err(|error| ServerError::Validation(error.to_string()))?;
-        Ok(transcript_to_utr_tokens(&transcript))
+        Ok(transcript_to_utr_tokens(&result.transcript))
     })
     .await
     .map_err(|error| ServerError::Validation(format!("Rev.AI task join error: {error}")))?

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 batchalign-app = { workspace = true }
 batchalign-chat-ops = { workspace = true }
+schemars = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 indicatif = { workspace = true }

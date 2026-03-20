@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use super::AsrElement;
+use super::{AsrElement, AsrElementKind, AsrRawText, AsrTimestampSecs};
 
 /// Compound word pairs loaded from the JSON data file at compile time.
 ///
@@ -23,7 +23,7 @@ static COMPOUNDS: LazyLock<HashSet<(&'static str, &'static str)>> = LazyLock::ne
 ///
 /// Uses a sliding window of size 2. When two adjacent tokens match a known
 /// compound pair, they are merged: values concatenated (no space), timing
-/// from the first element, type set to `"text"`.
+/// from the first element, kind set to `Text`.
 ///
 /// # Example
 ///
@@ -45,10 +45,10 @@ pub fn merge_compounds(elements: &[AsrElement]) -> Vec<AsrElement> {
             if COMPOUNDS.contains(&(w1, w2)) {
                 // Merge: concatenate values, take timing from first
                 result.push(AsrElement {
-                    value: format!("{w1}{w2}"),
+                    value: AsrRawText::new(format!("{w1}{w2}")),
                     ts: elements[i].ts,
                     end_ts: elements[i].end_ts,
-                    r#type: "text".to_string(),
+                    kind: AsrElementKind::Text,
                 });
                 i += 2;
                 continue;
@@ -67,10 +67,10 @@ mod tests {
 
     fn elem(value: &str, ts: f64, end_ts: f64) -> AsrElement {
         AsrElement {
-            value: value.to_string(),
-            ts,
-            end_ts,
-            r#type: "text".to_string(),
+            value: AsrRawText::new(value),
+            ts: AsrTimestampSecs(ts),
+            end_ts: AsrTimestampSecs(end_ts),
+            kind: AsrElementKind::Text,
         }
     }
 

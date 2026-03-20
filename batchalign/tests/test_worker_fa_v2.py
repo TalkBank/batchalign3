@@ -18,7 +18,6 @@ from batchalign.worker._types_v2 import (
     FaBackendV2,
     FaTextModeV2,
     ForcedAlignmentRequestV2,
-    ForcedAlignmentTaskRequestV2,
     IndexedWordTimingResultV2,
     InferenceTaskV2,
     PreparedAudioEncodingV2,
@@ -63,14 +62,12 @@ def _make_request(tmp_path: Path, *, backend: FaBackendV2, text_mode: FaTextMode
     return ExecuteRequestV2(
         request_id="req-fa-stage-1",
         task=InferenceTaskV2.FORCED_ALIGNMENT,
-        payload=ForcedAlignmentTaskRequestV2(
-            data=ForcedAlignmentRequestV2(
-                backend=backend,
-                payload_ref_id="payload-ref-1",
-                audio_ref_id="audio-ref-1",
-                text_mode=text_mode,
-                pauses=True,
-            )
+        payload=ForcedAlignmentRequestV2(
+            backend=backend,
+            payload_ref_id="payload-ref-1",
+            audio_ref_id="audio-ref-1",
+            text_mode=text_mode,
+            pauses=True,
         ),
         attachments=[
             PreparedTextRefV2(
@@ -112,8 +109,8 @@ def test_executes_whisper_fa_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, WhisperTokenTimingResultV2)
-    assert response.result.data.tokens[0].text == "hello"
-    assert response.result.data.tokens[1].time_s == 0.38
+    assert response.result.tokens[0].text == "hello"
+    assert response.result.tokens[1].time_s == 0.38
     assert captured == {"shape": (4,), "text": "hello world", "pauses": True}
 
 
@@ -132,8 +129,8 @@ def test_executes_wave2vec_fa_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, IndexedWordTimingResultV2)
-    assert response.result.data.indexed_timings[0].start_ms == 10
-    assert response.result.data.indexed_timings[1].end_ms == 90
+    assert response.result.indexed_timings[0].start_ms == 10
+    assert response.result.indexed_timings[1].end_ms == 90
 
 
 def test_executes_cantonese_wave2vec_fa_v2_request(tmp_path: Path) -> None:
@@ -154,8 +151,8 @@ def test_executes_cantonese_wave2vec_fa_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, IndexedWordTimingResultV2)
-    assert response.result.data.indexed_timings[0].start_ms == 50
-    assert response.result.data.indexed_timings[1].end_ms == 220
+    assert response.result.indexed_timings[0].start_ms == 50
+    assert response.result.indexed_timings[1].end_ms == 220
     assert captured == {
         "shape": (4,),
         "words": ["hello", "world"],

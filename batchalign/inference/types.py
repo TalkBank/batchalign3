@@ -189,7 +189,17 @@ class WhisperASRHandle:
         )
 
     def gen_kwargs(self, lang: LanguageCode) -> GenerateKwargs:
-        """Build generation kwargs for a given language."""
+        """Build generation kwargs for a given language.
+
+        When ``lang`` is ``"auto"``, the ``language`` and ``task`` keys are
+        omitted so the Whisper model auto-detects the spoken language from
+        the audio.  This enables multilingual / code-switched transcription.
+        """
+        if lang == "auto":
+            return {
+                "repetition_penalty": 1.001,
+                "generation_config": self.config,
+            }
         kw: GenerateKwargs = {
             "repetition_penalty": 1.001,
             "generation_config": self.config,

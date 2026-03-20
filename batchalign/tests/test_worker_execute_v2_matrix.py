@@ -25,46 +25,35 @@ from batchalign.worker._types import BatchInferResponse, InferResponse, WorkerJS
 from batchalign.worker._types_v2 import (
     AsrBackendV2,
     AsrRequestV2,
-    AsrTaskRequestV2,
     CorefRequestV2,
     CorefResultV2,
-    CorefTaskRequestV2,
     ExecuteErrorV2,
     ExecuteRequestV2,
     ExecuteSuccessV2,
     FaBackendV2,
     FaTextModeV2,
     ForcedAlignmentRequestV2,
-    ForcedAlignmentTaskRequestV2,
     IndexedWordTimingResultV2,
     InferenceTaskV2,
     MorphosyntaxRequestV2,
     MorphosyntaxResultV2,
-    MorphosyntaxTaskRequestV2,
     MonologueAsrResultV2,
-    PreparedAudioAsrInputV2,
     PreparedAudioEncodingV2,
     PreparedAudioInputV2,
     PreparedAudioRefV2,
     PreparedTextEncodingV2,
     PreparedTextRefV2,
-    ProviderMediaAsrInputV2,
     ProviderMediaInputV2,
     ProtocolErrorCodeV2,
     SpeakerBackendV2,
     SpeakerPreparedAudioInputV2,
-    SpeakerPreparedAudioRefInputV2,
     SpeakerRequestV2,
     SpeakerResultV2,
-    SpeakerTaskRequestV2,
-    SubmittedJobAsrInputV2,
     SubmittedJobInputV2,
     TranslateRequestV2,
     TranslationResultV2,
-    TranslateTaskRequestV2,
     UtsegRequestV2,
     UtsegResultV2,
-    UtsegTaskRequestV2,
     WhisperTokenTimingResultV2,
 )
 
@@ -115,30 +104,22 @@ def _make_asr_request(
     if input_kind == "prepared_audio":
         audio_attachment = _make_prepared_audio_attachment(tmp_path, f"asr-{backend.value}")
         attachments = [audio_attachment]
-        input_payload = PreparedAudioAsrInputV2(
-            data=PreparedAudioInputV2(audio_ref_id=audio_attachment.id)
-        )
+        input_payload = PreparedAudioInputV2(audio_ref_id=audio_attachment.id)
     elif input_kind == "provider_media":
-        input_payload = ProviderMediaAsrInputV2(
-            data=ProviderMediaInputV2(
-                media_path=f"/tmp/{backend.value}.wav",
-                num_speakers=2,
-            )
+        input_payload = ProviderMediaInputV2(
+            media_path=f"/tmp/{backend.value}.wav",
+            num_speakers=2,
         )
     else:
-        input_payload = SubmittedJobAsrInputV2(
-            data=SubmittedJobInputV2(provider_job_id=f"submitted-{backend.value}-1")
-        )
+        input_payload = SubmittedJobInputV2(provider_job_id=f"submitted-{backend.value}-1")
 
     return ExecuteRequestV2(
         request_id=f"req-asr-{backend.value}-{input_kind}",
         task=InferenceTaskV2.ASR,
-        payload=AsrTaskRequestV2(
-            data=AsrRequestV2(
-                lang="yue",
-                backend=backend,
-                input=input_payload,
-            )
+        payload=AsrRequestV2(
+            lang="yue",
+            backend=backend,
+            input=input_payload,
         ),
         attachments=attachments,
     )
@@ -202,14 +183,12 @@ def _make_fa_request(
     return ExecuteRequestV2(
         request_id=f"req-fa-{backend.value}",
         task=InferenceTaskV2.FORCED_ALIGNMENT,
-        payload=ForcedAlignmentTaskRequestV2(
-            data=ForcedAlignmentRequestV2(
-                backend=backend,
-                payload_ref_id=payload_attachment.id,
-                audio_ref_id=audio_attachment.id,
-                text_mode=text_mode,
-                pauses=backend is FaBackendV2.WHISPER,
-            )
+        payload=ForcedAlignmentRequestV2(
+            backend=backend,
+            payload_ref_id=payload_attachment.id,
+            audio_ref_id=audio_attachment.id,
+            text_mode=text_mode,
+            pauses=backend is FaBackendV2.WHISPER,
         ),
         attachments=[payload_attachment, audio_attachment],
     )
@@ -252,14 +231,10 @@ def _make_speaker_request(tmp_path: Path, backend: SpeakerBackendV2) -> ExecuteR
     return ExecuteRequestV2(
         request_id=f"req-speaker-{backend.value}",
         task=InferenceTaskV2.SPEAKER,
-        payload=SpeakerTaskRequestV2(
-            data=SpeakerRequestV2(
-                backend=backend,
-                input=SpeakerPreparedAudioRefInputV2(
-                    data=SpeakerPreparedAudioInputV2(audio_ref_id=audio_attachment.id)
-                ),
-                expected_speakers=3,
-            )
+        payload=SpeakerRequestV2(
+            backend=backend,
+            input=SpeakerPreparedAudioInputV2(audio_ref_id=audio_attachment.id),
+            expected_speakers=3,
         ),
         attachments=[audio_attachment],
     )
@@ -314,12 +289,10 @@ def _make_text_request(tmp_path: Path, task_name: TextTaskName) -> ExecuteReques
                 "mwt": {},
             },
         )
-        payload = MorphosyntaxTaskRequestV2(
-            data=MorphosyntaxRequestV2(
-                lang="eng",
-                payload_ref_id=attachment_id,
-                item_count=1,
-            )
+        payload = MorphosyntaxRequestV2(
+            lang="eng",
+            payload_ref_id=attachment_id,
+            item_count=1,
         )
         task = InferenceTaskV2.MORPHOSYNTAX
     elif task_name == "utseg":
@@ -328,35 +301,29 @@ def _make_text_request(tmp_path: Path, task_name: TextTaskName) -> ExecuteReques
             payload_path,
             {"items": [{"words": ["hello", "world"], "text": "hello world"}]},
         )
-        payload = UtsegTaskRequestV2(
-            data=UtsegRequestV2(
-                lang="eng",
-                payload_ref_id=attachment_id,
-                item_count=1,
-            )
+        payload = UtsegRequestV2(
+            lang="eng",
+            payload_ref_id=attachment_id,
+            item_count=1,
         )
         task = InferenceTaskV2.UTSEG
     elif task_name == "translate":
         attachment_id = "text-ref-translate-matrix"
         _write_json_payload(payload_path, {"items": [{"text": "hello there"}]})
-        payload = TranslateTaskRequestV2(
-            data=TranslateRequestV2(
-                source_lang="eng",
-                target_lang="spa",
-                payload_ref_id=attachment_id,
-                item_count=1,
-            )
+        payload = TranslateRequestV2(
+            source_lang="eng",
+            target_lang="spa",
+            payload_ref_id=attachment_id,
+            item_count=1,
         )
         task = InferenceTaskV2.TRANSLATE
     else:
         attachment_id = "text-ref-coref-matrix"
         _write_json_payload(payload_path, {"items": [{"sentences": [["she"]]}]})
-        payload = CorefTaskRequestV2(
-            data=CorefRequestV2(
-                lang="eng",
-                payload_ref_id=attachment_id,
-                item_count=1,
-            )
+        payload = CorefRequestV2(
+            lang="eng",
+            payload_ref_id=attachment_id,
+            item_count=1,
         )
         task = InferenceTaskV2.COREF
 
@@ -421,7 +388,7 @@ def test_routes_provider_asr_backend_matrix(backend: AsrBackendV2, tmp_path: Pat
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, MonologueAsrResultV2)
-    assert response.result.data.monologues[0].elements[0].value.startswith(
+    assert response.result.monologues[0].elements[0].value.startswith(
         backend.value.removeprefix("hk_")
     )
 
@@ -462,13 +429,13 @@ def test_routes_forced_alignment_backend_matrix(
     assert isinstance(response.outcome, ExecuteSuccessV2)
     if backend is FaBackendV2.WHISPER:
         assert isinstance(response.result, WhisperTokenTimingResultV2)
-        assert response.result.data.tokens[0].text == "hello"
-        assert response.result.data.tokens[1].time_s == 0.25
+        assert response.result.tokens[0].text == "hello"
+        assert response.result.tokens[1].time_s == 0.25
     else:
         assert isinstance(response.result, IndexedWordTimingResultV2)
-        assert response.result.data.indexed_timings[0] is not None
-        assert response.result.data.indexed_timings[0].start_ms >= 50
-        assert response.result.data.indexed_timings[1] is not None
+        assert response.result.indexed_timings[0] is not None
+        assert response.result.indexed_timings[0].start_ms >= 50
+        assert response.result.indexed_timings[1] is not None
 
 
 @pytest.mark.parametrize(
@@ -487,7 +454,7 @@ def test_routes_speaker_backend_matrix(backend: SpeakerBackendV2, tmp_path: Path
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, SpeakerResultV2)
-    assert response.result.data.segments[0].speaker.startswith(backend.value)
+    assert response.result.segments[0].speaker.startswith(backend.value)
 
 
 @pytest.mark.parametrize(

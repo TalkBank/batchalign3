@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use batchalign_app::api::{
     FilePayload, FileResult, HealthResponse, JobInfo, JobListItem, JobResultResponse, JobStatus,
-    JobSubmission, NumSpeakers,
+    JobSubmission, MemoryMb, NumSpeakers,
 };
-use batchalign_app::config::{MemoryMb, RuntimeLayout, ServerConfig};
+use batchalign_app::config::{RuntimeLayout, ServerConfig};
 use batchalign_app::options::CommandOptions;
 use batchalign_app::worker::InferTask;
 use batchalign_app::worker::pool::PoolConfig;
@@ -564,6 +564,488 @@ fn release_active_session(bridge: &Arc<FixtureBridge>) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Audio fixture and paths-mode helpers
+// ---------------------------------------------------------------------------
+
+/// Resolved paths to audio test fixtures copied into a session temp directory.
+pub struct AudioFixtures {
+    /// Path to the test MP3 audio file.
+    pub audio: PathBuf,
+    /// Path to the fully-annotated test CHAT file (with %mor/%gra/%wor).
+    pub chat: PathBuf,
+    /// Path to a stripped CHAT file (main tiers + headers only, no %mor/%gra/%wor).
+    pub stripped_chat: PathBuf,
+}
+
+/// Locate the committed audio fixtures and copy them into `session_dir`.
+///
+/// Returns `None` if source fixtures are missing (tests should skip).
+pub fn prepare_audio_fixtures(session_dir: &Path) -> Option<AudioFixtures> {
+    let repo_root = find_repo_root()?;
+    let source_mp3 = repo_root.join("batchalign/tests/support/test.mp3");
+    let source_cha = repo_root.join("batchalign/tests/formats/chat/support/test.cha");
+
+    if !source_mp3.exists() || !source_cha.exists() {
+        eprintln!(
+            "SKIP: audio fixtures not found (expected {}, {})",
+            source_mp3.display(),
+            source_cha.display()
+        );
+        return None;
+    }
+
+    // Full CHAT (with tiers) — for benchmark gold input.
+    let dest_cha = session_dir.join("test.cha");
+    std::fs::copy(&source_cha, &dest_cha).expect("copy test.cha");
+
+    // For align: stripped CHAT and audio must be colocated with matching names.
+    // @Media says "test, audio" → server looks for test.mp3 next to the CHAT file.
+    // Put both in a subdirectory so the stripped file can be named "test.cha".
+    let align_dir = session_dir.join("align_input");
+    std::fs::create_dir_all(&align_dir).expect("mkdir align_input");
+    let dest_mp3 = align_dir.join("test.mp3");
+    let dest_stripped = align_dir.join("test.cha");
+
+    std::fs::copy(&source_mp3, &dest_mp3).expect("copy test.mp3");
+    let stripped = strip_dependent_tiers(&std::fs::read_to_string(&source_cha).expect("read test.cha"));
+    std::fs::write(&dest_stripped, &stripped).expect("write stripped test.cha");
+
+    // Also copy audio to session root for transcribe tests (no CHAT needed).
+    let transcribe_mp3 = session_dir.join("test.mp3");
+    std::fs::copy(&source_mp3, &transcribe_mp3).expect("copy test.mp3 for transcribe");
+
+    Some(AudioFixtures {
+        audio: transcribe_mp3,
+        chat: dest_cha,
+        stripped_chat: dest_stripped,
+    })
+}
+
+/// Strip %mor, %gra, and %wor dependent tiers from CHAT text.
+///
+/// Keeps main tiers (*SPEAKER), headers (@), and other dependent tiers intact.
+///
+/// This uses line-level filtering rather than AST round-tripping because it is
+/// a test fixture preparation helper — it creates stripped input for align tests,
+/// not a semantic CHAT transformation. The line-prefix check is trivial and
+/// correct for well-formed CHAT files from the test fixtures.
+pub fn strip_dependent_tiers(chat: &str) -> String {
+    let mut result = String::new();
+    for line in chat.lines() {
+        if line.starts_with("%mor:")
+            || line.starts_with("%gra:")
+            || line.starts_with("%wor:")
+        {
+            continue;
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
+/// Walk upward from cwd to find the repo root (directory containing `Cargo.toml`
+/// with `[workspace]` or the `batchalign/` directory).
+fn find_repo_root() -> Option<PathBuf> {
+    let mut cursor = std::env::current_dir().ok()?;
+    loop {
+        if cursor.join("batchalign").is_dir() && cursor.join("Cargo.toml").is_file() {
+            return Some(cursor);
+        }
+        if !cursor.pop() {
+            return None;
+        }
+    }
+}
+
+/// Submit a paths-mode job to a live server and return the completed job info
+/// plus the content of the output files.
+///
+/// `source_paths` and `output_paths` are absolute filesystem paths. The server
+/// reads input from `source_paths` and writes results to `output_paths`.
+pub async fn submit_paths_and_complete(
+    client: &reqwest::Client,
+    base_url: &str,
+    command: &str,
+    lang: &str,
+    source_paths: Vec<String>,
+    output_paths: Vec<String>,
+    options: CommandOptions,
+) -> (JobInfo, Vec<String>) {
+    assert_eq!(
+        source_paths.len(),
+        output_paths.len(),
+        "source_paths and output_paths must have equal length"
+    );
+
+    let submission = JobSubmission {
+        command: command.into(),
+        lang: lang.into(),
+        num_speakers: NumSpeakers(1),
+        files: vec![],
+        media_files: vec![],
+        media_mapping: String::new(),
+        media_subdir: String::new(),
+        source_dir: String::new(),
+        options,
+        paths_mode: true,
+        source_paths: source_paths.clone(),
+        output_paths: output_paths.clone(),
+        display_names: vec![],
+        debug_traces: false,
+        before_paths: vec![],
+    };
+
+    let resp = client
+        .post(format!("{base_url}/jobs"))
+        .json(&submission)
+        .send()
+        .await
+        .expect("POST /jobs");
+    assert_eq!(resp.status(), 200, "Paths-mode job submission should succeed");
+    let info: JobInfo = resp.json().await.expect("parse initial JobInfo");
+
+    let final_info = poll_job_done(client, base_url, &info.job_id).await;
+
+    if final_info.status != JobStatus::Completed {
+        eprintln!(
+            "PATHS JOB FAILED: status={:?}, job_id={}",
+            final_info.status, final_info.job_id
+        );
+        // Try to fetch results for error details.
+        if let Ok(resp) = client
+            .get(format!("{base_url}/jobs/{}/results", final_info.job_id))
+            .send()
+            .await
+        {
+            if let Ok(text) = resp.text().await {
+                eprintln!("  Results response: {}", &text[..text.len().min(500)]);
+            }
+        }
+    }
+
+    // Read output files from disk (only if job completed).
+    // Note: the server's apply_result_filename replaces the output path's filename
+    // with the input filename's basename. So output_path="/out/foo.cha" with
+    // input "test.cha" writes to "/out/test.cha", not "/out/foo.cha".
+    // We scan the output directory for .cha files as a fallback.
+    let outputs: Vec<String> = if final_info.status == JobStatus::Completed {
+        output_paths
+            .iter()
+            .map(|p| {
+                // Try the exact path first.
+                if let Ok(content) = std::fs::read_to_string(p) {
+                    return content;
+                }
+                // Fallback: scan the output directory for any .cha file.
+                let dir = std::path::Path::new(p).parent().unwrap_or(std::path::Path::new("."));
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().map_or(false, |e| e == "cha" || e == "csv") {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                eprintln!(
+                                    "NOTE: output found at {} (not {})",
+                                    path.display(),
+                                    p
+                                );
+                                return content;
+                            }
+                        }
+                    }
+                }
+                panic!("Failed to read output file {p} or find alternatives in directory")
+            })
+            .collect()
+    } else {
+        // Job failed — return empty strings so callers can check status.
+        vec![String::new(); output_paths.len()]
+    };
+
+    (final_info, outputs)
+}
+
+/// Read the Rev.AI API key from environment variables.
+///
+/// Checks `REVAI_API_KEY` first, then `BATCHALIGN_REV_API_KEY`.
+pub fn require_revai_key() -> Option<String> {
+    std::env::var("REVAI_API_KEY")
+        .ok()
+        .or_else(|| std::env::var("BATCHALIGN_REV_API_KEY").ok())
+        .filter(|k| !k.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// BA2 parity helpers
+// ---------------------------------------------------------------------------
+
+/// Load a CHAT fixture from `batchalign/tests/support/parity/{name}.cha`.
+///
+/// Returns `None` if the fixture file doesn't exist (test should skip).
+pub fn load_parity_fixture(name: &str) -> Option<String> {
+    let repo_root = find_repo_root()?;
+    let path = repo_root.join(format!("batchalign/tests/support/parity/{name}.cha"));
+    if !path.exists() {
+        eprintln!("SKIP: parity fixture not found: {}", path.display());
+        return None;
+    }
+    Some(std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("Failed to read parity fixture {}: {e}", path.display())
+    }))
+}
+
+/// Load a BA2 Jan 9 golden reference output.
+///
+/// Reads from `batchalign/tests/golden/ba2_reference/{command}/{name}.jan9.cha`.
+/// Returns `None` if not yet generated (parity test should still run with
+/// structural assertions only).
+pub fn load_ba2_golden(command: &str, name: &str) -> Option<String> {
+    let repo_root = find_repo_root()?;
+    let path = repo_root.join(format!(
+        "batchalign/tests/golden/ba2_reference/{command}/{name}.jan9.cha"
+    ));
+    if !path.exists() {
+        eprintln!(
+            "NOTE: BA2 golden not found (run scripts/generate_ba2_golden.sh): {}",
+            path.display()
+        );
+        return None;
+    }
+    Some(std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("Failed to read BA2 golden {}: {e}", path.display())
+    }))
+}
+
+/// Compare BA3 output to BA2 golden reference, ignoring metadata differences.
+///
+/// Filters out lines that are expected to differ between BA2 and BA3
+/// (timestamps, PID headers, tool-specific comments) and compares the
+/// remaining content line-by-line.
+///
+/// This deliberately uses line-level text comparison rather than AST diffing
+/// because the purpose is to verify textual parity with batchalign2-master
+/// output. AST structural equality would miss formatting and ordering
+/// differences that matter for CHAT file compatibility.
+///
+/// Panics with a detailed diff on mismatch.
+pub fn assert_ba2_parity(label: &str, ba3_output: &str, ba2_golden: &str) {
+    let normalize = |s: &str| -> Vec<String> {
+        s.lines()
+            .filter(|line| {
+                // Skip lines that naturally differ between BA2 and BA3
+                !line.starts_with("@PID:")
+                    && !line.starts_with("@Date:")
+                    && !line.starts_with("@Comment:\t@Languages")
+                    && !line.starts_with("@Tape Location:")
+                    && !line.starts_with("@New Episode")
+                    && !line.starts_with("@Situation:")
+                    // Participant/ID ordering may differ — skip for comparison
+                    && !line.starts_with("@Participants:")
+                    && !line.starts_with("@ID:")
+            })
+            .map(|line| {
+                let mut l = line.trim_end().to_string();
+                // Normalize %gra ROOT convention: BA2 uses N|ROOT (self-ref),
+                // BA3 uses 0|ROOT (UD standard). Convert BA2 to BA3 convention.
+                if l.starts_with("%gra:") {
+                    l = normalize_gra_root(&l);
+                }
+                l
+            })
+            .collect()
+    };
+
+    let ba3_lines = normalize(ba3_output);
+    let ba2_lines = normalize(ba2_golden);
+
+    if ba3_lines == ba2_lines {
+        return;
+    }
+
+    // Build a useful diff report
+    let mut report = format!("\n=== BA2 PARITY FAILURE: {label} ===\n\n");
+
+    let max_lines = ba3_lines.len().max(ba2_lines.len());
+    let mut diff_count = 0;
+    for i in 0..max_lines {
+        let ba3_line = ba3_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+        let ba2_line = ba2_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+
+        if ba3_line != ba2_line {
+            diff_count += 1;
+            report.push_str(&format!(
+                "Line {i}:\n  BA2: {ba2_line}\n  BA3: {ba3_line}\n\n"
+            ));
+            if diff_count >= 20 {
+                report.push_str("  ... (truncated, too many diffs)\n");
+                break;
+            }
+        }
+    }
+
+    report.push_str(&format!(
+        "Total lines: BA2={}, BA3={}, diffs={diff_count}\n",
+        ba2_lines.len(),
+        ba3_lines.len(),
+    ));
+
+    panic!("{report}");
+}
+
+/// Prepare multi-speaker audio fixtures (eng_multi_speaker.mp3).
+///
+/// Returns `None` if the multi-speaker clip isn't committed.
+pub fn prepare_multi_speaker_audio(session_dir: &Path) -> Option<AudioFixtures> {
+    let repo_root = find_repo_root()?;
+    let source_mp3 = repo_root.join("batchalign/tests/support/eng_multi_speaker.mp3");
+    let source_cha = repo_root.join("batchalign/tests/support/parity/eng_multi_speaker.cha");
+
+    if !source_mp3.exists() || !source_cha.exists() {
+        eprintln!(
+            "SKIP: multi-speaker fixtures not found ({}, {})",
+            source_mp3.display(),
+            source_cha.display()
+        );
+        return None;
+    }
+
+    let dest_mp3 = session_dir.join("eng_multi_speaker.mp3");
+    let dest_cha = session_dir.join("eng_multi_speaker.cha");
+    let dest_stripped = session_dir.join("eng_multi_speaker_stripped.cha");
+
+    std::fs::copy(&source_mp3, &dest_mp3).expect("copy eng_multi_speaker.mp3");
+    std::fs::copy(&source_cha, &dest_cha).expect("copy eng_multi_speaker.cha");
+
+    let stripped = strip_dependent_tiers(
+        &std::fs::read_to_string(&source_cha).expect("read eng_multi_speaker.cha"),
+    );
+    std::fs::write(&dest_stripped, &stripped).expect("write stripped eng_multi_speaker.cha");
+
+    Some(AudioFixtures {
+        audio: dest_mp3,
+        chat: dest_cha,
+        stripped_chat: dest_stripped,
+    })
+}
+
+/// Normalize %gra ROOT convention: convert BA2's self-referencing ROOT
+/// (e.g., `4|7|ROOT` where 7 is itself) to BA3's UD-standard `4|0|ROOT`.
+fn normalize_gra_root(gra_line: &str) -> String {
+    // %gra lines contain space-separated items like "1|2|NSUBJ 2|0|ROOT 3|2|PUNCT"
+    // Find the ROOT item and set its head to 0.
+    let prefix = if gra_line.starts_with("%gra:\t") {
+        "%gra:\t"
+    } else if gra_line.starts_with("%gra:") {
+        "%gra:"
+    } else {
+        return gra_line.to_string();
+    };
+
+    let items: Vec<&str> = gra_line[prefix.len()..].split(' ').collect();
+    let normalized: Vec<String> = items
+        .iter()
+        .map(|item| {
+            if item.ends_with("|ROOT") {
+                // Replace N|M|ROOT with N|0|ROOT
+                let parts: Vec<&str> = item.splitn(3, '|').collect();
+                if parts.len() == 3 {
+                    format!("{}|0|ROOT", parts[0])
+                } else {
+                    item.to_string()
+                }
+            } else {
+                item.to_string()
+            }
+        })
+        .collect();
+
+    format!("{prefix}{}", normalized.join(" "))
+}
+
+/// Prepare a named audio clip from `batchalign/tests/support/{name}.mp3`.
+///
+/// Copies the clip to `session_dir` and optionally pairs it with a matching
+/// timed CHAT fixture from `batchalign/tests/support/parity/{chat_name}.cha`.
+/// Returns `None` if the audio file doesn't exist.
+pub fn prepare_named_audio(
+    session_dir: &Path,
+    audio_name: &str,
+    chat_name: Option<&str>,
+) -> Option<AudioFixtures> {
+    let repo_root = find_repo_root()?;
+    let source_mp3 = repo_root.join(format!("batchalign/tests/support/{audio_name}.mp3"));
+
+    if !source_mp3.exists() {
+        eprintln!("SKIP: audio fixture not found: {}", source_mp3.display());
+        return None;
+    }
+
+    // For transcribe: audio in session root (no CHAT needed, server creates CHAT from scratch).
+    let transcribe_mp3 = session_dir.join(format!("{audio_name}.mp3"));
+    std::fs::copy(&source_mp3, &transcribe_mp3).expect("copy audio for transcribe");
+
+    // For align: CHAT and audio must be colocated with matching names.
+    // The CHAT's @Media header references the audio basename — the server resolves
+    // media by looking for that basename (+ .mp3/.wav/.mp4) next to the CHAT file.
+    // We create a subdirectory so the stripped CHAT can share the audio name.
+    let (dest_cha, dest_stripped) = if let Some(cn) = chat_name {
+        let source_cha = repo_root.join(format!("batchalign/tests/support/parity/{cn}.cha"));
+        if !source_cha.exists() {
+            eprintln!("SKIP: CHAT fixture not found: {}", source_cha.display());
+            return None;
+        }
+
+        // Read the @Media basename from the CHAT file so we can name the
+        // colocated audio to match. This uses a trivial line-prefix scan rather
+        // than a full AST parse because it is fixture path setup — extracting a
+        // single header value from a known-good test file.
+        let chat_content = std::fs::read_to_string(&source_cha).expect("read chat");
+        let media_basename = chat_content
+            .lines()
+            .find(|l| l.starts_with("@Media:"))
+            .and_then(|l| l.split('\t').nth(1))
+            .and_then(|m| m.split(',').next())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| audio_name.to_string());
+
+        // Create align input dir with colocated audio + CHAT.
+        let align_dir = session_dir.join(format!("align_{audio_name}"));
+        std::fs::create_dir_all(&align_dir).expect("mkdir align dir");
+
+        // Audio named to match @Media reference.
+        let align_mp3 = align_dir.join(format!("{media_basename}.mp3"));
+        std::fs::copy(&source_mp3, &align_mp3).expect("copy audio for align");
+
+        // Full CHAT (with original tiers).
+        let dest = align_dir.join(format!("{media_basename}.cha"));
+        std::fs::copy(&source_cha, &dest).expect("copy chat");
+
+        // Stripped CHAT (no %mor/%gra/%wor) — same name, used as align input.
+        let stripped = strip_dependent_tiers(&chat_content);
+        let dest_s = align_dir.join(format!("{media_basename}_input.cha"));
+        std::fs::write(&dest_s, &stripped).expect("write stripped chat");
+
+        // For align, the input CHAT filename must match @Media basename
+        // so the server finds the audio. Rename stripped to match.
+        let dest_align_input = align_dir.join(format!("{media_basename}.cha"));
+        // Overwrite the full CHAT with stripped version for align input.
+        std::fs::write(&dest_align_input, &stripped).expect("write align input");
+
+        (dest, dest_align_input)
+    } else {
+        // No CHAT — transcribe-only (server creates CHAT from audio).
+        let dummy = session_dir.join("dummy.cha");
+        (dummy.clone(), dummy)
+    };
+
+    Some(AudioFixtures {
+        audio: transcribe_mp3,
+        chat: dest_cha,
+        stripped_chat: dest_stripped,
+    })
+}
+
 /// Real-model server config for the live fixture.
 fn live_fixture_server_config() -> ServerConfig {
     ServerConfig {
@@ -576,17 +1058,25 @@ fn live_fixture_server_config() -> ServerConfig {
     }
 }
 
-/// Worker-pool config tuned for long-lived live-model fixture reuse.
+/// Worker-pool config tuned for live-model fixture reuse.
+///
+/// Key memory safety settings:
+/// - `idle_timeout_s: 30` — reap workers from completed task types quickly
+///   to prevent memory accumulation when tests cycle through ASR→FA→Speaker→OpenSMILE.
+///   On a 64GB machine, keeping all task workers resident simultaneously can OOM.
+/// - `max_workers_per_key: 1` — one worker per (task, lang) pair. Tests are
+///   serialized via semaphore anyway, so >1 just wastes memory.
 fn live_fixture_pool_config(python_path: &str) -> PoolConfig {
     PoolConfig {
         python_path: python_path.into(),
         test_echo: false,
         health_check_interval_s: 3_600,
-        idle_timeout_s: 3_600,
+        idle_timeout_s: 30,
         ready_timeout_s: 120,
-        max_workers_per_key: 2,
+        max_workers_per_key: 1,
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     }
 }

@@ -13,10 +13,12 @@ use batchalign_app::options::{
 };
 use batchalign_app::params::{CacheOverrides, MergeAbbrevPolicy, WorTierPolicy};
 use batchalign_chat_ops::CacheTaskName;
+use batchalign_chat_ops::fa::CaMarkerPolicy as AppCaMarkerPolicy;
 
 use super::{
-    AsrEngine, BenchAsrEngine, Commands, CommonOpts, DiarizationMode, FaEngine, GlobalOpts,
-    UtrEngine as CliUtrEngine, UtrOverlapStrategy as CliUtrOverlapStrategy,
+    AsrEngine, BenchAsrEngine, CaMarkerPolicy as CliCaMarkerPolicy, Commands, CommonOpts,
+    DiarizationMode, FaEngine, GlobalOpts, UtrEngine as CliUtrEngine,
+    UtrOverlapStrategy as CliUtrOverlapStrategy,
 };
 
 /// Parse one `--engine-overrides` JSON payload into a flat string map.
@@ -79,7 +81,7 @@ pub fn resolve_cache_overrides(global: &GlobalOpts) -> CacheOverrides {
             .filter_map(|s| parse_cache_task(s))
             .collect();
         CacheOverrides::Tasks(tasks)
-    } else if resolve_flag_pair(global.override_cache, global.use_cache) {
+    } else if global.override_cache {
         CacheOverrides::All
     } else {
         CacheOverrides::None
@@ -91,7 +93,7 @@ pub fn resolve_cache_overrides(global: &GlobalOpts) -> CacheOverrides {
 /// Returns `None` for non-processing commands (serve, jobs, version, etc.).
 pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<CommandOptions> {
     let common = CommonOptions {
-        override_cache: resolve_flag_pair(global.override_cache, global.use_cache),
+        override_cache: global.override_cache,
         lazy_audio: resolve_flag_pair(global.lazy_audio, global.no_lazy_audio),
         engine_overrides: parse_engine_overrides(&global.engine_overrides),
         debug_dir: global
@@ -136,14 +138,30 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
                 CliUtrOverlapStrategy::Global => AppUtrOverlapStrategy::Global,
                 CliUtrOverlapStrategy::TwoPass => AppUtrOverlapStrategy::TwoPass,
             };
+            let utr_ca_markers = match a.utr_ca_markers {
+                CliCaMarkerPolicy::Enabled => AppCaMarkerPolicy::Enabled,
+                CliCaMarkerPolicy::Disabled => AppCaMarkerPolicy::Disabled,
+            };
             Some(CommandOptions::Align(AlignOptions {
                 common,
                 fa_engine,
                 utr_engine,
                 utr_overlap_strategy,
+                utr_two_pass: batchalign_chat_ops::fa::TwoPassConfig {
+                    ca_markers: utr_ca_markers,
+                    max_exclusion_density: a.utr_density_threshold,
+                    tight_buffer_ms: a.utr_tight_buffer,
+                    match_mode: match a.utr_fuzzy {
+                        Some(threshold) => {
+                            batchalign_chat_ops::fa::UtrMatchMode::Fuzzy { threshold }
+                        }
+                        None => batchalign_chat_ops::fa::TwoPassConfig::default().match_mode,
+                    },
+                },
                 pauses: a.pauses,
                 wor: resolve_wor_tier_policy(a.wor, a.nowor),
                 merge_abbrev: resolve_merge_abbrev_policy(a.merge_abbrev, a.no_merge_abbrev),
+                media_dir: a.media_dir.clone(),
             }))
         }
         Commands::Transcribe(a) => {

@@ -13,7 +13,7 @@ use batchalign_app::api::NumSpeakers;
 use batchalign_app::worker::error::WorkerError;
 use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
 use batchalign_app::worker::pool::{PoolConfig, WorkerPool};
-use batchalign_app::worker::{BatchInferRequest, InferRequest, InferTask, WorkerTarget};
+use batchalign_app::worker::{BatchInferRequest, InferRequest, InferTask, WorkerProfile};
 use common::resolve_python;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -30,10 +30,6 @@ macro_rules! require_python {
             }
         }
     };
-}
-
-fn morphosyntax_target() -> WorkerTarget {
-    WorkerTarget::infer_task(InferTask::Morphosyntax)
 }
 
 fn infer_request(payload: Value) -> InferRequest {
@@ -59,7 +55,7 @@ async fn spawn_test_echo_worker() {
     let config = WorkerConfig {
         python_path: python,
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         ready_timeout_s: 30,
         ..Default::default()
@@ -67,7 +63,7 @@ async fn spawn_test_echo_worker() {
 
     let handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     assert!(*handle.pid() > 0, "should have a valid pid");
-    assert_eq!(handle.target_label(), "infer:morphosyntax");
+    assert_eq!(handle.profile_label(), "profile:stanza");
     assert_eq!(handle.lang(), "eng");
     assert_eq!(handle.transport(), "stdio");
 
@@ -80,7 +76,7 @@ async fn health_check_works() {
     let config = WorkerConfig {
         python_path: python,
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         ready_timeout_s: 30,
         ..Default::default()
@@ -89,7 +85,7 @@ async fn health_check_works() {
     let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     let health = handle.health_check().await.expect("health check failed");
     assert_eq!(health.status, "ok");
-    assert_eq!(health.command, "morphosyntax");
+    assert_eq!(health.command, "profile:stanza");
     assert_eq!(health.lang, "eng");
     assert!(*health.pid > 0);
 
@@ -102,7 +98,7 @@ async fn capabilities_test_echo() {
     let config = WorkerConfig {
         python_path: python,
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         ready_timeout_s: 30,
         ..Default::default()
@@ -125,7 +121,7 @@ async fn infer_echo_returns_payload() {
     let config = WorkerConfig {
         python_path: python,
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         ready_timeout_s: 30,
         ..Default::default()
@@ -149,7 +145,7 @@ async fn batch_infer_echo_returns_items() {
     let config = WorkerConfig {
         python_path: python,
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         ready_timeout_s: 30,
         ..Default::default()
@@ -184,6 +180,7 @@ async fn pool_dispatch_batch_infer_spawns_and_processes() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     });
 
     let item = json!({"words": ["hello", "pool"], "lang": "eng"});
@@ -199,7 +196,7 @@ async fn pool_dispatch_batch_infer_spawns_and_processes() {
     assert_eq!(pool.worker_count(), 1);
     let summary = pool.worker_summary();
     assert_eq!(summary.len(), 1);
-    assert!(summary[0].starts_with("infer:morphosyntax:eng:pid="));
+    assert!(summary[0].starts_with("profile:stanza:eng:pid="));
     assert!(summary[0].contains(":transport=stdio"));
 
     pool.shutdown().await;
@@ -219,6 +216,7 @@ async fn pool_reuses_existing_worker() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     });
 
     for i in 0..3 {
@@ -250,6 +248,7 @@ async fn pool_multiple_task_groups() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     });
 
     let morph_item = json!({"task": "morph"});
@@ -288,6 +287,7 @@ async fn pool_warmup_uses_infer_targets() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     });
 
     pool.warmup(&[
@@ -297,16 +297,19 @@ async fn pool_warmup_uses_infer_targets() {
     .await;
 
     let summary = pool.worker_summary();
+    // morphotag → Stanza profile (sequential group), align → GPU profile (SharedGpuWorker)
     assert_eq!(pool.worker_count(), 2);
     assert!(
         summary
             .iter()
-            .any(|entry| entry.starts_with("infer:morphosyntax:eng:"))
+            .any(|entry| entry.starts_with("profile:stanza:eng:")),
+        "expected a Stanza profile worker in summary: {summary:?}"
     );
     assert!(
         summary
             .iter()
-            .any(|entry| entry.starts_with("infer:fa:eng:"))
+            .any(|entry| entry.starts_with("profile:gpu:eng:")),
+        "expected a GPU profile worker in summary: {summary:?}"
     );
 
     pool.shutdown().await;
@@ -325,6 +328,7 @@ async fn pool_pre_scale_respects_max_workers_per_key() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     });
 
     pool.pre_scale(&"morphotag".into(), &"eng".into(), 4).await;
@@ -367,6 +371,7 @@ async fn pool_serializes_worker_bootstrap_per_key() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     });
 
     let item1 = json!({"request": 1});
@@ -411,7 +416,7 @@ async fn spawn_failure_bad_python_path() {
     let config = WorkerConfig {
         python_path: "/nonexistent/python3".to_string(),
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
@@ -447,7 +452,7 @@ async fn spawn_tolerates_non_json_stdout_preamble_before_ready() {
     let config = WorkerConfig {
         python_path: fake_python.to_string_lossy().into_owned(),
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
@@ -478,7 +483,7 @@ async fn spawn_failure_includes_worker_startup_stderr() {
     let config = WorkerConfig {
         python_path: fake_python.to_string_lossy().into_owned(),
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
@@ -511,7 +516,7 @@ async fn health_check_tolerates_non_protocol_stdout_between_requests() {
     let fake_python = dir.path().join("fake-python");
     std::fs::write(
         &fake_python,
-        "#!/bin/sh\nprintf '{\"ready\":true,\"pid\":1234,\"transport\":\"stdio\"}\\n'\nIFS= read -r req || exit 1\nprintf 'torch: loading checkpoint shards\\n'\nprintf '{\"op\":\"health\",\"response\":{\"status\":\"ok\",\"command\":\"morphosyntax\",\"lang\":\"eng\",\"pid\":1234,\"uptime_s\":0}}\\n'\nIFS= read -r req || exit 0\nprintf '{\"op\":\"shutdown\"}\\n'\n",
+        "#!/bin/sh\nprintf '{\"ready\":true,\"pid\":1234,\"transport\":\"stdio\"}\\n'\nIFS= read -r req || exit 1\nprintf 'torch: loading checkpoint shards\\n'\nprintf '{\"op\":\"health\",\"response\":{\"status\":\"ok\",\"command\":\"profile:stanza\",\"lang\":\"eng\",\"pid\":1234,\"uptime_s\":0}}\\n'\nIFS= read -r req || exit 0\nprintf '{\"op\":\"shutdown\"}\\n'\n",
     )
     .expect("write fake python");
     let mut perms = std::fs::metadata(&fake_python)
@@ -523,7 +528,7 @@ async fn health_check_tolerates_non_protocol_stdout_between_requests() {
     let config = WorkerConfig {
         python_path: fake_python.to_string_lossy().into_owned(),
         test_echo: true,
-        target: morphosyntax_target(),
+        profile: WorkerProfile::Stanza,
         lang: "eng".into(),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
@@ -533,8 +538,98 @@ async fn health_check_tolerates_non_protocol_stdout_between_requests() {
     let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     let health = handle.health_check().await.expect("health check failed");
     assert_eq!(health.status, "ok");
-    assert_eq!(health.command, "morphosyntax");
+    assert_eq!(health.command, "profile:stanza");
     assert_eq!(health.lang, "eng");
 
     handle.shutdown().await.expect("shutdown failed");
+}
+
+/// Two different InferTasks within the same profile share one worker.
+#[tokio::test]
+async fn profile_groups_related_tasks_into_single_worker() {
+    let python = require_python!();
+    let pool = WorkerPool::new(PoolConfig {
+        python_path: python,
+        health_check_interval_s: 60,
+        idle_timeout_s: 300,
+        ready_timeout_s: 30,
+        test_echo: true,
+        max_workers_per_key: 8,
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: Default::default(),
+        ..Default::default()
+    });
+
+    // Dispatch morphosyntax and utseg — both Stanza profile.
+    let morph_item = json!({"task": "morph"});
+    let utseg_item = json!({"task": "utseg"});
+    pool.dispatch_batch_infer(
+        &"eng".into(),
+        &batch_request(InferTask::Morphosyntax, vec![morph_item]),
+    )
+    .await
+    .expect("morphosyntax dispatch failed");
+    pool.dispatch_batch_infer(
+        &"eng".into(),
+        &batch_request(InferTask::Utseg, vec![utseg_item]),
+    )
+    .await
+    .expect("utseg dispatch failed");
+
+    // Both should use the same Stanza worker — only 1 worker total.
+    assert_eq!(
+        pool.worker_count(),
+        1,
+        "morphosyntax and utseg should share a single Stanza profile worker"
+    );
+
+    pool.shutdown().await;
+}
+
+/// Three different profiles produce exactly three workers.
+#[tokio::test]
+async fn each_profile_gets_its_own_worker() {
+    let python = require_python!();
+    let pool = WorkerPool::new(PoolConfig {
+        python_path: python,
+        health_check_interval_s: 60,
+        idle_timeout_s: 300,
+        ready_timeout_s: 30,
+        test_echo: true,
+        max_workers_per_key: 8,
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: Default::default(),
+        ..Default::default()
+    });
+
+    // Dispatch one task from each profile via batch_infer.
+    pool.dispatch_batch_infer(
+        &"eng".into(),
+        &batch_request(InferTask::Morphosyntax, vec![json!({"p": "stanza"})]),
+    )
+    .await
+    .expect("stanza dispatch failed");
+    pool.dispatch_batch_infer(
+        &"eng".into(),
+        &batch_request(InferTask::Translate, vec![json!({"p": "io"})]),
+    )
+    .await
+    .expect("io dispatch failed");
+    pool.dispatch_batch_infer(
+        &"eng".into(),
+        &batch_request(InferTask::Fa, vec![json!({"p": "gpu"})]),
+    )
+    .await
+    .expect("gpu dispatch failed");
+
+    // Three different profiles -> three workers.
+    assert_eq!(
+        pool.worker_count(),
+        3,
+        "expected one worker per profile (Stanza, IO, GPU)"
+    );
+
+    pool.shutdown().await;
 }

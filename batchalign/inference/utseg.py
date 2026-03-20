@@ -27,9 +27,13 @@ L = logging.getLogger("batchalign.worker")
 
 
 class UtsegBatchItem(BaseModel):
-    """A single item in the batch utseg payload from Rust."""
+    """A single item in the batch utseg payload from Rust.
+
+    Matches Rust ``UtsegBatchItem`` in ``batchalign-chat-ops/src/utseg.rs``.
+    """
 
     words: list[str]
+    text: str = ""
     lang: LanguageCode = ""
 
 

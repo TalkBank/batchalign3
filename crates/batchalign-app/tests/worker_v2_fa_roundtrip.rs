@@ -19,6 +19,7 @@ use batchalign_app::worker::fa_result_v2::parse_forced_alignment_result_v2;
 use batchalign_app::worker::request_builder_v2::{
     ForcedAlignmentBuildInputV2, PreparedFaRequestIdsV2, build_forced_alignment_request_v2,
 };
+use batchalign_app::api::DurationMs;
 use batchalign_chat_ops::fa::{FaEngineType, FaInferItem, FaTimingMode, FaWord};
 use batchalign_chat_ops::indices::{UtteranceIdx, WordIdx};
 use common::resolve_python_for_module;
@@ -147,7 +148,7 @@ async fn staged_worker_v2_fa_roundtrip_crosses_rust_and_python() {
     let timings = parse_forced_alignment_result_v2(
         &response,
         &make_words(&["hello", "world"]),
-        0,
+        DurationMs(0),
         FaTimingMode::Continuous,
     )
     .expect("staged response should parse back into Rust FA domain");

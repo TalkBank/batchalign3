@@ -10,9 +10,9 @@ mod common;
 
 use batchalign_app::api::{
     FilePayload, FileResult, HealthResponse, HealthStatus, JobInfo, JobListItem, JobResultResponse,
-    JobStatus, JobSubmission, NumSpeakers,
+    JobStatus, JobSubmission, MemoryMb, NumSpeakers,
 };
-use batchalign_app::config::{MemoryMb, ServerConfig};
+use batchalign_app::config::ServerConfig;
 use batchalign_app::create_app;
 use batchalign_app::options::{CommandOptions, CommonOptions, TranscribeOptions};
 use batchalign_app::worker::pool::PoolConfig;
@@ -115,6 +115,7 @@ async fn start_test_server_with_config(
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     };
 
     let db_dir = tmp.path().join("db");
@@ -222,7 +223,7 @@ async fn submit_and_get_job() {
 
     let info: JobInfo = resp.json().await.expect("parse job info");
     assert_eq!(info.command, "transcribe");
-    assert_eq!(info.lang, "eng");
+    assert_eq!(info.lang, batchalign_app::api::LanguageSpec::Resolved(batchalign_app::api::LanguageCode3::from("eng")));
     assert_eq!(info.total_files, 1);
     let job_id = info.job_id.clone();
 
@@ -980,6 +981,7 @@ async fn server_starts_with_real_worker_capability_gate() {
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     };
 
     let result = create_app(

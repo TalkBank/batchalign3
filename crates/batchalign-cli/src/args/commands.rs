@@ -43,6 +43,16 @@ pub enum UtrOverlapStrategy {
     TwoPass,
 }
 
+/// Whether CA overlap markers (⌈⌉⌊⌋) are used for alignment windowing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum CaMarkerPolicy {
+    /// Use CA markers for onset windowing when present (default).
+    #[default]
+    Enabled,
+    /// Ignore CA markers — treat all overlaps as `+<` only.
+    Disabled,
+}
+
 /// Forced-alignment engine for the `align` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum FaEngine {
@@ -123,6 +133,11 @@ pub struct AlignArgs {
     #[arg(long)]
     pub fa_engine_custom: Option<String>,
 
+    /// Directory containing media files for alignment.
+    /// Matches by filename stem (file.cha looks for file.mp3/mp4/wav).
+    #[arg(long, value_name = "PATH")]
+    pub media_dir: Option<String>,
+
     /// Try to add pauses between words by grouping them.
     #[arg(long)]
     pub pauses: bool,
@@ -154,6 +169,27 @@ pub struct AlignArgs {
     /// UTR overlap strategy: auto (default), global, or two-pass.
     #[arg(long, value_enum, default_value_t)]
     pub utr_strategy: UtrOverlapStrategy,
+
+    /// Use CA overlap markers (⌈⌉⌊⌋) for alignment windowing: enabled (default), disabled.
+    #[arg(long, value_enum, default_value_t)]
+    pub utr_ca_markers: CaMarkerPolicy,
+
+    /// Max overlap density before skipping pass-1 exclusion (0.0–1.0, default 0.30).
+    #[arg(long, default_value_t = 0.30)]
+    pub utr_density_threshold: f64,
+
+    /// Tight window buffer for pass-2 backchannel recovery (ms, default 500).
+    #[arg(long, default_value_t = 500)]
+    pub utr_tight_buffer: u64,
+
+    /// UTR word matching threshold. Default: 0.85 (fuzzy matching enabled).
+    ///
+    /// Uses Jaro-Winkler similarity to match ASR words against transcript
+    /// words even when they differ slightly (e.g., "gonna"/"gona"). Set to
+    /// 1.0 for exact matching only. The threshold controls how similar words
+    /// must be (0.0–1.0, higher = stricter).
+    #[arg(long)]
+    pub utr_fuzzy: Option<f64>,
 
     // -- Hidden BA2 compatibility aliases --
     /// BA2 compat: use --utr-engine whisper instead.
@@ -254,6 +290,12 @@ pub struct TranslateArgs {
     #[command(flatten)]
     pub common: CommonOpts,
 
+    /// Language override (3-letter ISO code). When set, overrides the
+    /// `@Languages` header in the CHAT file. Useful for testing or
+    /// files with missing/wrong headers.
+    #[arg(long)]
+    pub lang: Option<String>,
+
     /// Merge abbreviations in output.
     #[arg(long, conflicts_with = "no_merge_abbrev")]
     pub merge_abbrev: bool,
@@ -269,6 +311,12 @@ pub struct MorphotagArgs {
     /// Shared file I/O options.
     #[command(flatten)]
     pub common: CommonOpts,
+
+    /// Language override (3-letter ISO code). When set, overrides the
+    /// `@Languages` header in the CHAT file. Useful for testing or
+    /// files with missing/wrong headers.
+    #[arg(long)]
+    pub lang: Option<String>,
 
     /// Retokenize the main line to fit UD tokenizations.
     ///
@@ -310,6 +358,11 @@ pub struct CorefArgs {
     /// Shared file I/O options.
     #[command(flatten)]
     pub common: CommonOpts,
+
+    /// Language override (3-letter ISO code). When set, overrides the
+    /// `@Languages` header in the CHAT file.
+    #[arg(long)]
+    pub lang: Option<String>,
 
     /// Merge abbreviations in output.
     #[arg(long, conflicts_with = "no_merge_abbrev")]
@@ -542,17 +595,9 @@ pub struct BenchArgs {
     #[arg(long)]
     pub dataset: Option<String>,
 
-    /// Disable pooled execution for this benchmark run.
-    #[arg(long)]
-    pub no_pool: bool,
-
     /// Disable lazy audio loading for this benchmark run.
     #[arg(long)]
     pub no_lazy_audio: bool,
-
-    /// Disable adaptive worker caps for this benchmark run.
-    #[arg(long)]
-    pub no_adaptive_workers: bool,
 
     /// Number of workers to use.
     #[arg(long)]
@@ -696,6 +741,16 @@ pub struct ServeStartArgs {
     /// Overrides the value from server.yaml. Default: 600 (10 minutes).
     #[arg(long)]
     pub worker_idle_timeout_s: Option<u64>,
+
+    /// Maximum concurrent files per job. Overrides the `max_workers_per_job`
+    /// value from `server.yaml`. 0 = auto-tune.
+    #[arg(long)]
+    pub workers: Option<usize>,
+
+    /// Inference timeout in seconds for audio tasks (ASR, FA, speaker).
+    /// Increase for very long recordings. Default: 1800 (30 minutes).
+    #[arg(long)]
+    pub timeout: Option<u64>,
 }
 
 /// Arguments for `serve status`.
@@ -762,6 +817,22 @@ pub struct OpenapiArgs {
     pub check: bool,
 }
 
+/// Arguments for the `ipc-schema` subcommand.
+#[derive(Args, Debug, Clone)]
+pub struct IpcSchemaArgs {
+    /// Output directory for JSON Schema files.
+    ///
+    /// If omitted, schemas are written to stdout as a single JSON object.
+    #[arg(short, long)]
+    pub output: Option<String>,
+
+    /// Verify that the target directory already matches the generated schemas.
+    ///
+    /// This mode does not modify files and exits non-zero on schema drift.
+    #[arg(long)]
+    pub check: bool,
+}
+
 /// Arguments for the `cache` subcommand.
 #[derive(Args, Debug, Clone)]
 pub struct CacheArgs {
@@ -804,4 +875,64 @@ pub struct CacheClearArgs {
     /// Skip confirmation prompt.
     #[arg(short = 'y', long)]
     pub yes: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Worker daemon management
+// ---------------------------------------------------------------------------
+
+/// Arguments for `batchalign3 worker`.
+#[derive(Args, Debug, Clone)]
+pub struct WorkerArgs {
+    /// Worker action (start, list, stop).
+    #[command(subcommand)]
+    pub action: WorkerAction,
+}
+
+/// Worker management actions.
+#[derive(Subcommand, Debug, Clone)]
+pub enum WorkerAction {
+    /// Start a worker as a foreground daemon.
+    Start(WorkerStartArgs),
+    /// List active workers from the registry.
+    List,
+    /// Stop one or all workers.
+    Stop(WorkerStopArgs),
+}
+
+/// Arguments for `worker start`.
+#[derive(Args, Debug, Clone)]
+pub struct WorkerStartArgs {
+    /// Worker profile: gpu, stanza, or io.
+    #[arg(long)]
+    pub profile: String,
+    /// 3-letter ISO language code (e.g. eng, fra, yue).
+    #[arg(long, default_value = "eng")]
+    pub lang: String,
+    /// TCP port to listen on (0 = auto-assign from 9100-9199).
+    #[arg(long, default_value_t = 0)]
+    pub port: u16,
+    /// TCP bind address.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+    /// Engine overrides as JSON (e.g. '{"asr":"tencent"}').
+    #[arg(long, default_value = "")]
+    pub engine_overrides: String,
+}
+
+/// Arguments for `worker stop`.
+#[derive(Args, Debug, Clone)]
+pub struct WorkerStopArgs {
+    /// Stop the worker on this port.
+    #[arg(long, default_value_t = 0)]
+    pub port: u16,
+    /// Stop all workers matching this profile.
+    #[arg(long, default_value = "")]
+    pub profile: String,
+    /// Stop all workers matching this language.
+    #[arg(long, default_value = "")]
+    pub lang: String,
+    /// Stop all registered workers.
+    #[arg(long)]
+    pub all: bool,
 }

@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{EngineVersion, LanguageCode3, NumSpeakers};
+use crate::api::{DurationMs, DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers};
 use crate::types::worker::WorkerPid;
 
 string_id!(
@@ -78,7 +78,7 @@ numeric_id!(
 );
 
 /// Worker role selected during the protocol handshake.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerKindV2 {
     /// Stateless inference worker process.
@@ -86,7 +86,7 @@ pub enum WorkerKindV2 {
 }
 
 /// High-level V2 task family.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceTaskV2 {
     /// Morphosyntax tagging.
@@ -110,7 +110,7 @@ pub enum InferenceTaskV2 {
 }
 
 /// ASR backend selected by the Rust control plane.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AsrBackendV2 {
     /// Local Whisper runtime hosted in Python.
@@ -126,7 +126,7 @@ pub enum AsrBackendV2 {
 }
 
 /// Forced-alignment backend selected by the Rust control plane.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FaBackendV2 {
     /// Whisper token-timestamp alignment.
@@ -138,7 +138,7 @@ pub enum FaBackendV2 {
 }
 
 /// Speaker diarization backend selected by Rust.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeakerBackendV2 {
     /// Pyannote diarization backend.
@@ -148,7 +148,7 @@ pub enum SpeakerBackendV2 {
 }
 
 /// Small artifact-kind vocabulary advertised in task capabilities.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerAttachmentKindV2 {
     /// File-backed prepared PCM audio.
@@ -164,7 +164,7 @@ pub enum WorkerAttachmentKindV2 {
 }
 
 /// PCM encoding used for prepared audio artifacts.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedAudioEncodingV2 {
     /// Little-endian float32 PCM frames.
@@ -172,7 +172,7 @@ pub enum PreparedAudioEncodingV2 {
 }
 
 /// Encoding used for prepared text artifacts.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedTextEncodingV2 {
     /// UTF-8 JSON text stored on disk.
@@ -180,7 +180,7 @@ pub enum PreparedTextEncodingV2 {
 }
 
 /// Error category for protocol-level failures.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolErrorCodeV2 {
     /// Worker/runtime does not understand the requested protocol version.
@@ -198,7 +198,7 @@ pub enum ProtocolErrorCodeV2 {
 }
 
 /// Text-joining mode for forced-alignment payloads.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FaTextModeV2 {
     /// Join words with spaces before model invocation.
@@ -208,7 +208,7 @@ pub enum FaTextModeV2 {
 }
 
 /// Runtime information returned during the V2 handshake.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct WorkerRuntimeInfoV2 {
     /// Python runtime version used by the worker.
     pub python_version: String,
@@ -217,7 +217,7 @@ pub struct WorkerRuntimeInfoV2 {
 }
 
 /// Initial V2 handshake request sent by Rust.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct HelloRequestV2 {
     /// Requested protocol version.
     pub protocol_version: WorkerProtocolVersionV2,
@@ -226,7 +226,7 @@ pub struct HelloRequestV2 {
 }
 
 /// Initial V2 handshake response sent by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct HelloResponseV2 {
     /// Agreed protocol version.
     pub protocol_version: WorkerProtocolVersionV2,
@@ -237,14 +237,14 @@ pub struct HelloResponseV2 {
 }
 
 /// Request for task capability metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CapabilitiesRequestV2 {
     /// Correlation id for the capability lookup.
     pub request_id: WorkerRequestIdV2,
 }
 
 /// One task capability advertised by a V2 worker.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TaskCapabilityV2 {
     /// Task family supported by the worker.
     pub task: InferenceTaskV2,
@@ -255,7 +255,7 @@ pub struct TaskCapabilityV2 {
 }
 
 /// Response describing task capabilities for the worker.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CapabilitiesResponseV2 {
     /// Correlation id that matches the request.
     pub request_id: WorkerRequestIdV2,
@@ -266,7 +266,7 @@ pub struct CapabilitiesResponseV2 {
 }
 
 /// File-backed prepared audio artifact.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct PreparedAudioRefV2 {
     /// Stable artifact id referenced by request payloads.
     pub id: WorkerArtifactIdV2,
@@ -287,7 +287,7 @@ pub struct PreparedAudioRefV2 {
 }
 
 /// File-backed prepared text artifact.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct PreparedTextRefV2 {
     /// Stable artifact id referenced by request payloads.
     pub id: WorkerArtifactIdV2,
@@ -302,7 +302,7 @@ pub struct PreparedTextRefV2 {
 }
 
 /// Small inline JSON attachment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct InlineJsonRefV2 {
     /// Stable artifact id referenced by request payloads.
     pub id: WorkerArtifactIdV2,
@@ -311,7 +311,7 @@ pub struct InlineJsonRefV2 {
 }
 
 /// Prepared artifact reference carried alongside one execute request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ArtifactRefV2 {
     /// Prepared PCM audio view.
@@ -323,14 +323,14 @@ pub enum ArtifactRefV2 {
 }
 
 /// Request-time reference to a prepared audio artifact.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct PreparedAudioInputV2 {
     /// Artifact id of the audio descriptor included in `attachments`.
     pub audio_ref_id: WorkerArtifactIdV2,
 }
 
 /// Temporary cloud-provider media input retained during migration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ProviderMediaInputV2 {
     /// Media file path readable by the worker host.
     pub media_path: WorkerArtifactPathV2,
@@ -339,15 +339,15 @@ pub struct ProviderMediaInputV2 {
 }
 
 /// Previously submitted provider job id.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct SubmittedJobInputV2 {
     /// Provider job identifier to poll.
     pub provider_job_id: WorkerArtifactIdV2,
 }
 
 /// ASR input variants for V2.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AsrInputV2 {
     /// Local prepared audio path.
     PreparedAudio(PreparedAudioInputV2),
@@ -358,7 +358,7 @@ pub enum AsrInputV2 {
 }
 
 /// V2 ASR request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct AsrRequestV2 {
     /// Input language for the transcript.
     pub lang: LanguageCode3,
@@ -369,7 +369,7 @@ pub struct AsrRequestV2 {
 }
 
 /// V2 forced-alignment request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ForcedAlignmentRequestV2 {
     /// Backend selected by Rust.
     pub backend: FaBackendV2,
@@ -384,7 +384,7 @@ pub struct ForcedAlignmentRequestV2 {
 }
 
 /// V2 morphosyntax request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct MorphosyntaxRequestV2 {
     /// Primary language routed by Rust.
     pub lang: LanguageCode3,
@@ -395,7 +395,7 @@ pub struct MorphosyntaxRequestV2 {
 }
 
 /// V2 utterance-segmentation request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct UtsegRequestV2 {
     /// Primary language routed by Rust.
     pub lang: LanguageCode3,
@@ -406,7 +406,7 @@ pub struct UtsegRequestV2 {
 }
 
 /// V2 translation request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TranslateRequestV2 {
     /// Source language determined by Rust.
     pub source_lang: LanguageCode3,
@@ -419,7 +419,7 @@ pub struct TranslateRequestV2 {
 }
 
 /// V2 coreference request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CorefRequestV2 {
     /// Primary language routed by Rust.
     pub lang: LanguageCode3,
@@ -430,7 +430,7 @@ pub struct CorefRequestV2 {
 }
 
 /// V2 speaker diarization request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct SpeakerRequestV2 {
     /// Backend selected by Rust.
     pub backend: SpeakerBackendV2,
@@ -442,7 +442,7 @@ pub struct SpeakerRequestV2 {
 }
 
 /// V2 openSMILE request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct OpenSmileRequestV2 {
     /// Reference to the prepared audio attachment.
     pub audio_ref_id: WorkerArtifactIdV2,
@@ -453,7 +453,7 @@ pub struct OpenSmileRequestV2 {
 }
 
 /// V2 AVQI request payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct AvqiRequestV2 {
     /// Reference to the prepared continuous-speech audio attachment.
     pub cs_audio_ref_id: WorkerArtifactIdV2,
@@ -462,23 +462,23 @@ pub struct AvqiRequestV2 {
 }
 
 /// Prepared-audio speaker input owned by Rust.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct SpeakerPreparedAudioInputV2 {
     /// Artifact id of the prepared mono PCM audio view.
     pub audio_ref_id: WorkerArtifactIdV2,
 }
 
 /// Current input variants for speaker diarization.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpeakerInputV2 {
     /// Prepared mono PCM audio owned by Rust.
     PreparedAudio(SpeakerPreparedAudioInputV2),
 }
 
 /// Typed execute payload carried by one V2 request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskRequestV2 {
     /// Automatic speech recognition request.
     Asr(AsrRequestV2),
@@ -501,7 +501,7 @@ pub enum TaskRequestV2 {
 }
 
 /// One top-level V2 execution request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ExecuteRequestV2 {
     /// Correlation id for the request.
     pub request_id: WorkerRequestIdV2,
@@ -519,22 +519,58 @@ impl ExecuteRequestV2 {
     pub fn timeout_seconds(&self) -> u64 {
         self.payload.timeout_seconds()
     }
+
+    /// Return the timeout with optional config overrides for audio and
+    /// analysis tasks.
+    pub fn timeout_seconds_with_config(
+        &self,
+        audio_timeout_s: u64,
+        analysis_timeout_s: u64,
+    ) -> u64 {
+        self.payload
+            .timeout_seconds_with_config(audio_timeout_s, analysis_timeout_s)
+    }
 }
 
 impl TaskRequestV2 {
     /// Return the timeout budget this task family should receive on the worker
     /// transport.
     pub fn timeout_seconds(&self) -> u64 {
+        self.timeout_seconds_with_config(0, 0)
+    }
+
+    /// Return the timeout with optional config overrides.
+    ///
+    /// When `audio_timeout_s` or `analysis_timeout_s` is 0, the built-in
+    /// defaults (1800 and 120) are used.
+    pub fn timeout_seconds_with_config(
+        &self,
+        audio_timeout_s: u64,
+        analysis_timeout_s: u64,
+    ) -> u64 {
         match self {
             Self::Morphosyntax(request) => batched_text_timeout_seconds(request.item_count),
             Self::Utseg(request) => batched_text_timeout_seconds(request.item_count),
             Self::Translate(request) => batched_text_timeout_seconds(request.item_count),
             Self::Coref(request) => batched_text_timeout_seconds(request.item_count),
-            Self::Asr(_)
-            | Self::ForcedAlignment(_)
-            | Self::Speaker(_)
-            | Self::Opensmile(_)
-            | Self::Avqi(_) => 120,
+            // Audio-based tasks can process files of arbitrary length.
+            // A 30-minute recording can take 5+ minutes for Whisper inference;
+            // a 2-hour file can take 20+ minutes.  Use a generous ceiling.
+            Self::Asr(_) | Self::ForcedAlignment(_) | Self::Speaker(_) => {
+                if audio_timeout_s > 0 {
+                    audio_timeout_s
+                } else {
+                    1800
+                }
+            }
+            // Lightweight audio analysis — 120s is sufficient.
+            Self::Opensmile(_) | Self::Avqi(_) => {
+                if analysis_timeout_s > 0 {
+                    analysis_timeout_s
+                } else {
+                    120
+                }
+            }
         }
     }
 }
@@ -547,18 +583,18 @@ fn batched_text_timeout_seconds(item_count: u32) -> u64 {
 /// One raw Whisper chunk span returned by Python.
 ///
 /// Timing fields validated upstream by Python Pydantic models (see module docs).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct WhisperChunkSpanV2 {
     /// Surface text for the chunk.
     pub text: String,
     /// Start timestamp in seconds.
-    pub start_s: f64,
+    pub start_s: DurationSeconds,
     /// End timestamp in seconds.
-    pub end_s: f64,
+    pub end_s: DurationSeconds,
 }
 
 /// One ASR result built from raw Whisper chunks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct WhisperChunkResultV2 {
     /// Transcript language.
     pub lang: LanguageCode3,
@@ -569,7 +605,7 @@ pub struct WhisperChunkResultV2 {
 }
 
 /// Stable vocabulary for one monologue element returned by an ASR provider.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AsrElementKindV2 {
     /// Lexical content that should become transcript tokens.
@@ -581,16 +617,16 @@ pub enum AsrElementKindV2 {
 /// One raw ASR element inside a speaker monologue.
 ///
 /// Timing fields validated upstream by Python Pydantic models (see module docs).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct AsrElementV2 {
     /// Surface token or punctuation value.
     pub value: String,
     /// Start timestamp in seconds when the provider exposes one.
     #[serde(default)]
-    pub start_s: Option<f64>,
+    pub start_s: Option<DurationSeconds>,
     /// End timestamp in seconds when the provider exposes one.
     #[serde(default)]
-    pub end_s: Option<f64>,
+    pub end_s: Option<DurationSeconds>,
     /// Stable element kind selected by the worker adapter.
     pub kind: AsrElementKindV2,
     /// Optional model/provider confidence score.
@@ -599,7 +635,7 @@ pub struct AsrElementV2 {
 }
 
 /// One speaker-attributed monologue returned by a provider ASR backend.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct AsrMonologueV2 {
     /// Stable speaker label chosen by the worker adapter.
     pub speaker: String,
@@ -608,7 +644,7 @@ pub struct AsrMonologueV2 {
 }
 
 /// One ASR result built from provider-shaped speaker monologues.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct MonologueAsrResultV2 {
     /// Transcript language reported by the provider adapter.
     pub lang: LanguageCode3,
@@ -619,17 +655,17 @@ pub struct MonologueAsrResultV2 {
 /// One raw Whisper forced-alignment token span returned by Python.
 ///
 /// Timing fields validated upstream by Python Pydantic models (see module docs).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct WhisperTokenTimingV2 {
     /// Surface token text returned by the FA runtime.
     pub text: String,
     /// Token onset timestamp in seconds.
-    pub time_s: f64,
+    pub time_s: DurationSeconds,
 }
 
 /// Forced-alignment token response returned before Rust token-to-word
 /// reconciliation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct WhisperTokenTimingResultV2 {
     /// Raw token timings in model order.
     pub tokens: Vec<WhisperTokenTimingV2>,
@@ -638,26 +674,26 @@ pub struct WhisperTokenTimingResultV2 {
 /// One word-level timing result.
 ///
 /// Timing fields validated upstream by Python Pydantic models (see module docs).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct IndexedWordTimingV2 {
     /// Start time in milliseconds.
-    pub start_ms: u64,
+    pub start_ms: DurationMs,
     /// End time in milliseconds.
-    pub end_ms: u64,
+    pub end_ms: DurationMs,
     /// Optional model confidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,
 }
 
 /// Forced-alignment indexed response.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct IndexedWordTimingResultV2 {
     /// Indexed timing results aligned to the request words.
     pub indexed_timings: Vec<Option<IndexedWordTimingV2>>,
 }
 
 /// One morphosyntax item result returned by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct MorphosyntaxItemResultV2 {
     /// Raw Stanza `doc.to_dict()` sentence arrays when inference succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -668,14 +704,14 @@ pub struct MorphosyntaxItemResultV2 {
 }
 
 /// Batched morphosyntax response payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct MorphosyntaxResultV2 {
     /// Item results aligned to the prepared batch payload order.
     pub items: Vec<MorphosyntaxItemResultV2>,
 }
 
 /// One utseg item result returned by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct UtsegItemResultV2 {
     /// Raw constituency trees when inference succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -686,14 +722,14 @@ pub struct UtsegItemResultV2 {
 }
 
 /// Batched utterance-segmentation response payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct UtsegResultV2 {
     /// Item results aligned to the prepared batch payload order.
     pub items: Vec<UtsegItemResultV2>,
 }
 
 /// One translation item result returned by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TranslationItemResultV2 {
     /// Raw model translation when inference succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -704,14 +740,14 @@ pub struct TranslationItemResultV2 {
 }
 
 /// Batched translation response payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TranslationResultV2 {
     /// Item results aligned to the prepared batch payload order.
     pub items: Vec<TranslationItemResultV2>,
 }
 
 /// One structured coreference chain reference returned by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CorefChainRefV2 {
     /// Chain identifier assigned by the coreference runtime.
     pub chain_id: usize,
@@ -722,7 +758,7 @@ pub struct CorefChainRefV2 {
 }
 
 /// One per-sentence coreference annotation returned by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CorefAnnotationV2 {
     /// Sentence index inside the corresponding document item.
     pub sentence_idx: usize,
@@ -731,7 +767,7 @@ pub struct CorefAnnotationV2 {
 }
 
 /// One coreference item result returned by Python.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CorefItemResultV2 {
     /// Structured sparse annotations when inference succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -742,7 +778,7 @@ pub struct CorefItemResultV2 {
 }
 
 /// Batched coreference response payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct CorefResultV2 {
     /// Item results aligned to the prepared batch payload order.
     pub items: Vec<CorefItemResultV2>,
@@ -751,25 +787,25 @@ pub struct CorefResultV2 {
 /// One raw speaker diarization segment returned by Python.
 ///
 /// Timing fields validated upstream by Python Pydantic models (see module docs).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct SpeakerSegmentV2 {
     /// Segment start in milliseconds.
-    pub start_ms: u64,
+    pub start_ms: DurationMs,
     /// Segment end in milliseconds.
-    pub end_ms: u64,
+    pub end_ms: DurationMs,
     /// Stable speaker label chosen by the model adapter.
     pub speaker: String,
 }
 
 /// Raw speaker diarization output returned by the model host.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct SpeakerResultV2 {
     /// Ordered diarization segments.
     pub segments: Vec<SpeakerSegmentV2>,
 }
 
 /// Raw openSMILE output returned by the model host.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct OpenSmileResultV2 {
     /// Requested feature-set name.
     pub feature_set: String,
@@ -791,7 +827,7 @@ pub struct OpenSmileResultV2 {
 }
 
 /// Raw AVQI output returned by the model host.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct AvqiResultV2 {
     /// AVQI score.
     pub avqi: f64,
@@ -819,8 +855,8 @@ pub struct AvqiResultV2 {
 }
 
 /// Typed execute result payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskResultV2 {
     /// Whisper chunk output.
     WhisperChunkResult(WhisperChunkResultV2),
@@ -847,7 +883,7 @@ pub enum TaskResultV2 {
 }
 
 /// Top-level execute outcome.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecuteOutcomeV2 {
     /// Request completed successfully.
@@ -862,7 +898,7 @@ pub enum ExecuteOutcomeV2 {
 }
 
 /// Top-level V2 execute response.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ExecuteResponseV2 {
     /// Correlation id for the request.
     pub request_id: WorkerRequestIdV2,
@@ -872,11 +908,11 @@ pub struct ExecuteResponseV2 {
     #[serde(default)]
     pub result: Option<TaskResultV2>,
     /// Execution time in seconds.
-    pub elapsed_s: f64,
+    pub elapsed_s: DurationSeconds,
 }
 
 /// Progress event emitted by long-running V2 tasks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ProgressEventV2 {
     /// Correlation id of the request being updated.
     pub request_id: WorkerRequestIdV2,
@@ -889,7 +925,7 @@ pub struct ProgressEventV2 {
 }
 
 /// Shutdown request sent to a V2 worker.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ShutdownRequestV2 {
     /// Correlation id for the shutdown message.
     pub request_id: WorkerRequestIdV2,

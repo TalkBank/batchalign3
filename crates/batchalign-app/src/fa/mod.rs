@@ -45,6 +45,7 @@ use batchalign_chat_ops::validate::{ValidityLevel, validate_output, validate_to_
 use batchalign_chat_ops::{CacheKey, CacheTaskName};
 use tracing::{info, warn};
 
+use crate::api::DurationMs;
 use crate::error::ServerError;
 use crate::runner::util::{FileStage, ProgressSender, ProgressUpdate};
 use crate::types::results::FaResult;
@@ -152,7 +153,11 @@ pub(crate) async fn process_fa(
     }
 
     // 2. Group utterances
-    let groups = group_utterances(&chat_file, fa_params.max_group_ms, audio.total_audio_ms);
+    let groups = group_utterances(
+        &chat_file,
+        fa_params.max_group_ms.0,
+        audio.total_audio_ms.map(|ms| ms.0),
+    );
 
     if groups.is_empty() {
         return Ok(FaResult {
@@ -380,8 +385,8 @@ pub(crate) async fn process_fa(
     let group_traces: Vec<FaGroupTrace> = groups
         .iter()
         .map(|g| FaGroupTrace {
-            audio_start_ms: g.audio_start_ms(),
-            audio_end_ms: g.audio_end_ms(),
+            audio_start_ms: DurationMs(g.audio_start_ms()),
+            audio_end_ms: DurationMs(g.audio_end_ms()),
             utterance_indices: g.utterance_indices.iter().map(|idx| idx.0).collect(),
             words: g.words.iter().map(|w| w.text.clone()).collect(),
         })

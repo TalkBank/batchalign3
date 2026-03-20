@@ -128,6 +128,16 @@ fn parse_transcribe_with_lang() {
 }
 
 #[test]
+fn parse_transcribe_lang_auto() {
+    let cli = Cli::parse_from(["batchalign3", "transcribe", "audio/", "--lang", "auto"]);
+    if let Commands::Transcribe(a) = &cli.command {
+        assert_eq!(a.lang, "auto", "--lang auto must pass through as-is");
+    } else {
+        panic!("expected Transcribe");
+    }
+}
+
+#[test]
 fn parse_transcribe_asr_engine_override() {
     let cli = Cli::parse_from([
         "batchalign3",
@@ -375,31 +385,6 @@ fn parse_server_env() {
 }
 
 #[test]
-fn parse_ba2_global_compat_flags() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "--memlog",
-        "--mem-guard",
-        "--no-adaptive-workers",
-        "--no-pool",
-        "--adaptive-safety-factor",
-        "1.5",
-        "--adaptive-warmup",
-        "3",
-        "--shared-models",
-        "align",
-        "corpus/",
-    ]);
-    assert!(cli.global.memlog);
-    assert!(cli.global.mem_guard);
-    assert!(cli.global.no_adaptive_workers);
-    assert!(cli.global.no_pool);
-    assert_eq!(cli.global.adaptive_safety_factor, Some(1.5));
-    assert_eq!(cli.global.adaptive_warmup, Some(3));
-    assert!(cli.global.shared_models);
-}
-
-#[test]
 fn parse_lazy_audio() {
     let cli = Cli::parse_from(["batchalign3", "--lazy-audio", "align", "corpus/"]);
     assert!(cli.global.lazy_audio);
@@ -580,7 +565,6 @@ fn parse_bench_options() {
         "output/",
         "--runs",
         "3",
-        "--no-pool",
         "--workers",
         "4",
         "--use-cache",
@@ -590,7 +574,6 @@ fn parse_bench_options() {
         assert_eq!(args.in_dir, "input/");
         assert_eq!(args.out_dir, "output/");
         assert_eq!(args.runs, 3);
-        assert!(args.no_pool);
         assert_eq!(args.workers, Some(4));
         assert!(args.use_cache);
     } else {
@@ -1528,18 +1511,6 @@ fn build_options_override_cache_global() {
     let cli = Cli::parse_from(["batchalign3", "--override-cache", "align", "corpus/"]);
     let opts = build_typed_options(&cli.command, &cli.global).unwrap();
     assert!(opts.common().override_cache);
-}
-
-#[test]
-fn build_options_use_cache_disables_override_cache() {
-    let opts = typed_options_for(&[
-        "batchalign3",
-        "--override-cache",
-        "--use-cache",
-        "compare",
-        "corpus/",
-    ]);
-    assert!(!opts.common().override_cache);
 }
 
 #[test]

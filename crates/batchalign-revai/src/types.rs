@@ -32,6 +32,12 @@ pub struct Job {
     /// Human-readable failure detail for terminal failures.
     #[serde(default)]
     pub failure_detail: Option<String>,
+    /// Language detected by Rev.AI when `language: "auto"` was used.
+    ///
+    /// Rev.AI returns this field as an ISO 639-1 code (e.g. `"es"`, `"en"`)
+    /// once a job completes with auto-detection enabled.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// A single word or punctuation element inside one Rev.AI monologue.
@@ -84,6 +90,59 @@ pub struct SubmitOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Language Identification API types
+// ---------------------------------------------------------------------------
+
+/// Status of a Rev.AI language identification job.
+///
+/// Language ID jobs share the same lifecycle as transcription jobs:
+/// `InProgress` -> `Completed` | `Failed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LangIdJobStatus {
+    /// The job is still being processed.
+    InProgress,
+    /// The result is ready to download.
+    Completed,
+    /// The job failed permanently.
+    Failed,
+}
+
+/// A Rev.AI language identification job returned by submission or polling.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LangIdJob {
+    /// Rev.AI-assigned job identifier.
+    pub id: String,
+    /// Current lifecycle state.
+    pub status: LangIdJobStatus,
+    /// Human-readable failure detail for terminal failures.
+    #[serde(default)]
+    pub failure_detail: Option<String>,
+}
+
+/// One language with its confidence score from the Language ID result.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LanguageConfidence {
+    /// ISO 639-1 language code (e.g., `"en"`, `"es"`).
+    pub language: String,
+    /// Confidence score (0.0 – 1.0).
+    pub confidence: f64,
+}
+
+/// Result from `GET /languageid/v1/jobs/{id}/result`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LangIdResult {
+    /// The most probable language (ISO 639-1 code, e.g., `"es"`).
+    pub top_language: String,
+    /// All detected languages ranked by confidence.
+    pub language_confidences: Vec<LanguageConfidence>,
+}
+
+// ---------------------------------------------------------------------------
+// Speech-to-Text supplementary types
+// ---------------------------------------------------------------------------
 
 /// Simplified timed-word projection used by the UTR path.
 #[derive(Debug, Clone, Serialize)]

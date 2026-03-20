@@ -100,6 +100,8 @@ pub enum Commands {
     Logs(LogsArgs),
     /// Emit Rust-server OpenAPI schema.
     Openapi(OpenapiArgs),
+    /// Emit JSON Schema for Rust→Python IPC types.
+    IpcSchema(IpcSchemaArgs),
     /// Print version info.
     Version,
 
@@ -109,6 +111,10 @@ pub enum Commands {
     Models(ModelsArgs),
     /// Benchmark command execution time across repeated runs.
     Bench(BenchArgs),
+
+    /// Manage persistent worker daemons (fleet deployment only).
+    #[command(hide = true)]
+    Worker(WorkerArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +142,13 @@ impl CommonOpts {
                 };
                 (cmd, &a.lang, a.num_speakers, &["mp3", "mp4", "wav"])
             }
-            Commands::Translate(_) => ("translate", "eng", 1, &["cha"]),
-            Commands::Morphotag(_) => ("morphotag", "eng", 1, &["cha"]),
-            Commands::Coref(_) => ("coref", "eng", 1, &["cha"]),
+            Commands::Translate(a) => {
+                ("translate", a.lang.as_deref().unwrap_or("eng"), 1, &["cha"])
+            }
+            Commands::Morphotag(a) => {
+                ("morphotag", a.lang.as_deref().unwrap_or("eng"), 1, &["cha"])
+            }
+            Commands::Coref(a) => ("coref", a.lang.as_deref().unwrap_or("eng"), 1, &["cha"]),
             Commands::Compare(a) => ("compare", &a.lang, a.num_speakers, &["cha"]),
             Commands::Utseg(a) => ("utseg", &a.lang, a.num_speakers, &["cha"]),
             Commands::Benchmark(a) => {

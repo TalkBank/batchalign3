@@ -432,3 +432,104 @@ proptest! {
         prop_assert_eq!(reference_indices(&result), expected_ref);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fuzzy matching tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_fuzzy_exact_match_is_fast_path() {
+    // Exact case-insensitive match should always work with fuzzy
+    let result = align(
+        &s(&["Hello", "World"]),
+        &s(&["hello", "world"]),
+        MatchMode::Fuzzy { threshold: 0.90 },
+    );
+    assert_eq!(result.len(), 2);
+    assert!(result.iter().all(|r| matches!(r, AlignResult::Match { .. })));
+}
+
+#[test]
+fn test_fuzzy_similar_words_match() {
+    // "gonna" vs "gona" — Jaro-Winkler ~0.96
+    let result = align(
+        &s(&["gonna"]),
+        &s(&["gona"]),
+        MatchMode::Fuzzy { threshold: 0.90 },
+    );
+    assert_eq!(result.len(), 1);
+    assert!(matches!(result[0], AlignResult::Match { .. }));
+}
+
+#[test]
+fn test_fuzzy_dissimilar_words_dont_match() {
+    // "cat" vs "dog" — Jaro-Winkler ~0.0
+    let result = align(
+        &s(&["cat"]),
+        &s(&["dog"]),
+        MatchMode::Fuzzy { threshold: 0.80 },
+    );
+    // Should produce extra payload + extra reference (no match)
+    assert!(result.iter().any(|r| matches!(r, AlignResult::ExtraPayload { .. })));
+    assert!(result.iter().any(|r| matches!(r, AlignResult::ExtraReference { .. })));
+}
+
+#[test]
+fn test_fuzzy_threshold_controls_strictness() {
+    // "going" vs "goin" — Jaro-Winkler ~0.95
+    let strict = align(
+        &s(&["going"]),
+        &s(&["goin"]),
+        MatchMode::Fuzzy { threshold: 0.98 },
+    );
+    let lenient = align(
+        &s(&["going"]),
+        &s(&["goin"]),
+        MatchMode::Fuzzy { threshold: 0.85 },
+    );
+    // Strict should NOT match, lenient SHOULD
+    assert!(
+        strict.iter().any(|r| matches!(r, AlignResult::ExtraPayload { .. })),
+        "strict threshold should reject"
+    );
+    assert!(
+        lenient.iter().all(|r| matches!(r, AlignResult::Match { .. })),
+        "lenient threshold should accept"
+    );
+}
+
+#[test]
+fn test_fuzzy_in_sequence_alignment() {
+    // Simulate ASR vs transcript with substitutions
+    let transcript = s(&["I", "went", "to", "the", "store", "yesterday"]);
+    let asr = s(&["i", "wen", "to", "da", "store", "yestarday"]);
+    let result = align(&transcript, &asr, MatchMode::Fuzzy { threshold: 0.80 });
+
+    let matches: Vec<_> = result
+        .iter()
+        .filter(|r| matches!(r, AlignResult::Match { .. }))
+        .collect();
+
+    // "I"/"i" exact, "to"/"to" exact, "store"/"store" exact = 3 exact
+    // "went"/"wen" JW=0.94, "yesterday"/"yestarday" JW=0.92 = 2 fuzzy
+    // "the"/"da" JW=0.0 → no match
+    // Total: 5 matches
+    assert!(
+        matches.len() >= 5,
+        "expected at least 5 matches with fuzzy, got {}",
+        matches.len()
+    );
+}
+
+#[test]
+fn test_fuzzy_backchannel_variants() {
+    // Common backchannel ASR variants
+    let transcript = s(&["mhm"]);
+    let asr = s(&["mmhm"]);
+    let result = align(&transcript, &asr, MatchMode::Fuzzy { threshold: 0.80 });
+    // "mhm" vs "mmhm" — JW ~0.83
+    assert!(
+        result.iter().any(|r| matches!(r, AlignResult::Match { .. })),
+        "mhm/mmhm should fuzzy-match at 0.80 threshold"
+    );
+}

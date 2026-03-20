@@ -56,6 +56,7 @@ class TestUtsegModels:
         item = UtsegBatchItem(words=["I", "eat", "cookies"], lang="eng")
         assert item.model_dump() == {
             "words": ["I", "eat", "cookies"],
+            "text": "",
             "lang": "eng",
         }
         assert UtsegBatchItem.model_validate(item.model_dump()) == item

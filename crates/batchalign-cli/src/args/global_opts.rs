@@ -14,57 +14,19 @@ pub struct GlobalOpts {
     #[arg(short, long, action = ArgAction::Count, global = true)]
     pub verbose: u8,
 
-    /// Maximum worker processes.
+    /// Maximum concurrent files per job (default: auto-tune; GPU commands
+    /// default to 1).
     #[arg(long, global = true)]
     pub workers: Option<usize>,
 
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long, global = true, hide = true)]
-    pub memlog: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long = "mem-guard", global = true, hide = true)]
-    pub mem_guard: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long = "adaptive-workers", global = true, hide = true)]
-    pub adaptive_workers: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long = "no-adaptive-workers", global = true, hide = true)]
-    pub no_adaptive_workers: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long, global = true, hide = true)]
-    pub pool: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long = "no-pool", global = true, hide = true)]
-    pub no_pool: bool,
-
-    /// BA2 compatibility option (currently a no-op in Rust CLI).
-    #[arg(long = "adaptive-safety-factor", global = true, hide = true)]
-    pub adaptive_safety_factor: Option<f64>,
-
-    /// BA2 compatibility option (currently a no-op in Rust CLI).
-    #[arg(long = "adaptive-warmup", global = true, hide = true)]
-    pub adaptive_warmup: Option<usize>,
+    /// Inference timeout in seconds for audio tasks (ASR, FA, speaker).
+    /// Increase for very long recordings (default: 1800 = 30 minutes).
+    #[arg(long, global = true)]
+    pub timeout: Option<u64>,
 
     /// Disable MPS/CUDA and force CPU-only models.
     #[arg(long, global = true)]
     pub force_cpu: bool,
-
-    /// Compatibility no-op (explicitly disable --force-cpu).
-    #[arg(long = "no-force-cpu", action = ArgAction::SetTrue, global = true)]
-    pub no_force_cpu: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long = "shared-models", global = true, hide = true)]
-    pub shared_models: bool,
-
-    /// BA2 compatibility flag (currently a no-op in Rust CLI).
-    #[arg(long = "no-shared-models", global = true, hide = true)]
-    pub no_shared_models: bool,
 
     /// Remote server URL (or set BATCHALIGN_SERVER env var).
     #[arg(long, env = "BATCHALIGN_SERVER", global = true)]
@@ -73,10 +35,6 @@ pub struct GlobalOpts {
     /// Bypass the utterance analysis cache.
     #[arg(long, global = true)]
     pub override_cache: bool,
-
-    /// Compatibility no-op (explicitly disable --override-cache).
-    #[arg(long = "use-cache", action = ArgAction::SetTrue, global = true)]
-    pub use_cache: bool,
 
     /// Lazy audio loading for alignment/ASR.
     #[arg(long, action = ArgAction::SetTrue, default_value_t = true, global = true)]

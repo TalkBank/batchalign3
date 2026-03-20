@@ -1,10 +1,10 @@
 //! Transcription dispatch and per-file transcribe pipeline.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::api::{EngineVersion, UnixTimestamp};
+use crate::api::{ContentType, EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
@@ -35,9 +35,9 @@ pub(in crate::runner) struct TranscribeDispatchRuntime {
     /// Current engine version string for cache partitioning.
     pub engine_version: EngineVersion,
     /// Optional preflight Rev.AI job ids keyed by original audio path.
-    pub rev_job_ids: Arc<HashMap<String, String>>,
+    pub rev_job_ids: Arc<HashMap<PathBuf, RevAiJobId>>,
     /// Maximum number of file tasks to run concurrently for this job.
-    pub num_workers: usize,
+    pub num_workers: NumWorkers,
 }
 
 /// Dispatch transcribe via the server-side infer path.
@@ -57,7 +57,7 @@ pub(in crate::runner) async fn dispatch_transcribe_infer(
     let job_id = &job.identity.job_id;
 
     // Process files concurrently, bounded by available workers.
-    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.max(1)));
+    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.0.max(1)));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -118,11 +118,11 @@ async fn process_one_transcribe_file(
     services: PipelineServices<'_>,
     file: &crate::store::PendingJobFile,
     opts: &mut TranscribeOptions,
-    rev_job_ids: &HashMap<String, String>,
+    rev_job_ids: &HashMap<PathBuf, RevAiJobId>,
     should_merge_abbrev: bool,
 ) -> FileTaskOutcome {
     let job_id = &job.identity.job_id;
-    let correlation_id = job.identity.correlation_id.as_str();
+    let correlation_id = &*job.identity.correlation_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
     let lifecycle = FileRunTracker::new(store, job_id, filename);
@@ -137,11 +137,11 @@ async fn process_one_transcribe_file(
         .await;
 
     // Resolve audio path
-    let original_audio_path =
+    let original_audio_path: PathBuf =
         if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
             job.filesystem.source_paths[file_index].clone()
         } else {
-            format!("{}/input/{filename}", job.filesystem.staging_dir)
+            job.filesystem.staging_dir.join("input").join(filename)
         };
     let audio_path = original_audio_path.clone();
     let paths_mode = job.filesystem.paths_mode;
@@ -151,7 +151,7 @@ async fn process_one_transcribe_file(
     opts.rev_job_id = rev_job_ids.get(&original_audio_path).cloned();
 
     // Convert non-WAV media (e.g. mp4) to WAV via ffmpeg if needed.
-    let audio_path = match crate::ensure_wav::ensure_wav(Path::new(&audio_path), None).await {
+    let audio_path = match crate::ensure_wav::ensure_wav(&audio_path, None).await {
         Ok(p) => p,
         Err(e) => {
             let err_msg = format!("Media conversion failed for {filename}: {e}");
@@ -191,8 +191,21 @@ async fn process_one_transcribe_file(
         let progress_tx =
             spawn_progress_forwarder(store.clone(), job_id.clone(), filename.to_string());
 
-        match crate::transcribe::process_transcribe(&audio_path, services, opts, Some(&progress_tx))
-            .await
+        let debug_dir = job
+            .dispatch
+            .options
+            .common()
+            .debug_dir
+            .as_deref()
+            .map(Path::new);
+        match crate::transcribe::process_transcribe(
+            &audio_path,
+            services,
+            opts,
+            Some(&progress_tx),
+            debug_dir,
+        )
+        .await
         {
             Ok(output_text) => {
                 lifecycle.stage(FileStage::Writing).await;
@@ -217,10 +230,10 @@ async fn process_one_transcribe_file(
                 let write_path = if paths_mode && file_index < output_paths.len() {
                     apply_result_filename(&output_paths[file_index], &output_filename)
                 } else {
-                    format!("{staging_dir}/output/{output_filename}")
+                    staging_dir.join("output").join(&output_filename)
                 };
 
-                if let Some(parent) = Path::new(&write_path).parent() {
+                if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
 
@@ -235,7 +248,7 @@ async fn process_one_transcribe_file(
                 }
 
                 lifecycle
-                    .complete_with_result(output_filename.clone().into(), "chat", finished_at)
+                    .complete_with_result(output_filename.clone().into(), ContentType::Chat, finished_at)
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }
@@ -316,7 +329,7 @@ mod tests {
         Job {
             identity: JobIdentity {
                 job_id: JobId::from(job_id),
-                correlation_id: format!("test-{job_id}"),
+                correlation_id: format!("test-{job_id}").into(),
             },
             dispatch: JobDispatchConfig {
                 command: "transcribe".into(),
@@ -336,15 +349,15 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: "localhost".into(),
-                source_dir: String::new(),
+                source_dir: std::path::PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: vec![FileName::from(filename)],
                 has_chat: vec![false],
-                staging_dir: String::new(),
+                staging_dir: std::path::PathBuf::new(),
                 paths_mode: true,
-                source_paths: vec![source_path.display().to_string()],
-                output_paths: vec![output_path.display().to_string()],
+                source_paths: vec![source_path.to_path_buf()],
+                output_paths: vec![output_path.to_path_buf()],
                 before_paths: Vec::new(),
                 media_mapping: String::new(),
                 media_subdir: String::new(),

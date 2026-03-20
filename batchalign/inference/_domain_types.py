@@ -39,6 +39,23 @@ ConfidenceScore: TypeAlias = float
 CommandName: TypeAlias = str
 """Batchalign command name (e.g. 'morphotag', 'align', 'transcribe')."""
 
+RevAiJobId: TypeAlias = str
+"""A Rev.AI server-side job identifier returned after audio submission.
+
+Obtained during preflight batch upload and passed to polling calls so
+individual file tasks can retrieve results without re-uploading audio.
+"""
+
+RevAiApiKey: TypeAlias = str
+"""Raw Rev.AI API credential loaded from the environment.
+
+Never logged or included in error messages. Only used at the worker/SDK
+boundary where the Rev.AI client is constructed.
+"""
+
+TcpPort: TypeAlias = int
+"""TCP port number in the range 1–65535."""
+
 
 class TranslationBackend(Enum):
     """Which translation engine is active."""

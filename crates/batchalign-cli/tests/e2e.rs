@@ -509,7 +509,11 @@ async fn e2e_lang_propagates() {
     .await;
 
     assert_eq!(info.status, JobStatus::Completed);
-    assert_eq!(info.lang, "spa", "Language should propagate to job info");
+    assert_eq!(
+        info.lang,
+        batchalign_app::api::LanguageSpec::from("spa"),
+        "Language should propagate to job info"
+    );
 }
 
 // ---------------------------------------------------------------------------

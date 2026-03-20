@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use talkbank_model::alignment::helpers::{
-    AlignmentDomain, is_tag_marker_separator, word_is_alignable,
+    TierDomain, is_tag_marker_separator, counts_for_tier,
 };
 use talkbank_model::model::content::BracketedItems;
 use talkbank_model::model::{BracketedItem, Mor, UtteranceContent, Word};
@@ -48,7 +48,7 @@ pub(super) struct RetokenizeContext<'a> {
 /// Non-linguistic tokens (xxx, &~uh, fragments, etc.) were never extracted,
 /// so they must be skipped to keep word_counter in sync.
 fn should_retokenize(word: &Word) -> bool {
-    word_is_alignable(word, AlignmentDomain::Mor)
+    counts_for_tier(word, TierDomain::Mor)
 }
 
 /// Rebuild content vector, replacing alignable words with retokenized versions.

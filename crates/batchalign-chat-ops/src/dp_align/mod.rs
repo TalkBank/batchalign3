@@ -53,7 +53,7 @@ pub enum AlignResult {
 /// same parse). Use `CaseInsensitive` when comparing across sources that
 /// may differ in capitalization (e.g., aligning ASR output against a
 /// reference transcript).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatchMode {
     /// Byte-for-byte string equality (`a == b`).
     ///
@@ -71,6 +71,25 @@ pub enum MatchMode {
     /// (mixed case). Note this only folds ASCII letters (A-Z); Unicode
     /// case variants (e.g., accented characters) are compared as-is.
     CaseInsensitive,
+
+    /// Fuzzy matching using Jaro-Winkler similarity.
+    ///
+    /// Accepts a match when `jaro_winkler(a.lower(), b.lower()) >= threshold`.
+    /// Jaro-Winkler is preferred over Levenshtein for short words (backchannels
+    /// like "mhm", "yeah", "uh huh") because it weights prefix matches more
+    /// heavily and doesn't penalize length differences as harshly.
+    ///
+    /// Typical thresholds:
+    /// - 0.90: strict — allows minor typos ("gonna" ≈ "gona")
+    /// - 0.85: moderate — allows ASR normalizations ("going" ≈ "goin")
+    /// - 0.80: lenient — allows dialectal variants ("yes" ≈ "yeah" is ~0.78,
+    ///   so 0.80 would NOT match this)
+    ///
+    /// Always tries exact case-insensitive match first (fast path).
+    Fuzzy {
+        /// Minimum Jaro-Winkler similarity to accept (0.0–1.0).
+        threshold: f64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +111,18 @@ impl Alignable for String {
         match mode {
             MatchMode::Exact => self == other,
             MatchMode::CaseInsensitive => self.eq_ignore_ascii_case(other),
+            MatchMode::Fuzzy { threshold } => {
+                // Fast path: exact case-insensitive match
+                if self.eq_ignore_ascii_case(other) {
+                    return true;
+                }
+                // Fuzzy: Jaro-Winkler on lowercased strings
+                let sim = strsim::jaro_winkler(
+                    &self.to_lowercase(),
+                    &other.to_lowercase(),
+                );
+                sim >= threshold
+            }
         }
     }
 
@@ -104,7 +135,11 @@ impl Alignable for char {
     fn matches(&self, other: &Self, mode: MatchMode) -> bool {
         match mode {
             MatchMode::Exact => self == other,
-            MatchMode::CaseInsensitive => self.eq_ignore_ascii_case(other),
+            // Fuzzy at char level degrades to case-insensitive (single chars
+            // can't meaningfully fuzzy-match).
+            MatchMode::CaseInsensitive | MatchMode::Fuzzy { .. } => {
+                self.eq_ignore_ascii_case(other)
+            }
         }
     }
 

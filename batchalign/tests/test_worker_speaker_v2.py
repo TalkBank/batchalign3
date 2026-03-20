@@ -25,10 +25,8 @@ from batchalign.worker._types_v2 import (
     ProtocolErrorCodeV2,
     SpeakerBackendV2,
     SpeakerPreparedAudioInputV2,
-    SpeakerPreparedAudioRefInputV2,
     SpeakerRequestV2,
     SpeakerResultV2,
-    SpeakerTaskRequestV2,
 )
 
 
@@ -61,14 +59,10 @@ def _make_request(
     return ExecuteRequestV2(
         request_id="req-speaker-v2-1",
         task=InferenceTaskV2.SPEAKER,
-        payload=SpeakerTaskRequestV2(
-            data=SpeakerRequestV2(
-                backend=backend,
-                input=SpeakerPreparedAudioRefInputV2(
-                    data=SpeakerPreparedAudioInputV2(audio_ref_id="audio-ref-speaker-1")
-                ),
-                expected_speakers=expected_speakers,
-            )
+        payload=SpeakerRequestV2(
+            backend=backend,
+            input=SpeakerPreparedAudioInputV2(audio_ref_id="audio-ref-speaker-1"),
+            expected_speakers=expected_speakers,
         ),
         attachments=[
             PreparedAudioRefV2(
@@ -119,8 +113,8 @@ def test_execute_speaker_request_v2_returns_typed_segments(tmp_path: Path) -> No
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, SpeakerResultV2)
-    assert response.result.data.segments[0].speaker == "SPEAKER_2_16000_4"
-    assert response.result.data.segments[0].start_ms == 10
+    assert response.result.segments[0].speaker == "SPEAKER_2_16000_4"
+    assert response.result.segments[0].start_ms == 10
 
 
 def test_execute_speaker_request_v2_defaults_expected_speakers_to_two(tmp_path: Path) -> None:
@@ -165,7 +159,7 @@ def test_execute_speaker_request_v2_routes_nemo_backend(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, SpeakerResultV2)
-    assert response.result.data.segments[0].speaker == "SPEAKER_3"
+    assert response.result.segments[0].speaker == "SPEAKER_3"
     assert captured == {"shape": (4,), "sample_rate_hz": 16000, "num_speakers": 3}
 
 
@@ -176,13 +170,9 @@ def test_execute_speaker_request_v2_rejects_wrong_task() -> None:
         ExecuteRequestV2(
             request_id="req-speaker-v2-wrong-task",
             task=InferenceTaskV2.ASR,
-            payload=SpeakerTaskRequestV2(
-                data=SpeakerRequestV2(
-                    backend=SpeakerBackendV2.PYANNOTE,
-                    input=SpeakerPreparedAudioRefInputV2(
-                        data=SpeakerPreparedAudioInputV2(audio_ref_id="audio-ref-speaker-2")
-                    ),
-                )
+            payload=SpeakerRequestV2(
+                backend=SpeakerBackendV2.PYANNOTE,
+                input=SpeakerPreparedAudioInputV2(audio_ref_id="audio-ref-speaker-2"),
             ),
             attachments=[],
         ),
@@ -202,12 +192,10 @@ def test_speaker_provider_media_requests_fail_schema_validation() -> None:
                 "task": "speaker",
                 "payload": {
                     "kind": "speaker",
-                    "data": {
-                        "backend": "pyannote",
-                        "input": {
-                            "kind": "provider_media",
-                            "data": {"media_path": "/tmp/meeting.wav"},
-                        },
+                    "backend": "pyannote",
+                    "input": {
+                        "kind": "provider_media",
+                        "media_path": "/tmp/meeting.wav",
                     },
                 },
                 "attachments": [],

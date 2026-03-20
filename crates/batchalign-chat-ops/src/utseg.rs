@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use talkbank_model::Span;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, Line, MainTier, Terminator, Utterance, UtteranceContent};
 
 use crate::extract;
@@ -22,7 +22,7 @@ use crate::extract;
 /// Input payload for a single utterance segmentation request.
 ///
 /// Matches the Python `UtsegBatchItem` Pydantic model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UtsegBatchItem {
     /// Tokenized words from the utterance.
     pub words: Vec<String>,
@@ -61,7 +61,7 @@ pub fn collect_utseg_payloads(chat_file: &ChatFile) -> Vec<(usize, UtsegBatchIte
         let mut words = Vec::new();
         extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
 
@@ -163,7 +163,7 @@ pub fn build_word_to_content_map(content: &[UtteranceContent]) -> Vec<usize> {
         let mut words = Vec::new();
         extract::collect_utterance_content(
             std::slice::from_ref(item),
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
         for _ in &words {

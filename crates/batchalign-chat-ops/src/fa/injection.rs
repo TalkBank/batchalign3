@@ -1,7 +1,7 @@
 //! Timestamp injection into the CHAT AST.
 
 use talkbank_model::alignment::helpers::{
-    AlignmentDomain, ContentLeafMut, for_each_leaf_mut, word_is_alignable,
+    TierDomain, WordItemMut, walk_words_mut, counts_for_tier,
 };
 use talkbank_model::model::{Bullet, Utterance, Word};
 
@@ -66,14 +66,14 @@ pub fn inject_timings_for_utterance(
 ) {
     let mut cursor = TimingCursor::with_offset(timings, *timing_offset);
     // domain=None: recurse into all groups unconditionally (FA needs all words)
-    for_each_leaf_mut(
+    walk_words_mut(
         &mut utterance.main.content.content,
         None,
         &mut |leaf| match leaf {
-            ContentLeafMut::Word(word, _annotations) => {
+            WordItemMut::Word(word) => {
                 inject_timing_on_word(word, &mut cursor);
             }
-            ContentLeafMut::ReplacedWord(replaced) => {
+            WordItemMut::ReplacedWord(replaced) => {
                 if !replaced.replacement.words.is_empty() {
                     for word in &mut replaced.replacement.words {
                         inject_timing_on_word(word, &mut cursor);
@@ -82,14 +82,14 @@ pub fn inject_timings_for_utterance(
                     inject_timing_on_word(&mut replaced.word, &mut cursor);
                 }
             }
-            ContentLeafMut::Separator(_) => {}
+            WordItemMut::Separator(_) => {}
         },
     );
     *timing_offset = cursor.position();
 }
 
 fn inject_timing_on_word(word: &mut Word, cursor: &mut TimingCursor<'_>) {
-    if !word_is_alignable(word, AlignmentDomain::Wor) {
+    if !counts_for_tier(word, TierDomain::Wor) {
         return;
     }
     if let Some(t) = cursor.take() {

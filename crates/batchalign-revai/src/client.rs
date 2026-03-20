@@ -12,10 +12,29 @@ use std::time::Duration;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 
-use crate::types::{Job, JobStatus, SubmitOptions, TimedWord, Transcript};
+use crate::types::{
+    Job, JobStatus, LangIdJob, LangIdJobStatus, LangIdResult, SubmitOptions, TimedWord, Transcript,
+};
+
+/// Transcript plus optional detected language from Rev.AI auto-detection.
+///
+/// When `language: "auto"` is used in `SubmitOptions`, Rev.AI returns the
+/// detected language as an ISO 639-1 code on the completed `Job`. This struct
+/// bundles the transcript with that detection result so callers can propagate
+/// the real language to downstream pipeline stages.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranscriptResult {
+    /// The full transcript payload.
+    pub transcript: Transcript,
+    /// ISO 639-1 language code detected by Rev.AI (e.g. `"es"`, `"en"`).
+    /// `None` when a concrete language was specified (not auto-detected).
+    pub detected_language: Option<String>,
+}
 
 const BASE_URL: &str = "https://api.rev.ai/speechtotext/v1";
+const LANGID_BASE_URL: &str = "https://api.rev.ai/languageid/v1";
 const TRANSCRIPT_ACCEPT: &str = "application/vnd.rev.transcript.v1.0+json";
+const LANGID_ACCEPT: &str = "application/vnd.rev.languageid.v1.0+json";
 
 /// Errors produced by Rev.AI client operations.
 #[derive(Debug, thiserror::Error)]
@@ -170,7 +189,7 @@ impl RevAiClient {
         path: &Path,
         opts: &SubmitOptions,
         max_poll_secs: u64,
-    ) -> Result<Transcript> {
+    ) -> Result<TranscriptResult> {
         let job = self.submit_local_file(path, opts)?;
         self.poll_and_download(&job.id, 5, max_poll_secs)
     }
@@ -181,18 +200,21 @@ impl RevAiClient {
         path: &Path,
         opts: &SubmitOptions,
         poll_secs: u64,
-    ) -> Result<Transcript> {
+    ) -> Result<TranscriptResult> {
         let job = self.submit_local_file(path, opts)?;
         self.poll_and_download(&job.id, poll_secs, poll_secs)
     }
 
     /// Poll a previously submitted job until it completes, then download it.
+    ///
+    /// Returns a [`TranscriptResult`] that includes the detected language
+    /// (when `language: "auto"` was used at submission time).
     pub fn poll_and_download(
         &self,
         job_id: &str,
         initial_interval_secs: u64,
         max_interval_secs: u64,
-    ) -> Result<Transcript> {
+    ) -> Result<TranscriptResult> {
         let mut interval = initial_interval_secs;
         let mut attempts: u32 = 0;
 
@@ -207,10 +229,122 @@ impl RevAiClient {
                     }
                 }
                 JobStatus::Transcribed => {
-                    return self.get_transcript(job_id);
+                    let transcript = self.get_transcript(job_id)?;
+                    return Ok(TranscriptResult {
+                        transcript,
+                        detected_language: job.language,
+                    });
                 }
                 JobStatus::Failed => {
                     let detail = job.failure_detail.unwrap_or_else(|| "unknown error".into());
+                    return Err(RevAiError::JobFailed(detail));
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Language Identification API
+    // -------------------------------------------------------------------
+
+    /// Submit one local audio file for language identification.
+    ///
+    /// Returns the job ID for polling. The Language ID API is a separate
+    /// Rev.AI endpoint from Speech-to-Text.
+    pub fn submit_langid(&self, path: &Path) -> Result<LangIdJob> {
+        let file_bytes = std::fs::read(path)?;
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        let file_part = reqwest::blocking::multipart::Part::bytes(file_bytes)
+            .file_name(file_name)
+            .mime_str("audio/mpeg")?;
+        let form = reqwest::blocking::multipart::Form::new().part("media", file_part);
+
+        let resp = self
+            .client
+            .post(format!("{LANGID_BASE_URL}/jobs"))
+            .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().unwrap_or_default();
+            return Err(RevAiError::ApiError { status, body });
+        }
+
+        Ok(resp.json()?)
+    }
+
+    /// Poll a language identification job status.
+    pub fn get_langid_job(&self, job_id: &str) -> Result<LangIdJob> {
+        let resp = self
+            .client
+            .get(format!("{LANGID_BASE_URL}/jobs/{job_id}"))
+            .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .send()?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().unwrap_or_default();
+            return Err(RevAiError::ApiError { status, body });
+        }
+
+        Ok(resp.json()?)
+    }
+
+    /// Download the language identification result for a completed job.
+    pub fn get_langid_result(&self, job_id: &str) -> Result<LangIdResult> {
+        let resp = self
+            .client
+            .get(format!("{LANGID_BASE_URL}/jobs/{job_id}/result"))
+            .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .header(ACCEPT, LANGID_ACCEPT)
+            .send()?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().unwrap_or_default();
+            return Err(RevAiError::ApiError { status, body });
+        }
+
+        Ok(resp.json()?)
+    }
+
+    /// Submit audio for language identification, poll until complete, and
+    /// return the result.
+    ///
+    /// Typically completes in 5–30 seconds. Uses exponential backoff polling.
+    pub fn identify_language_blocking(
+        &self,
+        path: &Path,
+        max_poll_secs: u64,
+    ) -> Result<LangIdResult> {
+        let job = self.submit_langid(path)?;
+        let mut interval: u64 = 3;
+        let mut attempts: u32 = 0;
+
+        loop {
+            let status = self.get_langid_job(&job.id)?;
+            match status.status {
+                LangIdJobStatus::InProgress => {
+                    thread::sleep(Duration::from_secs(interval));
+                    attempts += 1;
+                    if attempts.is_multiple_of(3) {
+                        interval = (interval * 2).min(max_poll_secs);
+                    }
+                }
+                LangIdJobStatus::Completed => {
+                    return self.get_langid_result(&job.id);
+                }
+                LangIdJobStatus::Failed => {
+                    let detail = status
+                        .failure_detail
+                        .unwrap_or_else(|| "unknown error".into());
                     return Err(RevAiError::JobFailed(detail));
                 }
             }
@@ -332,5 +466,55 @@ mod tests {
         assert_eq!(words[0].start_ms, 500);
         assert_eq!(words[1].word, "world");
         assert_eq!(words[1].end_ms, 1500);
+    }
+
+    // -------------------------------------------------------------------
+    // Language Identification type tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_langid_job_in_progress() {
+        let json = r#"{"id":"Umx5c6F7pH7r","status":"in_progress","type":"language_id","created_on":"2021-09-15T05:14:38.13"}"#;
+        let job: crate::types::LangIdJob = serde_json::from_str(json).unwrap();
+        assert_eq!(job.id, "Umx5c6F7pH7r");
+        assert_eq!(job.status, crate::types::LangIdJobStatus::InProgress);
+    }
+
+    #[test]
+    fn parse_langid_job_completed() {
+        let json = r#"{"id":"abc","status":"completed"}"#;
+        let job: crate::types::LangIdJob = serde_json::from_str(json).unwrap();
+        assert_eq!(job.status, crate::types::LangIdJobStatus::Completed);
+    }
+
+    #[test]
+    fn parse_langid_result() {
+        let json = r#"{
+            "top_language": "es",
+            "language_confidences": [
+                {"language": "es", "confidence": 0.907},
+                {"language": "en", "confidence": 0.08},
+                {"language": "nl", "confidence": 0.023}
+            ]
+        }"#;
+        let result: crate::types::LangIdResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.top_language, "es");
+        assert_eq!(result.language_confidences.len(), 3);
+        assert_eq!(result.language_confidences[0].language, "es");
+        assert!(result.language_confidences[0].confidence > 0.9);
+        assert_eq!(result.language_confidences[1].language, "en");
+    }
+
+    #[test]
+    fn parse_langid_result_english_dominant() {
+        let json = r#"{
+            "top_language": "en",
+            "language_confidences": [
+                {"language": "en", "confidence": 0.95}
+            ]
+        }"#;
+        let result: crate::types::LangIdResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.top_language, "en");
+        assert_eq!(result.language_confidences.len(), 1);
     }
 }

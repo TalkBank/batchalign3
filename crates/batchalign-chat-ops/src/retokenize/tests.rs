@@ -3,7 +3,7 @@ use crate::extract;
 use mapping::{build_word_token_mapping, try_deterministic_word_token_mapping};
 use parse_helpers::{handle_ending_punct_skip, try_parse_token_as_word};
 use talkbank_direct_parser::DirectParser;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, GrammaticalRelation, Line, Mor, WriteChat};
 
 fn parse_chat(text: &str) -> ChatFile {
@@ -26,7 +26,7 @@ fn get_utterance(chat: &mut ChatFile, idx: usize) -> &mut Utterance {
 
 fn extract_words(utt: &Utterance) -> Vec<extract::ExtractedWord> {
     let mut words = Vec::new();
-    extract::collect_utterance_content(&utt.main.content.content, AlignmentDomain::Mor, &mut words);
+    extract::collect_utterance_content(&utt.main.content.content, TierDomain::Mor, &mut words);
     words
 }
 

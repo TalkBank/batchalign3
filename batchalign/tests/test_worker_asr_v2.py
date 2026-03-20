@@ -12,17 +12,14 @@ from batchalign.worker._types_v2 import (
     AsrBackendV2,
     AsrElementKindV2,
     AsrRequestV2,
-    AsrTaskRequestV2,
     ExecuteErrorV2,
     ExecuteRequestV2,
     ExecuteSuccessV2,
     InferenceTaskV2,
     MonologueAsrResultV2,
-    PreparedAudioAsrInputV2,
     PreparedAudioEncodingV2,
     PreparedAudioInputV2,
     PreparedAudioRefV2,
-    ProviderMediaAsrInputV2,
     ProviderMediaInputV2,
     ProtocolErrorCodeV2,
     WhisperChunkResultPayloadV2,
@@ -50,14 +47,10 @@ def _make_request(
     return ExecuteRequestV2(
         request_id="req-asr-v2-1",
         task=InferenceTaskV2.ASR,
-        payload=AsrTaskRequestV2(
-            data=AsrRequestV2(
-                lang="eng",
-                backend=backend,
-                input=PreparedAudioAsrInputV2(
-                    data=PreparedAudioInputV2(audio_ref_id="audio-ref-1")
-                ),
-            )
+        payload=AsrRequestV2(
+            lang="eng",
+            backend=backend,
+            input=PreparedAudioInputV2(audio_ref_id="audio-ref-1"),
         ),
         attachments=[
             PreparedAudioRefV2(
@@ -83,17 +76,13 @@ def _make_provider_request(
     return ExecuteRequestV2(
         request_id="req-asr-v2-provider-1",
         task=InferenceTaskV2.ASR,
-        payload=AsrTaskRequestV2(
-            data=AsrRequestV2(
-                lang="yue",
-                backend=backend,
-                input=ProviderMediaAsrInputV2(
-                    data=ProviderMediaInputV2(
-                        media_path="/tmp/provider.wav",
-                        num_speakers=2,
-                    )
-                ),
-            )
+        payload=AsrRequestV2(
+            lang="yue",
+            backend=backend,
+            input=ProviderMediaInputV2(
+                media_path="/tmp/provider.wav",
+                num_speakers=2,
+            ),
         ),
         attachments=[],
     )
@@ -123,8 +112,8 @@ def test_executes_local_whisper_asr_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, WhisperChunkResultV2)
-    assert response.result.data.text == "hello world"
-    assert response.result.data.chunks[1].end_s == 1.0
+    assert response.result.text == "hello world"
+    assert response.result.chunks[1].end_s == 1.0
     assert captured == {"shape": (4,), "lang": "eng"}
 
 
@@ -225,10 +214,10 @@ def test_executes_provider_media_asr_v2_request() -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, MonologueAsrResultV2)
-    assert response.result.data.monologues[0].speaker == "1"
-    assert response.result.data.monologues[0].elements[0].kind is AsrElementKindV2.TEXT
+    assert response.result.monologues[0].speaker == "1"
+    assert response.result.monologues[0].elements[0].kind is AsrElementKindV2.TEXT
     assert (
-        response.result.data.monologues[0].elements[1].kind
+        response.result.monologues[0].elements[1].kind
         is AsrElementKindV2.PUNCTUATION
     )
     assert captured == {
@@ -291,3 +280,46 @@ def test_invalid_provider_asr_host_output_becomes_runtime_failure() -> None:
     assert response.outcome.code is ProtocolErrorCodeV2.RUNTIME_FAILURE
     assert "invalid ASR host output" in response.outcome.message
     assert response.result is None
+
+
+def test_whisper_chunk_inverted_timestamps_are_clamped(tmp_path: Path) -> None:
+    """Whisper occasionally returns chunks with end_s < start_s on long audio.
+
+    The inference layer must swap them rather than letting the Pydantic
+    validator reject the entire response. Regression test for job 696870c7-02b
+    (maria16.wav).
+    """
+
+    def runner(audio: np.ndarray, lang: str) -> WhisperChunkResultPayloadV2:
+        # The clamping happens in infer_whisper_prepared_audio *before*
+        # building WhisperChunkSpanV2 objects. This test verifies the V2
+        # executor accepts already-clamped data (i.e. swapped to valid range).
+        return WhisperChunkResultPayloadV2(
+            lang=lang,
+            text=" Thank you.",
+            chunks=[
+                WhisperChunkSpanV2(text=" Thank you.", start_s=2017.0, end_s=2020.0),
+            ],
+        )
+
+    response = execute_asr_request_v2(
+        _make_request(tmp_path),
+        AsrExecutionHostV2(local_whisper_runner=runner),
+    )
+
+    assert isinstance(response.outcome, ExecuteSuccessV2)
+    assert isinstance(response.result, WhisperChunkResultV2)
+    assert response.result.chunks[0].start_s == 2017.0
+    assert response.result.chunks[0].end_s == 2020.0
+
+
+def test_whisper_chunk_span_v2_rejects_inverted_timestamps() -> None:
+    """Verify the Pydantic validator catches inverted timestamps.
+
+    This is the safety net — if the clamping in infer_whisper_prepared_audio
+    is ever bypassed, the validator must reject.
+    """
+    import pytest
+
+    with pytest.raises(Exception, match="end_s must be >= start_s"):
+        WhisperChunkSpanV2(text="bad", start_s=2020.0, end_s=2017.0)

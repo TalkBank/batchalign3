@@ -1,7 +1,7 @@
 //! Word extraction for forced alignment (Wor domain).
 
 use talkbank_model::alignment::helpers::{
-    AlignmentDomain, ContentLeaf, for_each_leaf, word_is_alignable,
+    TierDomain, WordItem, walk_words, counts_for_tier,
 };
 use talkbank_model::model::UtteranceContent;
 
@@ -14,23 +14,23 @@ use talkbank_model::model::UtteranceContent;
 /// * `out` - Accumulator that word texts are pushed into.
 pub fn collect_fa_words(content: &[UtteranceContent], out: &mut Vec<String>) {
     // domain=None: recurse into all groups unconditionally (FA needs all words)
-    for_each_leaf(content, None, &mut |leaf| match leaf {
-        ContentLeaf::Word(word, _annotations) => {
-            if word_is_alignable(word, AlignmentDomain::Wor) {
+    walk_words(content, None, &mut |leaf| match leaf {
+        WordItem::Word(word) => {
+            if counts_for_tier(word, TierDomain::Wor) {
                 out.push(word.cleaned_text().to_string());
             }
         }
-        ContentLeaf::ReplacedWord(replaced) => {
+        WordItem::ReplacedWord(replaced) => {
             if !replaced.replacement.words.is_empty() {
                 for word in &replaced.replacement.words {
-                    if word_is_alignable(word, AlignmentDomain::Wor) {
+                    if counts_for_tier(word, TierDomain::Wor) {
                         out.push(word.cleaned_text().to_string());
                     }
                 }
-            } else if word_is_alignable(&replaced.word, AlignmentDomain::Wor) {
+            } else if counts_for_tier(&replaced.word, TierDomain::Wor) {
                 out.push(replaced.word.cleaned_text().to_string());
             }
         }
-        ContentLeaf::Separator(_) => {}
+        WordItem::Separator(_) => {}
     });
 }

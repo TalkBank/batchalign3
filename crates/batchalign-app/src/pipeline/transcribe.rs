@@ -9,8 +9,9 @@ use std::path::Path;
 
 use tracing::info;
 
-use crate::api::{LanguageCode3, NumSpeakers};
+use crate::api::{DurationSeconds, LanguageCode3, LanguageSpec, NumSpeakers};
 use crate::error::ServerError;
+use crate::runner::debug_dumper::DebugDumper;
 use crate::params::{CachePolicy, MorphosyntaxParams};
 use crate::pipeline::PipelineServices;
 use crate::pipeline::plan::{PipelinePlan, StageFuture, StageId, StageSpec, run_plan};
@@ -38,6 +39,12 @@ pub(crate) struct TranscribePipelineContext<'a> {
     pub speaker_segments: Option<Vec<SpeakerSegmentV2>>,
     /// Current serialized CHAT text.
     pub chat_text: Option<String>,
+    /// Debug artifact writer for offline replay.
+    pub dumper: DebugDumper,
+    /// Language resolved after ASR detection. When `opts.lang` is `Auto`,
+    /// this is set by `stage_build_chat` to the ASR-detected language.
+    /// Post-ASR stages (utseg, morphotag) use this for concrete dispatch.
+    pub resolved_lang: Option<LanguageCode3>,
 }
 
 impl<'a> TranscribePipelineContext<'a> {
@@ -45,6 +52,7 @@ impl<'a> TranscribePipelineContext<'a> {
         audio_path: &'a Path,
         services: PipelineServices<'a>,
         opts: &'a TranscribeOptions,
+        dumper: DebugDumper,
     ) -> Self {
         Self {
             services,
@@ -54,6 +62,27 @@ impl<'a> TranscribePipelineContext<'a> {
             utterances: None,
             speaker_segments: None,
             chat_text: None,
+            dumper,
+            resolved_lang: None,
+        }
+    }
+
+    /// Return the resolved language code for NLP stages (utseg, morphotag).
+    ///
+    /// After ASR, `resolved_lang` is populated from the ASR response's
+    /// detected language. If `opts.lang` was already resolved (not Auto),
+    /// it's used directly. Panics if called before resolution — this is a
+    /// structural guarantee that the pipeline runs ASR before NLP.
+    fn lang_for_nlp(&self) -> &LanguageCode3 {
+        if let Some(ref resolved) = self.resolved_lang {
+            return resolved;
+        }
+        match &self.opts.lang {
+            LanguageSpec::Resolved(code) => code,
+            LanguageSpec::Auto => panic!(
+                "BUG: lang_for_nlp() called with unresolved Auto language. \
+                 ASR must resolve the language before NLP stages run."
+            ),
         }
     }
 }
@@ -64,9 +93,11 @@ pub(crate) async fn run_transcribe_pipeline(
     services: PipelineServices<'_>,
     opts: &TranscribeOptions,
     progress: Option<&ProgressSender>,
+    debug_dir: Option<&Path>,
 ) -> Result<String, ServerError> {
     let plan = transcribe_plan(opts.diarize, opts.with_utseg, opts.with_morphosyntax);
-    let mut ctx = TranscribePipelineContext::new(audio_path, services, opts);
+    let dumper = DebugDumper::new(debug_dir);
+    let mut ctx = TranscribePipelineContext::new(audio_path, services, opts, dumper);
 
     // Build stage-level progress callback if a sender is provided.
     let on_stage = progress.map(|tx| {
@@ -196,19 +227,24 @@ fn stage_asr_infer<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> St
             "Starting ASR inference"
         );
 
-        ctx.asr_response = Some(
-            infer_asr(
-                ctx.services.pool,
-                &AsrInferParams {
-                    backend: ctx.opts.backend,
-                    audio_path: ctx.audio_path,
-                    lang: &LanguageCode3::from(ctx.opts.lang.clone()),
-                    num_speakers: NumSpeakers(ctx.opts.num_speakers as u32),
-                    rev_job_id: ctx.opts.rev_job_id.as_deref(),
-                },
-            )
-            .await?,
-        );
+        let response = infer_asr(
+            ctx.services.pool,
+            &AsrInferParams {
+                backend: ctx.opts.backend,
+                audio_path: ctx.audio_path,
+                lang: &ctx.opts.lang,
+                num_speakers: NumSpeakers(ctx.opts.num_speakers as u32),
+                rev_job_id: ctx.opts.rev_job_id.as_deref(),
+            },
+        )
+        .await?;
+        let filename = ctx
+            .audio_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        ctx.dumper.dump_asr_response(filename, &response);
+        ctx.asr_response = Some(response);
         Ok(())
     })
 }
@@ -225,14 +261,15 @@ fn stage_asr_postprocess<'a, 'ctx>(
             return Ok(());
         }
 
-        let asr_output = convert_asr_response(response, ctx.opts.diarize);
+        let asr_output = convert_asr_response(response);
         info!(
             num_tokens = response.tokens.len(),
             num_monologues = asr_output.monologues.len(),
             "ASR response received, starting post-processing"
         );
 
-        let utterances = asr_postprocess::process_raw_asr(&asr_output, &ctx.opts.lang);
+        let lang_str = ctx.opts.lang.to_string();
+        let utterances = asr_postprocess::process_raw_asr(&asr_output, &lang_str);
         info!(
             num_utterances = utterances.len(),
             "Post-processing complete, building CHAT"
@@ -259,7 +296,7 @@ fn stage_speaker_diarization<'a, 'ctx>(
             return Ok(());
         };
 
-        let lang = LanguageCode3::from(ctx.opts.lang.clone());
+        let lang = &ctx.opts.lang;
         info!(
             audio_path = %ctx.audio_path.display(),
             speaker_backend = ?speaker_backend,
@@ -270,7 +307,7 @@ fn stage_speaker_diarization<'a, 'ctx>(
             ctx.services.pool,
             &SpeakerInferParams {
                 audio_path: ctx.audio_path,
-                lang: &lang,
+                lang,
                 expected_speakers: NumSpeakers(ctx.opts.num_speakers as u32),
                 backend: speaker_backend,
             },
@@ -291,14 +328,78 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
             ServerError::Validation("ASR response missing before CHAT build".to_string())
         })?;
 
+        // Resolve Auto → ASR-detected language for CHAT headers and NLP.
+        // When the user passed --lang auto, opts.lang is Auto. The ASR
+        // response carries the engine's detected language code (e.g. "spa").
+        // Store the resolved language so post-ASR stages (utseg, morphotag)
+        // use the real language, not Auto.
+        let resolved_lang = match &ctx.opts.lang {
+            LanguageSpec::Auto => {
+                let detected = response.lang.clone();
+                // If the ASR engine echoed back "auto" (e.g. Whisper path),
+                // use trigram detection on the full transcript text as fallback.
+                if &*detected == "auto" || detected.is_empty() {
+                    let all_text: String = response
+                        .tokens
+                        .iter()
+                        .map(|t| t.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let detected_iso3 =
+                        batchalign_chat_ops::asr_postprocess::lang_detect::detect_primary_language(
+                            &[&all_text],
+                        )
+                        .unwrap_or_else(|| "eng".to_string());
+                    LanguageCode3::from(detected_iso3)
+                } else {
+                    LanguageCode3::from(detected)
+                }
+            }
+            LanguageSpec::Resolved(code) => code.clone(),
+        };
+        ctx.resolved_lang = Some(resolved_lang.clone());
+
         if response.tokens.is_empty() {
-            ctx.chat_text = Some(build_empty_chat_text(ctx.opts)?);
+            // Build empty CHAT with resolved language.
+            let mut opts_resolved = ctx.opts.clone();
+            opts_resolved.lang = LanguageSpec::Resolved(resolved_lang.clone());
+            ctx.chat_text = Some(build_empty_chat_text(&opts_resolved)?);
             return Ok(());
         }
 
-        let utterances = ctx.utterances.as_ref().ok_or_else(|| {
+        let utterances = ctx.utterances.as_mut().ok_or_else(|| {
             ServerError::Validation("Utterances missing before CHAT build".to_string())
         })?;
+
+        // When auto-detecting language, run per-utterance language detection
+        // for code-switching markup and multi-language headers.
+        let is_auto = matches!(&ctx.opts.lang, LanguageSpec::Auto);
+        let langs: Vec<String> = if is_auto {
+            use batchalign_chat_ops::asr_postprocess::lang_detect;
+
+            // Concatenate each utterance's words for language detection
+            let utt_texts: Vec<String> = utterances
+                .iter()
+                .map(|utt| {
+                    utt.words
+                        .iter()
+                        .map(|w| w.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect();
+            let utt_text_refs: Vec<&str> = utt_texts.iter().map(String::as_str).collect();
+
+            // Tag each utterance with its detected language
+            for (utt, text) in utterances.iter_mut().zip(utt_text_refs.iter()) {
+                utt.lang = lang_detect::detect_utterance_language(text);
+            }
+
+            // Collect all detected languages for @Languages header
+            lang_detect::collect_detected_languages(&utt_text_refs, &resolved_lang)
+        } else {
+            vec![resolved_lang.to_string()]
+        };
 
         let diarization_speaker_count = ctx
             .speaker_segments
@@ -312,7 +413,7 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
         let desc = build_chat::transcript_from_asr_utterances(
             utterances,
             &participant_ids,
-            std::slice::from_ref(&ctx.opts.lang),
+            &langs,
             ctx.opts.media_name.as_deref(),
             ctx.opts.write_wor,
         );
@@ -323,20 +424,27 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
             let diarization_segments: Vec<ChatSpeakerSegment> = segments
                 .iter()
                 .map(|segment| ChatSpeakerSegment {
-                    start_ms: segment.start_ms,
-                    end_ms: segment.end_ms,
+                    start_ms: segment.start_ms.0,
+                    end_ms: segment.end_ms.0,
                     speaker: segment.speaker.clone(),
                 })
                 .collect();
             reassign_speakers(
                 &mut chat_file,
                 &diarization_segments,
-                &ctx.opts.lang,
+                &*resolved_lang,
                 &participant_ids,
             );
         }
         let chat_text = to_chat_string(&chat_file);
-        ctx.chat_text = Some(insert_transcribe_comment(&chat_text, ctx.opts));
+        let chat_text = insert_transcribe_comment(&chat_text, ctx.opts);
+        let filename = ctx
+            .audio_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        ctx.dumper.dump_post_asr_chat(filename, &chat_text);
+        ctx.chat_text = Some(chat_text);
         Ok(())
     })
 }
@@ -358,18 +466,24 @@ fn stage_run_utseg<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> St
             .chat_text
             .as_deref()
             .ok_or_else(|| ServerError::Validation("CHAT text missing before utseg".to_string()))?;
-        let utseg_lang = LanguageCode3::from(ctx.opts.lang.clone());
-        ctx.chat_text = Some(
-            crate::utseg::process_utseg(
-                input,
-                &utseg_lang,
-                ctx.services.pool,
-                ctx.services.cache,
-                ctx.services.engine_version,
-                CachePolicy::from(ctx.opts.override_cache),
-            )
-            .await?,
-        );
+        let filename = ctx
+            .audio_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        ctx.dumper.dump_pre_utseg_chat(filename, input);
+        let utseg_lang = ctx.lang_for_nlp().clone();
+        let result = crate::utseg::process_utseg(
+            input,
+            &utseg_lang,
+            ctx.services.pool,
+            ctx.services.cache,
+            ctx.services.engine_version,
+            CachePolicy::from(ctx.opts.override_cache),
+        )
+        .await?;
+        ctx.dumper.dump_post_utseg_chat(filename, &result);
+        ctx.chat_text = Some(result);
         Ok(())
     })
 }
@@ -382,8 +496,14 @@ fn stage_run_morphosyntax<'a, 'ctx>(
         let input = ctx.chat_text.as_deref().ok_or_else(|| {
             ServerError::Validation("CHAT text missing before morphosyntax".to_string())
         })?;
+        let filename = ctx
+            .audio_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        ctx.dumper.dump_pre_morphosyntax_chat(filename, input);
         let empty_mwt = std::collections::BTreeMap::new();
-        let mor_lang = LanguageCode3::from(ctx.opts.lang.clone());
+        let mor_lang = ctx.lang_for_nlp().clone();
         let mor_params = MorphosyntaxParams {
             lang: &mor_lang,
             tokenization_mode: TokenizationMode::Preserve,
@@ -455,7 +575,7 @@ mod tests {
             backend: AsrBackend::RustRevAi,
             diarize: true,
             speaker_backend,
-            lang: "eng".into(),
+            lang: LanguageCode3::new("eng").into(),
             num_speakers: 2,
             with_utseg: false,
             with_morphosyntax: false,
@@ -481,16 +601,16 @@ mod tests {
         };
         let audio_path = tempdir.path().join("sample.wav");
         let opts = test_transcribe_options(Some(SpeakerBackendV2::Pyannote));
-        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts);
+        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![AsrToken {
                 text: "hello".into(),
-                start_s: Some(0.0),
-                end_s: Some(0.5),
+                start_s: Some(DurationSeconds(0.0)),
+                end_s: Some(DurationSeconds(0.5)),
                 speaker: Some("SPEAKER_1".into()),
                 confidence: None,
             }],
-            lang: "eng".into(),
+            lang: LanguageCode3::new("eng").into(),
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -518,16 +638,16 @@ mod tests {
         };
         let audio_path = tempdir.path().join("sample.wav");
         let opts = test_transcribe_options(None);
-        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts);
+        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![AsrToken {
                 text: "hello".into(),
-                start_s: Some(0.0),
-                end_s: Some(0.5),
+                start_s: Some(DurationSeconds(0.0)),
+                end_s: Some(DurationSeconds(0.5)),
                 speaker: None,
                 confidence: None,
             }],
-            lang: "eng".into(),
+            lang: LanguageCode3::new("eng").into(),
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -537,6 +657,113 @@ mod tests {
         assert!(
             ctx.speaker_segments.is_none(),
             "dedicated speaker inference should be skipped when no speaker backend is configured"
+        );
+    }
+
+    /// When opts.lang is "auto", stage_build_chat must resolve to the
+    /// ASR-detected language for CHAT headers (regression test for job
+    /// 696870c7-02b where `@Languages: auto` leaked into output).
+    #[tokio::test]
+    async fn build_chat_stage_resolves_auto_to_detected_language() {
+        use batchalign_chat_ops::asr_postprocess;
+        use batchalign_chat_ops::build_chat;
+        use batchalign_chat_ops::serialize::to_chat_string;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let cache = UtteranceCache::sqlite(Some(tempdir.path().join("cache")))
+            .await
+            .expect("cache");
+        let pool = WorkerPool::new(PoolConfig::default());
+        let engine_version = EngineVersion::from("test-asr");
+        let services = PipelineServices {
+            pool: &pool,
+            cache: &cache,
+            engine_version: &engine_version,
+        };
+        let audio_path = tempdir.path().join("sample.wav");
+
+        // Opts with lang="auto" — simulates --lang auto from CLI
+        let mut opts = test_transcribe_options(None);
+        opts.lang = LanguageSpec::Auto;
+        opts.diarize = false;
+
+        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+
+        // ASR response with detected language "spa"
+        ctx.asr_response = Some(AsrResponse {
+            tokens: vec![AsrToken {
+                text: "hola".into(),
+                start_s: Some(DurationSeconds(0.0)),
+                end_s: Some(DurationSeconds(0.5)),
+                speaker: None,
+                confidence: None,
+            }],
+            lang: LanguageCode3::new("spa").into(),
+        });
+
+        // Run post-processing to generate utterances
+        stage_asr_postprocess(&mut ctx).await.expect("postprocess");
+
+        // Run build_chat — this should resolve "auto" → "spa"
+        stage_build_chat(&mut ctx).await.expect("build_chat");
+
+        let chat_text = ctx.chat_text.as_deref().expect("CHAT text should be set");
+
+        // The @Languages header must contain the detected language, NOT "auto"
+        let languages_line = chat_text
+            .lines()
+            .find(|l| l.starts_with("@Languages:"))
+            .expect("@Languages header missing");
+        assert!(
+            languages_line.contains("spa"),
+            "@Languages should contain detected 'spa', got: {languages_line}"
+        );
+        assert!(
+            !languages_line.contains("auto"),
+            "@Languages must NOT contain sentinel 'auto', got: {languages_line}"
+        );
+    }
+
+    /// When opts.lang is "auto" and ASR returns empty tokens,
+    /// build_chat should still resolve to the ASR response language.
+    #[tokio::test]
+    async fn build_chat_stage_resolves_auto_for_empty_response() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let cache = UtteranceCache::sqlite(Some(tempdir.path().join("cache")))
+            .await
+            .expect("cache");
+        let pool = WorkerPool::new(PoolConfig::default());
+        let engine_version = EngineVersion::from("test-asr");
+        let services = PipelineServices {
+            pool: &pool,
+            cache: &cache,
+            engine_version: &engine_version,
+        };
+        let audio_path = tempdir.path().join("sample.wav");
+
+        let mut opts = test_transcribe_options(None);
+        opts.lang = LanguageSpec::Auto;
+
+        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+        ctx.asr_response = Some(AsrResponse {
+            tokens: vec![],
+            lang: LanguageCode3::new("fra").into(),
+        });
+
+        stage_build_chat(&mut ctx).await.expect("build_chat");
+
+        let chat_text = ctx.chat_text.as_deref().expect("CHAT text should be set");
+        let languages_line = chat_text
+            .lines()
+            .find(|l| l.starts_with("@Languages:"))
+            .expect("@Languages header missing");
+        assert!(
+            languages_line.contains("fra"),
+            "empty-response @Languages should contain 'fra', got: {languages_line}"
+        );
+        assert!(
+            !languages_line.contains("auto"),
+            "empty-response @Languages must NOT contain 'auto', got: {languages_line}"
         );
     }
 }

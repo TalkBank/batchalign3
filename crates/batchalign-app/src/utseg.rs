@@ -132,8 +132,14 @@ pub async fn process_utseg_batch(
             ValidityLevel::StructurallyComplete,
         ) {
             let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-            validation_errors[file_idx] =
-                Some(format!("utseg pre-validation failed: {}", msgs.join("; ")));
+            let error_summary = format!("utseg pre-validation failed: {}", msgs.join("; "));
+            warn!(
+                filename = %files[file_idx].0,
+                errors = %error_summary,
+                chat_text = %files[file_idx].1,
+                "utseg pre-validation failed — dumping CHAT for diagnosis"
+            );
+            validation_errors[file_idx] = Some(error_summary);
             per_file_info.push(None);
             per_file_cached.push(HashMap::new());
             continue;

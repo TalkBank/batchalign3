@@ -339,6 +339,21 @@ pub struct CommonOptions {
     pub override_cache_tasks: Vec<String>,
 }
 
+impl CommonOptions {
+    /// Serialize `engine_overrides` to a JSON string for pool worker keying.
+    ///
+    /// Returns an empty string when no overrides are set (matching the pool
+    /// config's default). This ensures `pre_scale_with_overrides` produces
+    /// the same key that `dispatch_execute_v2` will look up.
+    pub fn engine_overrides_json(&self) -> String {
+        if self.engine_overrides.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&self.engine_overrides).unwrap_or_default()
+        }
+    }
+}
+
 impl Default for CommonOptions {
     fn default() -> Self {
         Self {
@@ -396,6 +411,10 @@ pub struct AlignOptions {
     #[serde(default)]
     pub utr_overlap_strategy: UtrOverlapStrategy,
 
+    /// Two-pass UTR configuration (CA markers, density threshold, buffers).
+    #[serde(default)]
+    pub utr_two_pass: batchalign_chat_ops::fa::TwoPassConfig,
+
     /// Include pause durations in forced alignment.
     #[serde(default)]
     pub pauses: bool,
@@ -407,9 +426,36 @@ pub struct AlignOptions {
     /// Merge abbreviated forms during processing.
     #[serde(default)]
     pub merge_abbrev: MergeAbbrevPolicy,
+
+    /// Directory to search for media files (audio/video).
+    /// When set, the aligner looks here in addition to the standard
+    /// media resolution paths (alongside .cha file, server media roots).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_dir: Option<String>,
+}
+
+impl Default for AlignOptions {
+    fn default() -> Self {
+        Self {
+            common: CommonOptions::default(),
+            fa_engine: default_fa_engine(),
+            utr_engine: None,
+            utr_overlap_strategy: UtrOverlapStrategy::default(),
+            utr_two_pass: Default::default(),
+            pauses: false,
+            wor: default_wor_tier_include(),
+            merge_abbrev: MergeAbbrevPolicy::default(),
+            media_dir: None,
+        }
+    }
 }
 
 impl AlignOptions {
+    /// Get the two-pass UTR configuration.
+    pub fn two_pass_config(&self) -> &batchalign_chat_ops::fa::TwoPassConfig {
+        &self.utr_two_pass
+    }
+
     /// Return the effective FA engine after applying any shared `fa` override.
     pub fn effective_fa_engine(&self) -> FaEngineName {
         self.common
@@ -717,9 +763,11 @@ mod tests {
             fa_engine: "whisper_fa".into(),
             utr_engine: Some(UtrEngine::RevAi),
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: true,
             wor: true.into(),
             merge_abbrev: false.into(),
+            media_dir: None,
         });
         let json = serde_json::to_string(&opts).unwrap();
         let back: CommandOptions = serde_json::from_str(&json).unwrap();
@@ -766,9 +814,11 @@ mod tests {
                     fa_engine: "wav2vec_fa".into(),
                     utr_engine: None,
                     utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
                     pauses: false,
                     wor: true.into(),
                     merge_abbrev: false.into(),
+                    media_dir: None,
                 }),
                 "align",
             ),
@@ -846,11 +896,7 @@ mod tests {
                 ..Default::default()
             },
             fa_engine: "cantonese_fa".into(),
-            utr_engine: None,
-            utr_overlap_strategy: Default::default(),
-            pauses: false,
-            wor: true.into(),
-            merge_abbrev: false.into(),
+            ..AlignOptions::default()
         });
 
         let json = serde_json::to_string(&opts).unwrap();

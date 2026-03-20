@@ -99,8 +99,16 @@ class TestWhisperPathBoundary:
         assert iso3_to_language_name("eng") == "english"
         assert iso3_to_language_name("yue") == "Cantonese"
 
-    def test_iso3_to_language_name_defaults_unknown_codes_to_english(self) -> None:
-        assert iso3_to_language_name("zzz") == "english"
+    def test_iso3_to_language_name_rejects_unknown_codes(self) -> None:
+        """Unknown ISO 639-3 codes raise ValueError (no silent English fallback)."""
+        import pytest
+
+        with pytest.raises(ValueError, match="Unrecognized ISO 639-3"):
+            iso3_to_language_name("zzz")
+
+    def test_iso3_to_language_name_auto_returns_auto(self) -> None:
+        """``--lang auto`` should map to the sentinel ``"auto"`` language name."""
+        assert iso3_to_language_name("auto") == "auto"
 
     def test_infer_whisper_passes_source_path_to_pipeline(self) -> None:
         """The wrapper should forward the source path, not decode audio itself."""
@@ -185,6 +193,97 @@ class TestWhisperPathBoundary:
         assert isinstance(prepared_input, dict)
         assert prepared_input["sampling_rate"] == 16000
         assert np.array_equal(prepared_input["raw"], waveform)
+
+    def test_infer_whisper_auto_detect_omits_language(self) -> None:
+        """With ``--lang auto``, the Whisper pipeline must NOT receive a language hint."""
+
+        class _FakeWhisperHandle:
+            """Test double that records generate_kwargs for auto-detect assertion."""
+
+            def __init__(self) -> None:
+                self.lang = "auto"
+                self.sample_rate = 16000
+                self.calls: list[tuple[object, int, object]] = []
+
+            def gen_kwargs(self, lang: str) -> dict[str, object]:
+                from batchalign.inference.types import WhisperASRHandle
+
+                handle = WhisperASRHandle(
+                    pipe=None, config="cfg", lang="auto", sample_rate=16000
+                )
+                return handle.gen_kwargs(lang)
+
+            def __call__(
+                self,
+                audio: object,
+                *,
+                batch_size: int = 1,
+                generate_kwargs: object = None,
+            ) -> dict[str, object]:
+                self.calls.append((audio, batch_size, generate_kwargs))
+                return {
+                    "text": "hola hello",
+                    "chunks": [
+                        {"text": "hola", "timestamp": (0.0, 0.5)},
+                        {"text": "hello", "timestamp": (0.5, 1.0)},
+                    ],
+                }
+
+        model = _FakeWhisperHandle()
+        item = AsrBatchItem(audio_path="/tmp/bilingual.wav", lang="auto")
+
+        response = _infer_whisper(model, item)  # type: ignore[arg-type]
+
+        assert response.kind == "whisper_chunks"
+        assert response.text == "hola hello"
+        _, _, gen_kw = model.calls[0]
+        assert "language" not in gen_kw, (
+            "auto-detect must omit 'language' from generate_kwargs"
+        )
+
+    def test_infer_whisper_prepared_audio_auto_detect(self) -> None:
+        """Prepared-audio path with ``lang='auto'`` must omit language hint."""
+
+        class _FakeWhisperHandle:
+            """Test double for prepared-audio auto-detect path."""
+
+            def __init__(self) -> None:
+                self.sample_rate = 16000
+                self.calls: list[tuple[object, int, object]] = []
+
+            def gen_kwargs(self, lang: str) -> dict[str, object]:
+                from batchalign.inference.types import WhisperASRHandle
+
+                handle = WhisperASRHandle(
+                    pipe=None, config="cfg", lang="auto", sample_rate=16000
+                )
+                return handle.gen_kwargs(lang)
+
+            def __call__(
+                self,
+                audio: object,
+                *,
+                batch_size: int = 1,
+                generate_kwargs: object = None,
+            ) -> dict[str, object]:
+                self.calls.append((audio, batch_size, generate_kwargs))
+                return {
+                    "text": "bilingual output",
+                    "chunks": [
+                        {"text": "bilingual output", "timestamp": (0.0, 1.0)},
+                    ],
+                }
+
+        model = _FakeWhisperHandle()
+        waveform = np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
+
+        response = infer_whisper_prepared_audio(model, waveform, "auto")  # type: ignore[arg-type]
+
+        assert response.text == "bilingual output"
+        _, _, gen_kw = model.calls[0]
+        assert "language" not in gen_kw, (
+            "auto-detect must omit 'language' from generate_kwargs"
+        )
 
 
 class _FakeGenerationConfig:

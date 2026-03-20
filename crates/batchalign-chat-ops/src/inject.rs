@@ -9,7 +9,7 @@
 
 use smallvec::SmallVec;
 use talkbank_model::WriteChat;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{DependentTier, GraTier, GrammaticalRelation, Mor, MorTier, Utterance};
 
 /// Inject parsed Mor items and GRA relations into an utterance.
@@ -30,7 +30,7 @@ pub fn inject_morphosyntax(
     let mut extracted = Vec::new();
     crate::extract::collect_utterance_content(
         &utterance.main.content.content,
-        AlignmentDomain::Mor,
+        TierDomain::Mor,
         &mut extracted,
     );
     let word_count = extracted.len();

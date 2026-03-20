@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use batchalign_app::api::{JobInfo, JobStatus, NumSpeakers};
-use batchalign_app::config::{MemoryMb, ServerConfig};
+use batchalign_app::api::{JobInfo, JobStatus, MemoryMb, NumSpeakers};
+use batchalign_app::config::ServerConfig;
 use batchalign_app::options::{
     AlignOptions, AvqiOptions, BenchmarkOptions, CommandOptions, CommonOptions, CompareOptions,
     CorefOptions, MorphotagOptions, OpensmileOptions, TranscribeOptions, TranslateOptions,
@@ -276,6 +276,7 @@ pub async fn start_test_server(python_path: &str) -> (String, tempfile::TempDir)
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     };
 
     let db_dir = tmp.path().join("db");
@@ -370,6 +371,7 @@ pub async fn start_live_server(
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),
+        ..Default::default()
     };
 
     let (router, state) = create_app(
@@ -455,9 +457,11 @@ pub fn default_options_for(command: &str) -> CommandOptions {
             fa_engine: "wav2vec_fa".into(),
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: false,
             wor: true.into(),
             merge_abbrev: false.into(),
+            media_dir: None,
         }),
         "transcribe" => CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),

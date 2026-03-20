@@ -30,6 +30,7 @@ use crate::dp_align::{self, MatchMode};
 
 use super::extraction::collect_fa_words;
 
+pub mod overlap_markers;
 mod two_pass;
 
 /// A single ASR token with timing, used as input for UTR.
@@ -75,13 +76,13 @@ pub trait UtrStrategy: Send + Sync {
 /// backchannels whose words appear at the wrong position in the global sequence.
 pub struct GlobalUtr;
 
-pub use two_pass::{GroupingContext, TwoPassOverlapUtr};
+pub use two_pass::{CaMarkerPolicy, GroupingContext, TwoPassConfig, TwoPassOverlapUtr, UtrMatchMode};
 
 /// Select the best UTR strategy for a given CHAT file.
 ///
 /// Returns [`TwoPassOverlapUtr`] when any utterance has a `+<` lazy overlap
-/// linker, [`GlobalUtr`] otherwise. When no `+<` utterances exist, the
-/// two-pass strategy's pass 2 is a no-op, but we avoid the overhead entirely.
+/// linker or CA overlap markers (⌊), [`GlobalUtr`] otherwise. When no overlap
+/// utterances exist, pass 2 is a no-op, but we avoid the overhead entirely.
 ///
 /// When `grouping_context` is provided, the two-pass strategy uses FA group
 /// counts to detect and avoid the wider-window regression on non-English files.
@@ -91,17 +92,29 @@ pub fn select_strategy(
 ) -> Box<dyn UtrStrategy> {
     let has_overlap = chat_file.lines.iter().any(|line| {
         if let Line::Utterance(utt) = line {
-            utt.main
+            // Check for +< linker (explicit overlap marker)
+            if utt
+                .main
                 .content
                 .linkers
                 .0
                 .contains(&Linker::LazyOverlapPrecedes)
+            {
+                return true;
+            }
+            // Check for ⌊ CA overlap markers (bottom overlap = overlapping speaker)
+            let info =
+                overlap_markers::extract_overlap_info(&utt.main.content.content.0);
+            info.has_bottom_overlap()
         } else {
             false
         }
     });
     if has_overlap {
-        Box::new(TwoPassOverlapUtr { grouping_context })
+        Box::new(TwoPassOverlapUtr {
+            grouping_context,
+            config: two_pass::TwoPassConfig::default(),
+        })
     } else {
         Box::new(GlobalUtr)
     }
@@ -116,6 +129,21 @@ pub(super) struct UtrUtteranceInfo {
     pub(super) has_bullet: bool,
     /// Whether the utterance has a `+<` lazy overlap linker.
     pub(super) has_lazy_overlap: bool,
+    /// Whether this utterance contains ⌊ (bottom overlap) markers,
+    /// indicating it overlaps with a preceding utterance's ⌈ markers.
+    pub(super) has_ca_overlap: bool,
+    /// For utterances with ⌈ (top overlap begin): the proportional position
+    /// of the first ⌈ among the utterance's alignable words (0.0–1.0).
+    /// Used by pass 2 to narrow the backchannel recovery window.
+    pub(super) overlap_onset_fraction: Option<f64>,
+    /// Speaker code for cross-utterance matching.
+    pub(super) speaker: String,
+    /// Indices of bottom overlap regions (for index-aware matching with
+    /// predecessor tops). `None` = unindexed, `Some(n)` = indexed.
+    pub(super) bottom_indices: Vec<Option<talkbank_model::model::OverlapIndex>>,
+    /// Per-top-region onset fractions with their indices (for index-aware
+    /// predecessor lookup).
+    pub(super) top_onsets: Vec<(Option<talkbank_model::model::OverlapIndex>, f64)>,
 }
 
 /// Per-utterance matched ASR token range produced by one UTR alignment plan.
@@ -155,7 +183,7 @@ impl UtrStrategy for GlobalUtr {
     /// Attempts a cheap exact-subsequence fast path first. Falls back to a
     /// single global Hirschberg DP alignment when the fast path is ambiguous.
     fn inject(&self, chat_file: &mut ChatFile, asr_tokens: &[AsrTimingToken]) -> UtrResult {
-        run_global_utr(chat_file, asr_tokens, false)
+        run_global_utr(chat_file, asr_tokens, false, MatchMode::CaseInsensitive)
     }
 }
 
@@ -170,6 +198,7 @@ pub(super) fn run_global_utr(
     chat_file: &mut ChatFile,
     asr_tokens: &[AsrTimingToken],
     skip_lazy_overlap: bool,
+    dp_match_mode: MatchMode,
 ) -> UtrResult {
     let mut result = UtrResult {
         injected: 0,
@@ -193,12 +222,12 @@ pub(super) fn run_global_utr(
     let utt_infos = collect_utr_utterance_info(chat_file);
 
     // Flatten utterance words into a single payload sequence, optionally
-    // skipping +< utterances so the global alignment sees only main-speaker
-    // words in their correct temporal order.
+    // skipping overlap utterances (+< or ⌊-bearing) so the global alignment
+    // sees only main-speaker words in their correct temporal order.
     let mut all_words: Vec<String> = Vec::new();
     let mut word_to_utt: Vec<usize> = Vec::new();
     for (utt_idx, info) in utt_infos.iter().enumerate() {
-        if skip_lazy_overlap && info.has_lazy_overlap {
+        if skip_lazy_overlap && (info.has_lazy_overlap || info.has_ca_overlap) {
             continue;
         }
         for word in &info.words {
@@ -208,7 +237,7 @@ pub(super) fn run_global_utr(
     }
 
     let asr_texts: Vec<String> = asr_tokens.iter().map(|t| t.text.clone()).collect();
-    let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, utt_infos.len());
+    let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, utt_infos.len(), dp_match_mode);
 
     // Convert ranges to bullets for untimed utterances only.
     let mut bullets_to_set: Vec<Option<(u64, u64)>> = vec![None; utt_infos.len()];
@@ -246,8 +275,8 @@ pub(super) fn run_global_utr(
     result
 }
 
-/// Extract alignable words, bullet presence, and `+<` linker status for every
-/// utterance in the order UTR sees them.
+/// Extract alignable words, bullet presence, `+<` linker status, and CA
+/// overlap marker info for every utterance in the order UTR sees them.
 pub(super) fn collect_utr_utterance_info(chat_file: &ChatFile) -> Vec<UtrUtteranceInfo> {
     let mut utt_infos = Vec::new();
     for line in &chat_file.lines {
@@ -260,10 +289,47 @@ pub(super) fn collect_utr_utterance_info(chat_file: &ChatFile) -> Vec<UtrUtteran
                 .linkers
                 .0
                 .contains(&Linker::LazyOverlapPrecedes);
+            let overlap_info =
+                overlap_markers::extract_overlap_info(&utt.main.content.content.0);
+
+            // Collect bottom region indices for index-aware matching.
+            let bottom_indices: Vec<_> = overlap_info
+                .regions
+                .iter()
+                .filter(|r| {
+                    r.kind == talkbank_model::alignment::helpers::OverlapRegionKind::Bottom
+                        && r.has_begin()
+                })
+                .map(|r| r.index)
+                .collect();
+
+            // Collect per-top-region onset fractions with their indices.
+            let top_onsets: Vec<_> = overlap_info
+                .regions
+                .iter()
+                .filter(|r| {
+                    r.kind == talkbank_model::alignment::helpers::OverlapRegionKind::Top
+                        && r.has_begin()
+                })
+                .filter_map(|r| {
+                    let word_pos = r.begin_at_word?;
+                    if overlap_info.total_words == 0 {
+                        return None;
+                    }
+                    let fraction = word_pos as f64 / overlap_info.total_words as f64;
+                    Some((r.index, fraction))
+                })
+                .collect();
+
             utt_infos.push(UtrUtteranceInfo {
                 words,
                 has_bullet: utt.main.content.bullet.is_some(),
                 has_lazy_overlap,
+                has_ca_overlap: overlap_info.has_bottom_overlap(),
+                overlap_onset_fraction: overlap_info.top_onset_fraction(),
+                speaker: utt.main.speaker.to_string(),
+                bottom_indices,
+                top_onsets,
             });
         }
     }
@@ -281,17 +347,21 @@ fn plan_utr_alignment(
     asr_texts: &[String],
     word_to_utt: &[usize],
     utt_count: usize,
+    dp_match_mode: MatchMode,
 ) -> UtrAlignmentPlan {
-    if let Some(utt_ranges) =
-        try_unique_exact_subsequence_ranges(all_words, asr_texts, word_to_utt, utt_count)
-    {
-        return UtrAlignmentPlan {
-            strategy: UtrAlignmentStrategy::UniqueExactSubsequence,
-            utt_ranges,
-        };
+    // Exact-subsequence fast path only works with exact/case-insensitive matching.
+    if matches!(dp_match_mode, MatchMode::Exact | MatchMode::CaseInsensitive) {
+        if let Some(utt_ranges) =
+            try_unique_exact_subsequence_ranges(all_words, asr_texts, word_to_utt, utt_count)
+        {
+            return UtrAlignmentPlan {
+                strategy: UtrAlignmentStrategy::UniqueExactSubsequence,
+                utt_ranges,
+            };
+        }
     }
 
-    let alignment = dp_align::align(all_words, asr_texts, MatchMode::CaseInsensitive);
+    let alignment = dp_align::align(all_words, asr_texts, dp_match_mode);
     UtrAlignmentPlan {
         strategy: UtrAlignmentStrategy::GlobalDp,
         utt_ranges: collect_utt_ranges_from_alignment(&alignment, word_to_utt, utt_count),
@@ -687,7 +757,7 @@ mod tests {
         ];
         let word_to_utt = vec![0, 0, 1, 1];
 
-        let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, 2);
+        let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, 2, MatchMode::CaseInsensitive);
 
         assert_eq!(plan.strategy, UtrAlignmentStrategy::UniqueExactSubsequence);
         assert_eq!(plan.utt_ranges, vec![Some((1, 2)), Some((3, 4))]);
@@ -704,7 +774,7 @@ mod tests {
         ];
         let word_to_utt = vec![0, 0];
 
-        let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, 1);
+        let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, 1, MatchMode::CaseInsensitive);
 
         assert_eq!(plan.strategy, UtrAlignmentStrategy::GlobalDp);
         let range = plan.utt_ranges[0].expect("DP fallback should still time the utterance");

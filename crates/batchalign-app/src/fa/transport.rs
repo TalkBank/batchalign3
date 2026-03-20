@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::api::LanguageCode3;
+use crate::api::{DurationMs, LanguageCode3};
 use crate::error::ServerError;
 use crate::pipeline::PipelineServices;
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
@@ -100,14 +100,14 @@ async fn infer_groups_v2(
 
         let response = services
             .pool
-            .dispatch_execute_v2(&LanguageCode3::from(""), &request)
+            .dispatch_execute_v2(&LanguageCode3::from_worker_lang(""), &request)
             .await
             .map_err(ServerError::Worker)?;
 
         match parse_forced_alignment_result_v2(
             &response,
             &batch.groups[group_index].words,
-            batch.groups[group_index].audio_start_ms(),
+            DurationMs(batch.groups[group_index].audio_start_ms()),
             batch.timing_mode,
         ) {
             Ok(timings) => parsed_results.push(FaWorkerGroupResult {

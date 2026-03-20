@@ -20,9 +20,10 @@ use std::path::Path;
 use serde::Deserialize;
 use talkbank_model::Span;
 use talkbank_model::model::{
-    Bullet, ChatFile, DependentTier, Header, IDHeader, LanguageCode, LanguageCodes, Line,
-    MediaHeader, MediaType, ParticipantEntries, ParticipantEntry, ParticipantName, ParticipantRole,
-    Separator, SpeakerCode, Terminator, Utterance, UtteranceContent, Word,
+    Annotated, BracketedContent, BracketedItem, Bullet, ChatFile, DependentTier, Group, Header,
+    IDHeader, LanguageCode, LanguageCodes, Line, MediaHeader, MediaType, ParticipantEntries,
+    ParticipantEntry, ParticipantName, ParticipantRole, ScopedAnnotation, Separator, SpeakerCode,
+    Terminator, Utterance, UtteranceContent, Word,
 };
 
 use crate::asr_postprocess;
@@ -82,22 +83,35 @@ pub struct UtteranceDesc {
     /// Word-level tokens with optional per-word timing.
     pub words: Option<Vec<WordDesc>>,
     /// Full utterance text (alternative to word-level). Parsed via tree-sitter.
+    ///
+    /// This is a public API surface for callers who want to pass pre-formatted
+    /// CHAT text rather than individual word tokens. The text is wrapped in a
+    /// mini CHAT document and parsed by `build_text_utterance()`. Currently
+    /// unused by the ASR pipeline (which always provides `words`), but
+    /// preserved for external JSON API consumers.
     pub text: Option<String>,
     /// Utterance-level start time in ms (used with `text` mode).
     pub start_ms: Option<u64>,
     /// Utterance-level end time in ms (used with `text` mode).
     pub end_ms: Option<u64>,
+    /// Detected language for this utterance (ISO 639-3). When set and different
+    /// from the primary language (`langs[0]`), a `[- lang]` precode is prepended.
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 /// A single word token with optional timing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct WordDesc {
-    /// Word text.
-    pub text: String,
+    /// Word text (ready for CHAT assembly via DirectParser).
+    pub text: asr_postprocess::ChatWordText,
     /// Start time in milliseconds.
     pub start_ms: Option<u64>,
     /// End time in milliseconds.
     pub end_ms: Option<u64>,
+    /// What role this word plays (regular, retrace, etc.).
+    #[serde(default)]
+    pub kind: asr_postprocess::WordKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +201,7 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
     }
 
     // --- Build utterances ---
+    let primary_lang = langs.first().map(String::as_str).unwrap_or("eng");
     for utt_desc in &desc.utterances {
         let words = utt_desc.words.as_deref().unwrap_or(&[]);
 
@@ -207,7 +222,18 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
         }
 
         // Word-level utterance
-        if let Some(utt_line) = build_word_utterance(&utt_desc.speaker, words, desc.write_wor)? {
+        if let Some(mut utt_line) =
+            build_word_utterance(&utt_desc.speaker, words, desc.write_wor)?
+        {
+            // Set [- lang] precode when utterance language differs from primary
+            if let Some(ref utt_lang) = utt_desc.lang {
+                if utt_lang != primary_lang {
+                    if let Line::Utterance(ref mut utt) = utt_line {
+                        utt.main.content.language_code =
+                            Some(LanguageCode::new(utt_lang.as_str()));
+                    }
+                }
+            }
             lines.push(utt_line);
         }
     }
@@ -243,7 +269,7 @@ pub fn transcript_from_asr_utterances(
     write_wor: bool,
 ) -> TranscriptDescription {
     // Collect unique speaker indices to build participant list
-    let mut seen_speakers: Vec<usize> = Vec::new();
+    let mut seen_speakers: Vec<asr_postprocess::SpeakerIndex> = Vec::new();
     for utt in utterances {
         if !seen_speakers.contains(&utt.speaker) {
             seen_speakers.push(utt.speaker);
@@ -254,10 +280,11 @@ pub fn transcript_from_asr_utterances(
     let participants: Vec<ParticipantDesc> = seen_speakers
         .iter()
         .map(|&idx| {
-            let id = if idx < participant_ids.len() {
-                participant_ids[idx].clone()
+            let i = idx.as_usize();
+            let id = if i < participant_ids.len() {
+                participant_ids[i].clone()
             } else {
-                format!("SP{}", idx)
+                format!("SP{i}")
             };
             ParticipantDesc {
                 id,
@@ -271,19 +298,21 @@ pub fn transcript_from_asr_utterances(
     let utt_descs: Vec<UtteranceDesc> = utterances
         .iter()
         .map(|utt| {
-            let speaker_id = if utt.speaker < participant_ids.len() {
-                participant_ids[utt.speaker].clone()
+            let i = utt.speaker.as_usize();
+            let speaker_id = if i < participant_ids.len() {
+                participant_ids[i].clone()
             } else {
-                format!("SP{}", utt.speaker)
+                format!("SP{i}")
             };
 
             let words: Vec<WordDesc> = utt
                 .words
                 .iter()
                 .map(|w| WordDesc {
-                    text: w.text.clone(),
+                    text: asr_postprocess::ChatWordText::new(w.text.as_str()),
                     start_ms: w.start_ms.map(|ms| ms as u64),
                     end_ms: w.end_ms.map(|ms| ms as u64),
+                    kind: w.kind,
                 })
                 .collect();
 
@@ -293,6 +322,7 @@ pub fn transcript_from_asr_utterances(
                 text: None,
                 start_ms: None,
                 end_ms: None,
+                lang: utt.lang.clone(),
             }
         })
         .collect();
@@ -327,6 +357,18 @@ pub fn tag_marker_separator(text: &str) -> Option<Separator> {
 // ---------------------------------------------------------------------------
 
 /// Build a text-level utterance by parsing through tree-sitter.
+///
+/// This path constructs a minimal valid CHAT document around the input text
+/// and parses it with `parse_strict()`. The mini-document hack is necessary
+/// because tree-sitter requires complete document context (headers, `@Begin`,
+/// `@End`) to parse a single utterance correctly.
+///
+/// **Callers:** This function is used by the `UtteranceDesc.text` API path —
+/// when a caller provides a pre-formatted CHAT utterance string instead of
+/// word-level tokens. It has zero production callers in the current codebase
+/// (the ASR pipeline always uses word-level `WordDesc` tokens), but it
+/// preserves the JSON API contract for external callers who construct
+/// `TranscriptDescription` directly. The PyO3 bridge tests exercise this path.
 fn build_text_utterance(
     speaker: &str,
     text: &str,
@@ -366,19 +408,62 @@ fn build_text_utterance(
     Ok(None)
 }
 
+/// Parse a single word through DirectParser, falling back to unchecked for ASR tokens.
+fn parse_asr_word(text: &str) -> Word {
+    use talkbank_direct_parser::DirectParser;
+    use talkbank_model::ChatParser;
+
+    let parser = DirectParser::new().expect("DirectParser should construct");
+    let errors = talkbank_model::NullErrorSink;
+    match parser.parse_word(text, 0, &errors).into_option() {
+        Some(parsed) => parsed,
+        None => {
+            tracing::warn!(
+                word = text,
+                "ASR word is not valid CHAT syntax; using unchecked fallback"
+            );
+            Word::new_unchecked(text, text)
+        }
+    }
+}
+
+/// Parse a word and attach inline bullet timing, updating utterance-level
+/// timing bookkeeping. Returns the parsed `Word` and whether timing was present.
+fn parse_and_time_word(
+    text: &str,
+    start_ms: Option<u64>,
+    end_ms: Option<u64>,
+    utt_start_ms: &mut Option<u64>,
+    utt_end_ms: &mut Option<u64>,
+    has_timing: &mut bool,
+) -> Word {
+    let mut word = parse_asr_word(text);
+    if let (Some(s), Some(e)) = (start_ms, end_ms) {
+        word.inline_bullet = Some(Bullet::new(s, e));
+        *has_timing = true;
+        if utt_start_ms.is_none() {
+            *utt_start_ms = Some(s);
+        }
+        *utt_end_ms = Some(e);
+    }
+    word
+}
+
 /// Build a word-level utterance from individual word tokens.
 ///
 /// When `write_wor` is `true` and word-level timing is present, a `%wor`
 /// dependent tier is generated. When `false`, the `%wor` tier is omitted
 /// regardless of timing (BA2 default for transcribe).
+///
+/// Words marked with `WordKind::Retrace` are grouped into consecutive runs
+/// and wrapped in proper CHAT retrace AST nodes:
+/// - Single-word retrace → `UtteranceContent::AnnotatedWord` with `[/]`
+/// - Multi-word retrace → `UtteranceContent::AnnotatedGroup` with `<...> [/]`
 fn build_word_utterance(
     speaker: &str,
     words: &[WordDesc],
     write_wor: bool,
 ) -> Result<Option<Line>, String> {
-    use talkbank_direct_parser::DirectParser;
-    use talkbank_model::ChatParser;
-
     let mut content: Vec<UtteranceContent> = Vec::new();
     let mut utt_start_ms: Option<u64> = None;
     let mut utt_end_ms: Option<u64> = None;
@@ -397,49 +482,89 @@ fn build_word_utterance(
         _ => Terminator::Period { span: Span::DUMMY },
     };
 
-    for w in words {
-        let text = w.text.trim();
+    let mut i = 0;
+    while i < words.len() {
+        let w = &words[i];
+        let text = w.text.as_str().trim();
+
         if text.is_empty() {
+            i += 1;
             continue;
         }
 
         // Skip ending punctuation (it's captured in the terminator)
         if ENDING_PUNCT.contains(&text) {
+            i += 1;
             continue;
         }
 
         // Tag-marker separators are not words
         if let Some(sep) = tag_marker_separator(text) {
             content.push(UtteranceContent::Separator(sep));
+            i += 1;
             continue;
         }
 
-        // Parse word through DirectParser; fall back to unchecked for ASR tokens
-        let mut word = {
-            let parser = DirectParser::new().expect("DirectParser should construct");
-            let errors = talkbank_model::NullErrorSink;
-            match parser.parse_word(text, 0, &errors).into_option() {
-                Some(parsed) => parsed,
-                None => {
-                    tracing::warn!(
-                        word = text,
-                        "ASR word is not valid CHAT syntax; using unchecked fallback"
-                    );
-                    Word::new_unchecked(text, text)
-                }
+        if w.kind == asr_postprocess::WordKind::Retrace {
+            // Collect consecutive retrace words.
+            let group_start = i;
+            while i < words.len() && words[i].kind == asr_postprocess::WordKind::Retrace {
+                i += 1;
             }
-        };
+            let retrace_words = &words[group_start..i];
 
-        if let (Some(s), Some(e)) = (w.start_ms, w.end_ms) {
-            word.inline_bullet = Some(Bullet::new(s, e));
-            has_timing = true;
-            if utt_start_ms.is_none() {
-                utt_start_ms = Some(s);
+            // Parse each retrace word with timing.
+            let mut parsed: Vec<Word> = Vec::new();
+            for rw in retrace_words {
+                let t = rw.text.as_str().trim();
+                if t.is_empty() {
+                    continue;
+                }
+                let word = parse_and_time_word(
+                    t,
+                    rw.start_ms,
+                    rw.end_ms,
+                    &mut utt_start_ms,
+                    &mut utt_end_ms,
+                    &mut has_timing,
+                );
+                parsed.push(word);
             }
-            utt_end_ms = Some(e);
+
+            if parsed.is_empty() {
+                continue;
+            }
+
+            if parsed.len() == 1 {
+                // Single-word retrace: word [/]
+                let annotated = Annotated::new(parsed.pop().unwrap())
+                    .with_scoped_annotation(ScopedAnnotation::PartialRetracing);
+                content.push(UtteranceContent::AnnotatedWord(Box::new(annotated)));
+            } else {
+                // Multi-word retrace: <word word> [/]
+                let items: Vec<BracketedItem> = parsed
+                    .into_iter()
+                    .map(|w| BracketedItem::Word(Box::new(w)))
+                    .collect();
+                let group = Group::new(BracketedContent::new(items));
+                let annotated = Annotated::new(group)
+                    .with_scoped_annotation(ScopedAnnotation::PartialRetracing);
+                content.push(UtteranceContent::AnnotatedGroup(annotated));
+            }
+            continue;
         }
 
+        // Regular word
+        let word = parse_and_time_word(
+            text,
+            w.start_ms,
+            w.end_ms,
+            &mut utt_start_ms,
+            &mut utt_end_ms,
+            &mut has_timing,
+        );
         content.push(UtteranceContent::Word(Box::new(word)));
+        i += 1;
     }
 
     if content.is_empty() {
@@ -470,6 +595,16 @@ mod tests {
     use crate::parse::parse_lenient;
     use crate::serialize::to_chat_string;
 
+    /// Helper: create a WordDesc with default kind.
+    fn wd(text: &str, start_ms: Option<u64>, end_ms: Option<u64>) -> WordDesc {
+        WordDesc {
+            text: asr_postprocess::ChatWordText::new(text),
+            start_ms,
+            end_ms,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_build_chat_minimal() {
         let desc = TranscriptDescription {
@@ -485,25 +620,14 @@ mod tests {
             utterances: vec![UtteranceDesc {
                 speaker: "PAR".to_string(),
                 words: Some(vec![
-                    WordDesc {
-                        text: "hello".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
-                    WordDesc {
-                        text: "world".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
-                    WordDesc {
-                        text: ".".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
+                    wd("hello", None, None),
+                    wd("world", None, None),
+                    wd(".", None, None),
                 ]),
                 text: None,
                 start_ms: None,
                 end_ms: None,
+                lang: None,
             }],
             write_wor: false,
         };
@@ -529,25 +653,14 @@ mod tests {
             utterances: vec![UtteranceDesc {
                 speaker: "PAR".to_string(),
                 words: Some(vec![
-                    WordDesc {
-                        text: "hello".into(),
-                        start_ms: Some(0),
-                        end_ms: Some(500),
-                    },
-                    WordDesc {
-                        text: "world".into(),
-                        start_ms: Some(500),
-                        end_ms: Some(1000),
-                    },
-                    WordDesc {
-                        text: ".".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
+                    wd("hello", Some(0), Some(500)),
+                    wd("world", Some(500), Some(1000)),
+                    wd(".", None, None),
                 ]),
                 text: None,
                 start_ms: None,
                 end_ms: None,
+                lang: None,
             }],
             write_wor: true,
         };
@@ -599,6 +712,7 @@ mod tests {
                 text: Some("hello world .".to_string()),
                 start_ms: Some(0),
                 end_ms: Some(1000),
+                lang: None,
             }],
             write_wor: false,
         };
@@ -623,20 +737,13 @@ mod tests {
             utterances: vec![UtteranceDesc {
                 speaker: "PAR".to_string(),
                 words: Some(vec![
-                    WordDesc {
-                        text: "how".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
-                    WordDesc {
-                        text: "?".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
+                    wd("how", None, None),
+                    wd("?", None, None),
                 ]),
                 text: None,
                 start_ms: None,
                 end_ms: None,
+                lang: None,
             }],
             write_wor: false,
         };
@@ -661,25 +768,14 @@ mod tests {
             utterances: vec![UtteranceDesc {
                 speaker: "PAR".to_string(),
                 words: Some(vec![
-                    WordDesc {
-                        text: "hello".into(),
-                        start_ms: Some(0),
-                        end_ms: Some(500),
-                    },
-                    WordDesc {
-                        text: "world".into(),
-                        start_ms: Some(500),
-                        end_ms: Some(1000),
-                    },
-                    WordDesc {
-                        text: ".".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
+                    wd("hello", Some(0), Some(500)),
+                    wd("world", Some(500), Some(1000)),
+                    wd(".", None, None),
                 ]),
                 text: None,
                 start_ms: None,
                 end_ms: None,
+                lang: None,
             }],
             write_wor: false,
         };
@@ -701,34 +797,20 @@ mod tests {
     fn test_transcript_from_asr_utterances() {
         let utterances = vec![
             asr_postprocess::Utterance {
-                speaker: 0,
+                speaker: asr_postprocess::SpeakerIndex(0),
                 words: vec![
-                    asr_postprocess::AsrWord {
-                        text: "hello".into(),
-                        start_ms: Some(0),
-                        end_ms: Some(500),
-                    },
-                    asr_postprocess::AsrWord {
-                        text: ".".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
+                    asr_postprocess::AsrWord::new("hello", Some(0), Some(500)),
+                    asr_postprocess::AsrWord::new(".", None, None),
                 ],
+                lang: None,
             },
             asr_postprocess::Utterance {
-                speaker: 1,
+                speaker: asr_postprocess::SpeakerIndex(1),
                 words: vec![
-                    asr_postprocess::AsrWord {
-                        text: "world".into(),
-                        start_ms: Some(500),
-                        end_ms: Some(1000),
-                    },
-                    asr_postprocess::AsrWord {
-                        text: ".".into(),
-                        start_ms: None,
-                        end_ms: None,
-                    },
+                    asr_postprocess::AsrWord::new("world", Some(500), Some(1000)),
+                    asr_postprocess::AsrWord::new(".", None, None),
                 ],
+                lang: None,
             },
         ];
 
@@ -758,12 +840,9 @@ mod tests {
     #[test]
     fn test_transcript_from_asr_auto_generates_speaker_ids() {
         let utterances = vec![asr_postprocess::Utterance {
-            speaker: 5,
-            words: vec![asr_postprocess::AsrWord {
-                text: "hello".into(),
-                start_ms: None,
-                end_ms: None,
-            }],
+            speaker: asr_postprocess::SpeakerIndex(5),
+            words: vec![asr_postprocess::AsrWord::new("hello", None, None)],
+            lang: None,
         }];
 
         let desc =
@@ -790,5 +869,183 @@ mod tests {
             write_wor: false,
         };
         assert!(build_chat(&desc).is_err());
+    }
+
+    // -- Retrace AST construction tests --
+
+    /// Helper: create a retrace WordDesc.
+    fn wd_retrace(text: &str, start_ms: Option<u64>, end_ms: Option<u64>) -> WordDesc {
+        WordDesc {
+            text: asr_postprocess::ChatWordText::new(text),
+            start_ms,
+            end_ms,
+            kind: asr_postprocess::WordKind::Retrace,
+        }
+    }
+
+    /// Helper: build a single-utterance CHAT file and return serialized output.
+    fn build_single_utterance(words: Vec<WordDesc>) -> String {
+        let desc = TranscriptDescription {
+            langs: vec!["eng".to_string()],
+            participants: vec![ParticipantDesc {
+                id: "PAR".to_string(),
+                name: None,
+                role: None,
+                corpus: None,
+            }],
+            media_name: None,
+            media_type: None,
+            utterances: vec![UtteranceDesc {
+                speaker: "PAR".to_string(),
+                words: Some(words),
+                text: None,
+                start_ms: None,
+                end_ms: None,
+                lang: None,
+            }],
+            write_wor: false,
+        };
+        let chat = build_chat(&desc).unwrap();
+        to_chat_string(&chat)
+    }
+
+    #[test]
+    fn single_word_retrace_produces_annotated_word() {
+        // "I [/] I went ." → AnnotatedWord with PartialRetracing
+        let output = build_single_utterance(vec![
+            wd_retrace("I", None, None),
+            wd("I", None, None),
+            wd("went", None, None),
+            wd(".", None, None),
+        ]);
+        assert!(
+            output.contains("I [/] I went ."),
+            "expected single-word retrace: {output}"
+        );
+    }
+
+    #[test]
+    fn multi_word_retrace_produces_annotated_group() {
+        // "<I want> [/] I want cookie ."
+        let output = build_single_utterance(vec![
+            wd_retrace("I", None, None),
+            wd_retrace("want", None, None),
+            wd("I", None, None),
+            wd("want", None, None),
+            wd("cookie", None, None),
+            wd(".", None, None),
+        ]);
+        assert!(
+            output.contains("<I want> [/] I want cookie ."),
+            "expected multi-word retrace: {output}"
+        );
+    }
+
+    #[test]
+    fn retrace_preserves_per_word_timing() {
+        let output = build_single_utterance(vec![
+            wd_retrace("go", Some(0), Some(200)),
+            wd("go", Some(200), Some(400)),
+            wd("home", Some(400), Some(600)),
+            wd(".", None, None),
+        ]);
+        // The retrace word should have an inline bullet.
+        assert!(
+            output.contains("\u{15}"),
+            "retrace word should preserve timing bullets: {output}"
+        );
+        assert!(
+            output.contains("[/]"),
+            "expected retrace marker: {output}"
+        );
+    }
+
+    #[test]
+    fn retrace_output_reparses_cleanly() {
+        // Single-word retrace
+        let output = build_single_utterance(vec![
+            wd_retrace("I", None, None),
+            wd("I", None, None),
+            wd("went", None, None),
+            wd(".", None, None),
+        ]);
+        let (_parsed, errors) = parse_lenient(&output);
+        assert!(
+            errors.is_empty(),
+            "single-word retrace should reparse: {errors:?}\noutput: {output}"
+        );
+
+        // Multi-word retrace
+        let output = build_single_utterance(vec![
+            wd_retrace("I", None, None),
+            wd_retrace("want", None, None),
+            wd("I", None, None),
+            wd("want", None, None),
+            wd("cookie", None, None),
+            wd(".", None, None),
+        ]);
+        let (_parsed, errors) = parse_lenient(&output);
+        assert!(
+            errors.is_empty(),
+            "multi-word retrace should reparse: {errors:?}\noutput: {output}"
+        );
+    }
+
+    #[test]
+    fn disfluency_and_retrace_end_to_end() {
+        // Full pipeline: raw ASR → process_raw_asr (includes disfluency + retrace)
+        // → transcript_from_asr_utterances → build_chat.
+        let output = asr_postprocess::AsrOutput {
+            monologues: vec![asr_postprocess::AsrMonologue {
+                speaker: asr_postprocess::SpeakerIndex(0),
+                elements: vec![
+                    asr_postprocess::AsrElement {
+                        value: asr_postprocess::AsrRawText::new("um"),
+                        ts: asr_postprocess::AsrTimestampSecs(0.0),
+                        end_ts: asr_postprocess::AsrTimestampSecs(0.2),
+                        kind: asr_postprocess::AsrElementKind::Text,
+                    },
+                    asr_postprocess::AsrElement {
+                        value: asr_postprocess::AsrRawText::new("um"),
+                        ts: asr_postprocess::AsrTimestampSecs(0.2),
+                        end_ts: asr_postprocess::AsrTimestampSecs(0.4),
+                        kind: asr_postprocess::AsrElementKind::Text,
+                    },
+                    asr_postprocess::AsrElement {
+                        value: asr_postprocess::AsrRawText::new("I"),
+                        ts: asr_postprocess::AsrTimestampSecs(0.4),
+                        end_ts: asr_postprocess::AsrTimestampSecs(0.6),
+                        kind: asr_postprocess::AsrElementKind::Text,
+                    },
+                    asr_postprocess::AsrElement {
+                        value: asr_postprocess::AsrRawText::new("went"),
+                        ts: asr_postprocess::AsrTimestampSecs(0.6),
+                        end_ts: asr_postprocess::AsrTimestampSecs(0.8),
+                        kind: asr_postprocess::AsrElementKind::Text,
+                    },
+                ],
+            }],
+        };
+        let utts = asr_postprocess::process_raw_asr(&output, "eng");
+
+        let desc = transcript_from_asr_utterances(
+            &utts,
+            &["PAR".to_string()],
+            &["eng".to_string()],
+            None,
+            false,
+        );
+        let chat = build_chat(&desc).unwrap();
+        let serialized = to_chat_string(&chat);
+
+        // Should contain filled pause marker and retrace
+        assert!(serialized.contains("&-um"), "expected filled pause: {serialized}");
+        assert!(serialized.contains("[/]"), "expected retrace marker: {serialized}");
+
+        let (_parsed, errors) = parse_lenient(&serialized);
+        assert!(
+            errors.is_empty(),
+            "disfluency+retrace should reparse cleanly: {errors:?}\noutput: {serialized}"
+        );
     }
 }

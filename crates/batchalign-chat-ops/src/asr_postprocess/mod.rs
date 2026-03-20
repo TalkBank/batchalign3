@@ -1,4 +1,5 @@
-//! ASR post-processing: compound merging, number expansion, retokenization.
+//! ASR post-processing: compound merging, number expansion, retokenization,
+//! disfluency marking, and retrace detection.
 //!
 //! This module ports the Python ASR post-processing pipeline to Rust. After
 //! the Python worker returns raw ASR tokens (via `batch_infer` with task
@@ -13,11 +14,19 @@
 //! 4. **Cantonese normalization** — simplified→HK traditional + domain replacements (lang=yue only)
 //! 5. **Long turn splitting** — chunk monologues >300 words
 //! 6. **Retokenization** — split into utterances by punctuation
+//! 7. **Disfluency replacement** — mark filled pauses ("um" → "&-um") and orthographic
+//!    replacements ("'cause" → "(be)cause") from per-language wordlists
+//! 8. **N-gram retrace detection** — detect repeated n-grams and wrap in `<...> [/]`
 
+mod asr_types;
 pub mod cantonese;
+mod cleanup;
 mod compounds;
+pub mod lang_detect;
 mod num2chinese;
 mod num2text;
+
+pub use asr_types::{AsrNormalizedText, AsrRawText, AsrTimestampSecs, ChatWordText, SpeakerIndex};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,53 +37,98 @@ pub use num2text::expand_number;
 // Types
 // ---------------------------------------------------------------------------
 
+/// What role a word plays in the CHAT output.
+///
+/// The `build_chat` module reads this to decide how to represent the word
+/// in the AST. Regular words become `UtteranceContent::Word`; retrace words
+/// get wrapped in `<...> [/]` bracketed groups; filled pauses are already
+/// encoded in the text as `&-um` etc. and parse normally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum WordKind {
+    /// Normal content word (or filled pause already in `&-um` form).
+    #[default]
+    Regular,
+    /// This word is part of a retrace group — a repeated n-gram that
+    /// should be wrapped in `<...> [/]` annotation in the CHAT output.
+    Retrace,
+}
+
 /// A single token from ASR output, with timing information.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AsrWord {
-    /// The word text.
-    pub text: String,
+    /// The word text (normalized through the ASR pipeline).
+    pub text: AsrNormalizedText,
     /// Start time in milliseconds (None if unknown).
     pub start_ms: Option<i64>,
     /// End time in milliseconds (None if unknown).
     pub end_ms: Option<i64>,
+    /// What kind of word this is (regular, retrace, etc.).
+    #[serde(default)]
+    pub kind: WordKind,
+}
+
+impl AsrWord {
+    /// Create a regular (non-retrace) word with timing.
+    pub fn new(text: impl Into<String>, start_ms: Option<i64>, end_ms: Option<i64>) -> Self {
+        Self {
+            text: AsrNormalizedText::new(text),
+            start_ms,
+            end_ms,
+            kind: WordKind::default(),
+        }
+    }
 }
 
 /// A speaker-attributed utterance after retokenization.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Utterance {
     /// Speaker index (0-based).
-    pub speaker: usize,
+    pub speaker: SpeakerIndex,
     /// Words in the utterance (last word is a terminator like ".").
     pub words: Vec<AsrWord>,
+    /// Detected language for this utterance (ISO 639-3), if different from
+    /// the primary language. Used for `[- lang]` code-switching precodes in CHAT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
 }
 
 /// Raw monologue from ASR output (before post-processing).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AsrMonologue {
     /// Speaker index (0-based).
-    pub speaker: usize,
+    pub speaker: SpeakerIndex,
     /// Raw ASR elements.
     pub elements: Vec<AsrElement>,
+}
+
+/// What kind of raw ASR element this is.
+///
+/// Currently only `Text` and `Punctuation` are emitted by providers.
+/// Defaults to `Text` when not specified (e.g. omitted from JSON).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AsrElementKind {
+    /// A word token.
+    #[default]
+    Text,
+    /// A punctuation token (period, question mark, etc.).
+    Punctuation,
 }
 
 /// A single element from raw ASR output.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AsrElement {
-    /// Token text.
-    pub value: String,
+    /// Token text (raw from the ASR provider).
+    pub value: AsrRawText,
     /// Start time in seconds.
     #[serde(default)]
-    pub ts: f64,
+    pub ts: AsrTimestampSecs,
     /// End time in seconds.
     #[serde(default)]
-    pub end_ts: f64,
-    /// Element type: "text" or "punctuation".
-    #[serde(default = "default_type")]
-    pub r#type: String,
-}
-
-fn default_type() -> String {
-    "text".to_string()
+    pub end_ts: AsrTimestampSecs,
+    /// Element kind: text or punctuation.
+    #[serde(default)]
+    pub kind: AsrElementKind,
 }
 
 /// Raw ASR output structure (matches Rev.AI format).
@@ -110,9 +164,9 @@ const MAX_TURN_LEN: usize = 300;
 /// Run the full ASR post-processing pipeline on raw ASR output.
 ///
 /// Applies compound merging, timing conversion, multi-word splitting,
-/// number expansion, long turn splitting, and punctuation-based
-/// retokenization. Returns speaker-attributed utterances ready for
-/// CHAT assembly via `build_chat()`.
+/// number expansion, long turn splitting, punctuation-based retokenization,
+/// disfluency replacement, and n-gram retrace detection. Returns
+/// speaker-attributed utterances ready for CHAT assembly via `build_chat()`.
 pub fn process_raw_asr(output: &AsrOutput, lang: &str) -> Vec<Utterance> {
     let mut all_utterances = Vec::new();
 
@@ -146,6 +200,14 @@ pub fn process_raw_asr(output: &AsrOutput, lang: &str) -> Vec<Utterance> {
         }
     }
 
+    // Stage 7: disfluency replacement (filled pauses + orthographic normalizations).
+    // Matches BA2's DisfluencyReplacementEngine which ran after ASR on all utterances.
+    cleanup::apply_disfluency_replacements(&mut all_utterances, lang);
+
+    // Stage 8: n-gram retrace detection.
+    // Matches BA2's NgramRetraceEngine which ran after disfluency on all utterances.
+    cleanup::apply_retrace_detection(&mut all_utterances, lang);
+
     all_utterances
 }
 
@@ -155,7 +217,7 @@ pub fn process_raw_asr(output: &AsrOutput, lang: &str) -> Vec<Utterance> {
 fn extract_timed_words(elements: &[AsrElement]) -> Vec<AsrWord> {
     let mut words = Vec::new();
     for elem in elements {
-        let value = elem.value.trim();
+        let value = elem.value.as_str().trim();
         if value.is_empty() {
             continue;
         }
@@ -163,12 +225,8 @@ fn extract_timed_words(elements: &[AsrElement]) -> Vec<AsrWord> {
         if value.starts_with('<') && value.ends_with('>') {
             continue;
         }
-        let (start_ms, end_ms) = normalized_timing_range(elem.ts, elem.end_ts);
-        words.push(AsrWord {
-            text: value.to_string(),
-            start_ms,
-            end_ms,
-        });
+        let (start_ms, end_ms) = normalized_timing_range(elem.ts.as_f64(), elem.end_ts.as_f64());
+        words.push(AsrWord::new(value, start_ms, end_ms));
     }
     words
 }
@@ -183,7 +241,7 @@ fn split_multiword_tokens(words: Vec<AsrWord>, lang: &str) -> Vec<AsrWord> {
         // Join hyphen-prefixed words with previous
         if word.text.starts_with('-') && !result.is_empty() {
             let prev = result.last_mut().unwrap();
-            prev.text.push_str(&word.text);
+            prev.text.push_str(word.text.as_str());
             prev.end_ms = word.end_ms;
             continue;
         }
@@ -218,7 +276,7 @@ fn split_chunk_word(word: AsrWord, lang: &str) -> Vec<AsrWord> {
         }
     };
 
-    for ch in word.text.chars() {
+    for ch in word.text.as_str().chars() {
         if ch.is_whitespace() {
             flush_current(&mut parts, &mut current);
             continue;
@@ -246,7 +304,7 @@ fn split_chunk_word(word: AsrWord, lang: &str) -> Vec<AsrWord> {
     }
     let parts = expanded_parts;
 
-    if parts.len() == 1 && !parts[0].1 && parts[0].0 == word.text {
+    if parts.len() == 1 && !parts[0].1 && parts[0].0 == word.text.as_str() {
         return vec![word];
     }
 
@@ -268,11 +326,7 @@ fn split_chunk_word(word: AsrWord, lang: &str) -> Vec<AsrWord> {
         .into_iter()
         .map(|(text, is_separator)| {
             if is_separator {
-                return AsrWord {
-                    text,
-                    start_ms: None,
-                    end_ms: None,
-                };
+                return AsrWord::new(text, None, None);
             }
 
             let timings = total_span.map(|(start, span)| {
@@ -284,11 +338,7 @@ fn split_chunk_word(word: AsrWord, lang: &str) -> Vec<AsrWord> {
             });
 
             let (start_ms, end_ms) = timings.unwrap_or((None, None));
-            AsrWord {
-                text,
-                start_ms,
-                end_ms,
-            }
+            AsrWord::new(text, start_ms, end_ms)
         })
         .collect()
 }
@@ -348,9 +398,9 @@ fn normalized_split_separator(ch: char) -> Option<Option<&'static str>> {
 fn normalize_cantonese_words(words: Vec<AsrWord>) -> Vec<AsrWord> {
     words
         .into_iter()
-        .map(|mut w| {
-            w.text = cantonese::normalize_cantonese(&w.text);
-            w
+        .map(|w| AsrWord {
+            text: w.text.map(|t| cantonese::normalize_cantonese(t)),
+            ..w
         })
         .collect()
 }
@@ -359,9 +409,9 @@ fn normalize_cantonese_words(words: Vec<AsrWord>) -> Vec<AsrWord> {
 fn expand_numbers_in_words(words: Vec<AsrWord>, lang: &str) -> Vec<AsrWord> {
     words
         .into_iter()
-        .map(|mut w| {
-            w.text = expand_number(&w.text, lang);
-            w
+        .map(|w| AsrWord {
+            text: w.text.map(|t| expand_number(t, lang)),
+            ..w
         })
         .collect()
 }
@@ -412,54 +462,50 @@ fn normalize_punct(word: &str) -> String {
 /// Split a word list into utterances based on punctuation boundaries.
 ///
 /// This is the simple punctuation-based retokenizer (no BERT model).
-fn retokenize(speaker: usize, words: Vec<AsrWord>) -> Vec<Utterance> {
+fn retokenize(speaker: SpeakerIndex, words: Vec<AsrWord>) -> Vec<Utterance> {
     let mut utterances = Vec::new();
     let mut buf: Vec<AsrWord> = Vec::new();
 
-    for mut word in words {
+    for word in words {
         // Normalize Japanese period and remove inverted punctuation
-        word.text = word.text.replace('。', ".");
-        word.text = word.text.replace(['¿', '¡'], " ");
+        let word = AsrWord {
+            text: word.text.map(|t| t.replace('。', ".").replace(['¿', '¡'], " ")),
+            ..word
+        };
 
         buf.push(word);
 
-        let last_text = &buf.last().unwrap().text;
+        let last_text = buf.last().unwrap().text.as_str();
 
         if is_ending_punct(last_text) {
             // Whole word is ending punct — flush utterance
             let punct = normalize_punct(last_text);
-            buf.last_mut().unwrap().text = punct;
+            buf.last_mut().unwrap().text = AsrNormalizedText::new(punct);
             utterances.push(Utterance {
                 speaker,
                 words: std::mem::take(&mut buf),
+                lang: None,
             });
         } else if ends_with_ending_punct(last_text) {
             // Last character is ending punct — split the word
             let text = buf.pop().unwrap();
-            let last_char_boundary = text
-                .text
+            let s = text.text.as_str();
+            let last_char_boundary = s
                 .char_indices()
                 .next_back()
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            let word_part = &text.text[..last_char_boundary];
-            let punct_part = &text.text[last_char_boundary..];
+            let word_part = &s[..last_char_boundary];
+            let punct_part = &s[last_char_boundary..];
 
             if !word_part.is_empty() {
-                buf.push(AsrWord {
-                    text: word_part.to_string(),
-                    start_ms: text.start_ms,
-                    end_ms: text.end_ms,
-                });
+                buf.push(AsrWord::new(word_part, text.start_ms, text.end_ms));
             }
-            buf.push(AsrWord {
-                text: normalize_punct(punct_part).to_string(),
-                start_ms: None,
-                end_ms: None,
-            });
+            buf.push(AsrWord::new(normalize_punct(punct_part), None, None));
             utterances.push(Utterance {
                 speaker,
                 words: std::mem::take(&mut buf),
+                lang: None,
             });
         }
     }
@@ -475,14 +521,11 @@ fn retokenize(speaker: usize, words: Vec<AsrWord>) -> Vec<Utterance> {
         }
         if !buf.is_empty() {
             // Append terminator
-            buf.push(AsrWord {
-                text: ".".to_string(),
-                start_ms: None,
-                end_ms: None,
-            });
+            buf.push(AsrWord::new(".", None, None));
             utterances.push(Utterance {
                 speaker,
                 words: buf,
+                lang: None,
             });
         }
     }
@@ -500,10 +543,10 @@ mod tests {
 
     fn elem(value: &str, ts: f64, end_ts: f64) -> AsrElement {
         AsrElement {
-            value: value.to_string(),
-            ts,
-            end_ts,
-            r#type: "text".to_string(),
+            value: AsrRawText::new(value),
+            ts: AsrTimestampSecs(ts),
+            end_ts: AsrTimestampSecs(end_ts),
+            kind: AsrElementKind::Text,
         }
     }
 
@@ -538,11 +581,7 @@ mod tests {
 
     #[test]
     fn test_split_multiword_tokens() {
-        let words = vec![AsrWord {
-            text: "hello world".to_string(),
-            start_ms: Some(0),
-            end_ms: Some(1000),
-        }];
+        let words = vec![AsrWord::new("hello world", Some(0), Some(1000))];
         let result = split_multiword_tokens(words, "eng");
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "hello");
@@ -555,11 +594,7 @@ mod tests {
 
     #[test]
     fn test_split_multiword_tokens_splits_embedded_sentence_punctuation() {
-        let words = vec![AsrWord {
-            text: "hello?world!".to_string(),
-            start_ms: None,
-            end_ms: None,
-        }];
+        let words = vec![AsrWord::new("hello?world!", None, None)];
         let result = split_multiword_tokens(words, "eng");
         let texts: Vec<&str> = result.iter().map(|word| word.text.as_str()).collect();
         assert_eq!(texts, vec!["hello", "?", "world", "!"]);
@@ -573,16 +608,8 @@ mod tests {
     #[test]
     fn test_hyphen_joining() {
         let words = vec![
-            AsrWord {
-                text: "hello".into(),
-                start_ms: Some(0),
-                end_ms: Some(500),
-            },
-            AsrWord {
-                text: "-world".into(),
-                start_ms: Some(500),
-                end_ms: Some(1000),
-            },
+            AsrWord::new("hello", Some(0), Some(500)),
+            AsrWord::new("-world", Some(500), Some(1000)),
         ];
         let result = split_multiword_tokens(words, "eng");
         assert_eq!(result.len(), 1);
@@ -594,11 +621,7 @@ mod tests {
     #[test]
     fn test_split_long_turns() {
         let words: Vec<AsrWord> = (0..650)
-            .map(|i| AsrWord {
-                text: format!("word{i}"),
-                start_ms: Some(i as i64),
-                end_ms: Some(i as i64 + 1),
-            })
+            .map(|i| AsrWord::new(format!("word{i}"), Some(i as i64), Some(i as i64 + 1)))
             .collect();
         let chunks = split_long_turns(words);
         assert_eq!(chunks.len(), 3);
@@ -610,25 +633,13 @@ mod tests {
     #[test]
     fn test_retokenize_simple() {
         let words = vec![
-            AsrWord {
-                text: "hello".into(),
-                start_ms: Some(0),
-                end_ms: Some(500),
-            },
-            AsrWord {
-                text: "world".into(),
-                start_ms: Some(500),
-                end_ms: Some(1000),
-            },
-            AsrWord {
-                text: ".".into(),
-                start_ms: None,
-                end_ms: None,
-            },
+            AsrWord::new("hello", Some(0), Some(500)),
+            AsrWord::new("world", Some(500), Some(1000)),
+            AsrWord::new(".", None, None),
         ];
-        let utts = retokenize(0, words);
+        let utts = retokenize(SpeakerIndex(0), words);
         assert_eq!(utts.len(), 1);
-        assert_eq!(utts[0].speaker, 0);
+        assert_eq!(utts[0].speaker, SpeakerIndex(0));
         assert_eq!(utts[0].words.len(), 3);
         assert_eq!(utts[0].words[2].text, ".");
     }
@@ -636,23 +647,11 @@ mod tests {
     #[test]
     fn test_retokenize_splits_on_period() {
         let words = vec![
-            AsrWord {
-                text: "hello".into(),
-                start_ms: Some(0),
-                end_ms: Some(500),
-            },
-            AsrWord {
-                text: ".".into(),
-                start_ms: Some(500),
-                end_ms: Some(600),
-            },
-            AsrWord {
-                text: "world".into(),
-                start_ms: Some(600),
-                end_ms: Some(1000),
-            },
+            AsrWord::new("hello", Some(0), Some(500)),
+            AsrWord::new(".", Some(500), Some(600)),
+            AsrWord::new("world", Some(600), Some(1000)),
         ];
-        let utts = retokenize(0, words);
+        let utts = retokenize(SpeakerIndex(0), words);
         assert_eq!(utts.len(), 2);
         assert_eq!(utts[0].words.len(), 2); // hello .
         assert_eq!(utts[0].words[0].text, "hello");
@@ -665,18 +664,10 @@ mod tests {
     #[test]
     fn test_retokenize_trailing_no_terminator() {
         let words = vec![
-            AsrWord {
-                text: "hello".into(),
-                start_ms: Some(0),
-                end_ms: Some(500),
-            },
-            AsrWord {
-                text: "world".into(),
-                start_ms: Some(500),
-                end_ms: Some(1000),
-            },
+            AsrWord::new("hello", Some(0), Some(500)),
+            AsrWord::new("world", Some(500), Some(1000)),
         ];
-        let utts = retokenize(0, words);
+        let utts = retokenize(SpeakerIndex(0), words);
         assert_eq!(utts.len(), 1);
         assert_eq!(utts[0].words.last().unwrap().text, "."); // auto-appended
     }
@@ -684,18 +675,10 @@ mod tests {
     #[test]
     fn test_retokenize_rtl_punct() {
         let words = vec![
-            AsrWord {
-                text: "hello".into(),
-                start_ms: Some(0),
-                end_ms: Some(500),
-            },
-            AsrWord {
-                text: "؟".into(),
-                start_ms: None,
-                end_ms: None,
-            },
+            AsrWord::new("hello", Some(0), Some(500)),
+            AsrWord::new("؟", None, None),
         ];
-        let utts = retokenize(0, words);
+        let utts = retokenize(SpeakerIndex(0), words);
         assert_eq!(utts.len(), 1);
         assert_eq!(utts[0].words[1].text, "?"); // normalized
     }
@@ -705,15 +688,15 @@ mod tests {
     fn test_process_raw_asr_golden_simple() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![
                     elem("hello", 0.0, 0.5),
                     elem("world", 0.5, 1.0),
                     AsrElement {
-                        value: ".".into(),
-                        ts: 1.0,
-                        end_ts: 1.1,
-                        r#type: "punctuation".into(),
+                        value: AsrRawText::new("."),
+                        ts: AsrTimestampSecs(1.0),
+                        end_ts: AsrTimestampSecs(1.1),
+                        kind: AsrElementKind::Punctuation,
                     },
                     elem("how", 1.5, 2.0),
                     elem("are", 2.0, 2.3),
@@ -742,16 +725,16 @@ mod tests {
     fn test_process_raw_asr_golden_compound() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![
                     elem("the", 0.0, 0.3),
                     elem("air", 0.3, 0.6),
                     elem("plane", 0.6, 0.9),
                     AsrElement {
-                        value: ".".into(),
-                        ts: 0.9,
-                        end_ts: 1.0,
-                        r#type: "punctuation".into(),
+                        value: AsrRawText::new("."),
+                        ts: AsrTimestampSecs(0.9),
+                        end_ts: AsrTimestampSecs(1.0),
+                        kind: AsrElementKind::Punctuation,
                     },
                 ],
             }],
@@ -767,17 +750,17 @@ mod tests {
     fn test_process_raw_asr_golden_number() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![
                     elem("I", 0.0, 0.3),
                     elem("have", 0.3, 0.6),
                     elem("5", 0.6, 0.9),
                     elem("cats", 0.9, 1.2),
                     AsrElement {
-                        value: ".".into(),
-                        ts: 1.2,
-                        end_ts: 1.3,
-                        r#type: "punctuation".into(),
+                        value: AsrRawText::new("."),
+                        ts: AsrTimestampSecs(1.2),
+                        end_ts: AsrTimestampSecs(1.3),
+                        kind: AsrElementKind::Punctuation,
                     },
                 ],
             }],
@@ -792,7 +775,7 @@ mod tests {
     fn test_process_raw_asr_golden_cantonese() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![
                     elem("你", 0.0, 0.3),
                     elem("真系", 0.3, 0.6),
@@ -817,7 +800,7 @@ mod tests {
     fn test_process_raw_asr_no_cantonese_for_eng() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![elem("系", 0.0, 0.5)],
             }],
         };
@@ -829,7 +812,7 @@ mod tests {
     fn test_process_raw_asr_handles_single_chunk_cantonese_whisper_output() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![elem(
                     "這麼搞笑?我還清了啊!我還覺得奇怪為什麼在一個三次頭的電話打工呢?",
                     0.0,
@@ -884,7 +867,7 @@ mod tests {
     fn test_process_raw_asr_keeps_ascii_words_intact_for_yue() {
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
-                speaker: 0,
+                speaker: SpeakerIndex(0),
                 elements: vec![elem("hello", 0.0, 0.5)],
             }],
         };

@@ -23,7 +23,10 @@ use talkbank_model::model::{Bullet, ChatFile, Line};
 use crate::dp_align::{self, MatchMode};
 use crate::fa::grouping::group_utterances;
 
-use super::{AsrTimingToken, UtrResult, UtrStrategy, collect_utr_utterance_info, run_global_utr};
+use super::{
+    AsrTimingToken, UtrResult, UtrStrategy, UtrUtteranceInfo, collect_utr_utterance_info,
+    run_global_utr,
+};
 
 /// Parameters needed to compare FA grouping outcomes between strategies.
 ///
@@ -40,18 +43,105 @@ pub struct GroupingContext {
     pub max_group_ms: u64,
 }
 
+/// Whether CA overlap markers (⌈⌉⌊⌋) are used for onset windowing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaMarkerPolicy {
+    /// Use CA markers for onset windowing when present (default).
+    #[default]
+    Enabled,
+    /// Ignore CA markers — treat all overlaps as `+<` only.
+    Disabled,
+}
+
+impl CaMarkerPolicy {
+    /// Whether CA marker processing is active.
+    pub fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+/// Tunable parameters for the two-pass overlap-aware UTR strategy.
+///
+/// All fields have documented defaults that were tuned empirically on
+/// SBCSAE (English), Jefferson NB (dense CA), and TaiwanHakka (Hakka).
+/// Users can override individual parameters via CLI flags.
+
+/// Word matching strategy for UTR DP alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UtrMatchMode {
+    /// Case-insensitive exact matching (default).
+    #[default]
+    Exact,
+    /// Fuzzy matching using Jaro-Winkler similarity.
+    /// Accepts matches above the threshold (0.0–1.0).
+    Fuzzy {
+        /// Minimum similarity to accept (default: 0.85).
+        threshold: f64,
+    },
+}
+
+impl UtrMatchMode {
+    /// Convert to the `dp_align::MatchMode` used by the alignment engine.
+    pub(crate) fn to_dp_match_mode(self) -> MatchMode {
+        match self {
+            UtrMatchMode::Exact => MatchMode::CaseInsensitive,
+            UtrMatchMode::Fuzzy { threshold } => MatchMode::Fuzzy { threshold },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TwoPassConfig {
+    /// Whether to use CA overlap markers (⌈⌉⌊⌋) for onset windowing.
+    /// When enabled, the ⌈ position in the predecessor narrows the pass-2
+    /// search window.
+    pub ca_markers: CaMarkerPolicy,
+
+    /// Maximum fraction of utterances that can have overlap markers before
+    /// the strategy stops excluding them from pass 1. Above this threshold,
+    /// excluding too many words starves the global DP of context.
+    /// Default: 0.30 (30%).
+    pub max_exclusion_density: f64,
+
+    /// Tight window buffer for pass-2 recovery (milliseconds). The first
+    /// attempt searches [onset ± this buffer]. Default: 500ms.
+    pub tight_buffer_ms: u64,
+
+    /// Word matching strategy for DP alignment.
+    pub match_mode: UtrMatchMode,
+}
+
+impl Default for TwoPassConfig {
+    /// Default configuration tuned empirically on SBCSAE (English CA),
+    /// Jefferson NB (dense CA), TaiwanHakka (Hakka), and APROCSA (English
+    /// aphasia). Fuzzy matching at 0.85 is the default because it provides
+    /// the best coverage/precision tradeoff across all tested corpora.
+    fn default() -> Self {
+        Self {
+            ca_markers: CaMarkerPolicy::default(),
+            max_exclusion_density: 0.30,
+            tight_buffer_ms: 500,
+            match_mode: UtrMatchMode::Fuzzy { threshold: 0.85 },
+        }
+    }
+}
+
 /// Two-pass overlap-aware UTR strategy.
 ///
-/// **Pass 1:** Runs the global alignment with `+<` utterances excluded from
-/// the flattened word sequence. Main-speaker words align correctly without
-/// backchannel interference.
+/// **Pass 1:** Runs the global alignment with overlap utterances excluded from
+/// the flattened word sequence (unless overlap density exceeds
+/// [`max_exclusion_density`](TwoPassConfig::max_exclusion_density)).
 ///
-/// **Pass 2:** For each `+<` utterance, finds the previous utterance's bullet
-/// (set in pass 1), filters ASR tokens to that time window, and runs a small
-/// DP alignment to recover the backchannel's timing.
+/// **Pass 2:** For each overlap utterance, finds the previous utterance's bullet
+/// and runs a small DP alignment to recover timing. When CA markers are enabled
+/// and the predecessor has ⌈ markers, the search window is anchored at the
+/// estimated overlap onset.
 ///
-/// When no `+<` utterances exist, pass 2 is a no-op and the result is
-/// identical to [`super::GlobalUtr`].
+/// ## Tunable parameters
+///
+/// See [`TwoPassConfig`] for all configurable parameters and their defaults.
 ///
 /// ## FA grouping stability
 ///
@@ -62,6 +152,8 @@ pub struct TwoPassOverlapUtr {
     /// Optional: total audio duration and max group size for grouping comparison.
     /// When set, the best-of-both fallback compares FA grouping outcomes.
     pub grouping_context: Option<GroupingContext>,
+    /// Tunable parameters for the two-pass algorithm.
+    pub config: TwoPassConfig,
 }
 
 impl Default for TwoPassOverlapUtr {
@@ -71,10 +163,11 @@ impl Default for TwoPassOverlapUtr {
 }
 
 impl TwoPassOverlapUtr {
-    /// Create a `TwoPassOverlapUtr` without grouping context (timed-count only).
+    /// Create a `TwoPassOverlapUtr` with default config and no grouping context.
     pub fn new() -> Self {
         Self {
             grouping_context: None,
+            config: TwoPassConfig::default(),
         }
     }
 
@@ -85,7 +178,14 @@ impl TwoPassOverlapUtr {
                 total_audio_ms,
                 max_group_ms,
             }),
+            config: TwoPassConfig::default(),
         }
+    }
+
+    /// Set custom configuration.
+    pub fn with_config(mut self, config: TwoPassConfig) -> Self {
+        self.config = config;
+        self
     }
 }
 
@@ -93,11 +193,11 @@ impl UtrStrategy for TwoPassOverlapUtr {
     fn inject(&self, chat_file: &mut ChatFile, asr_tokens: &[AsrTimingToken]) -> UtrResult {
         // Run two-pass on a clone so we can compare against global.
         let mut two_pass_file = chat_file.clone();
-        let two_pass_result = run_two_pass_inner(&mut two_pass_file, asr_tokens);
+        let two_pass_result = run_two_pass_inner(&mut two_pass_file, asr_tokens, &self.config);
 
         // Run global on a separate clone for comparison.
         let mut global_file = chat_file.clone();
-        let global_result = run_global_utr(&mut global_file, asr_tokens, false);
+        let global_result = run_global_utr(&mut global_file, asr_tokens, false, self.config.match_mode.to_dp_match_mode());
 
         let prefer_two_pass = if let Some(ctx) = &self.grouping_context {
             // Primary signal: FA group count. Fewer groups means wider FA
@@ -137,16 +237,51 @@ impl UtrStrategy for TwoPassOverlapUtr {
     }
 }
 
-/// Core two-pass implementation: pass 1 excludes `+<`, pass 2 recovers them.
-fn run_two_pass_inner(chat_file: &mut ChatFile, asr_tokens: &[AsrTimingToken]) -> UtrResult {
-    // Pass 1: global alignment excluding +< utterances.
-    let mut result = run_global_utr(chat_file, asr_tokens, true);
+/// Core two-pass implementation: pass 1 excludes overlap utterances, pass 2
+/// recovers them.
+///
+/// When overlap density exceeds `config.max_exclusion_density`, pass 1
+/// includes all utterances in the global DP to prevent context starvation.
+fn run_two_pass_inner(
+    chat_file: &mut ChatFile,
+    asr_tokens: &[AsrTimingToken],
+    config: &TwoPassConfig,
+) -> UtrResult {
+    // Check overlap density to decide whether to exclude from pass 1.
+    let pre_infos = collect_utr_utterance_info(chat_file);
+    let total_utts = pre_infos.len();
+    let overlap_utts = pre_infos
+        .iter()
+        .filter(|i| i.has_lazy_overlap || (config.ca_markers.is_enabled() && i.has_ca_overlap))
+        .count();
+    let overlap_fraction = if total_utts > 0 {
+        overlap_utts as f64 / total_utts as f64
+    } else {
+        0.0
+    };
+
+    let skip_in_pass1 = overlap_fraction <= config.max_exclusion_density;
+
+    if !skip_in_pass1 {
+        tracing::info!(
+            overlap_fraction = format!("{:.1}%", overlap_fraction * 100.0),
+            overlap_utts,
+            total_utts,
+            "Overlap density too high for exclusion — including all in pass 1"
+        );
+    }
+
+    // Pass 1: global alignment, optionally excluding overlap utterances.
+    let mut result = run_global_utr(chat_file, asr_tokens, skip_in_pass1, config.match_mode.to_dp_match_mode());
 
     if asr_tokens.is_empty() {
         return result;
     }
 
-    // Pass 2: recover timing for +< utterances from predecessor windows.
+    // Pass 2: recover timing for overlap utterances from predecessor windows.
+    // When skip_in_pass1 is false, pass 2 only runs on utterances that
+    // didn't get timing from the global DP (they participated but weren't
+    // matched). The onset fraction still helps narrow recovery windows.
     let utt_infos = collect_utr_utterance_info(chat_file);
 
     // Collect current bullets (after pass 1) for window lookup.
@@ -172,14 +307,30 @@ fn run_two_pass_inner(chat_file: &mut ChatFile, asr_tokens: &[AsrTimingToken]) -
     let mut pass2_bullets: Vec<(usize, u64, u64)> = Vec::new();
 
     for (utt_idx, info) in utt_infos.iter().enumerate() {
-        if !info.has_lazy_overlap || info.has_bullet || info.words.is_empty() {
+        // Recover timing for +< utterances and ⌊-bearing (CA overlap) utterances.
+        let is_overlap =
+            info.has_lazy_overlap || (config.ca_markers.is_enabled() && info.has_ca_overlap);
+        if !is_overlap || info.has_bullet || info.words.is_empty() {
             continue;
         }
 
+        // Find predecessor's overlap onset fraction (from ⌈ markers) for
+        // marker-aware windowing. Only used when CA markers are enabled.
+        let pred_onset_fraction = if config.ca_markers.is_enabled() {
+            find_predecessor_onset_fraction(utt_idx, &utt_infos)
+        } else {
+            None
+        };
+
         // Adaptive window: try narrow first, widen on failure.
-        if let Some((start_ms, end_ms)) =
-            recover_with_adaptive_window(&info.words, asr_tokens, utt_idx, &utt_bullets)
-        {
+        if let Some((start_ms, end_ms)) = recover_with_adaptive_window(
+            &info.words,
+            asr_tokens,
+            utt_idx,
+            &utt_bullets,
+            pred_onset_fraction,
+            config,
+        ) {
             pass2_bullets.push((utt_idx, start_ms, end_ms));
             // Adjust counts: this was counted as unmatched in pass 1.
             result.unmatched -= 1;
@@ -236,30 +387,115 @@ fn count_timed_utterances(chat_file: &ChatFile) -> usize {
 /// 3. **Double predecessor duration:** For poor ASR (non-English) where timing
 ///    can be significantly offset.
 ///
+/// **CA overlap marker optimization:** When `pred_onset_fraction` is provided
+/// (from ⌈ markers on the predecessor), the search window is anchored at the
+/// estimated overlap onset point instead of the full predecessor start. This
+/// is typically a much tighter window, helping especially when ASR quality is
+/// poor on non-English data.
+///
 /// Stops at the first match to prefer the tightest plausible window.
 fn recover_with_adaptive_window(
     words: &[String],
     asr_tokens: &[AsrTimingToken],
     utt_idx: usize,
     utt_bullets: &[Option<(u64, u64)>],
+    pred_onset_fraction: Option<f64>,
+    config: &TwoPassConfig,
 ) -> Option<(u64, u64)> {
     // Find predecessor bullet
     let (pred_start, pred_end) = find_predecessor_bullet(utt_idx, utt_bullets)?;
     let pred_duration = pred_end.saturating_sub(pred_start);
 
-    // Try increasingly wider buffers
+    // If the predecessor has ⌈ markers, compute the estimated overlap onset
+    // time. This anchors the search window at the point where overlap begins
+    // rather than the full predecessor start.
+    let anchor_start = match pred_onset_fraction {
+        Some(fraction) => {
+            let onset = pred_start + (fraction * pred_duration as f64) as u64;
+            tracing::debug!(
+                onset_ms = onset,
+                fraction,
+                pred_start,
+                pred_end,
+                "CA overlap marker: anchoring search at estimated onset"
+            );
+            onset
+        }
+        None => pred_start,
+    };
+
+    // Try increasingly wider buffers around the anchor point
     let buffers = [
-        500,                           // tight: ±500ms
+        config.tight_buffer_ms,        // tight: ±configured buffer
         pred_duration.max(2000),       // medium: ±predecessor duration (min 2s)
         (pred_duration * 2).max(5000), // wide: ±2x predecessor duration (min 5s)
     ];
 
     for buffer_ms in buffers {
-        let window_start = pred_start.saturating_sub(buffer_ms);
+        let window_start = anchor_start.saturating_sub(buffer_ms);
         let window_end = pred_end + buffer_ms;
 
-        if let Some(timing) = recover_overlap_timing(words, asr_tokens, window_start, window_end) {
+        if let Some(timing) = recover_overlap_timing(words, asr_tokens, window_start, window_end, config.match_mode.to_dp_match_mode()) {
             return Some(timing);
+        }
+    }
+
+    None
+}
+
+/// Find the overlap onset fraction from the nearest preceding utterance
+/// whose top overlap marker matches the current utterance's bottom index.
+///
+/// Searches backward from `utt_idx` for a top region on a *different*
+/// speaker whose index matches one of the current utterance's bottom
+/// indices. This enables 1:N matching — multiple bottom utterances from
+/// different speakers all get the same onset fraction from the shared top.
+fn find_predecessor_onset_fraction(
+    utt_idx: usize,
+    utt_infos: &[UtrUtteranceInfo],
+) -> Option<f64> {
+    let current = &utt_infos[utt_idx];
+    let current_speaker = &current.speaker;
+
+    // For +< utterances without CA markers, fall back to any predecessor top.
+    let bottom_indices = &current.bottom_indices;
+
+    for prev_idx in (0..utt_idx).rev() {
+        let prev = &utt_infos[prev_idx];
+
+        // Must be a different speaker.
+        if prev.speaker == *current_speaker {
+            continue;
+        }
+
+        // Match by index: find a top region on the predecessor whose index
+        // matches one of our bottom indices.
+        for (top_index, fraction) in &prev.top_onsets {
+            if bottom_indices.is_empty() {
+                // +< utterance without CA markers — accept any top.
+                return Some(*fraction);
+            }
+            if bottom_indices.contains(top_index) {
+                return Some(*fraction);
+            }
+        }
+
+        // Stop after first different-speaker utterance with a bullet
+        // (don't search too far back).
+        if prev.has_bullet {
+            break;
+        }
+    }
+
+    // Fallback: any predecessor with an onset fraction (for +< without CA).
+    if bottom_indices.is_empty() {
+        for prev_idx in (0..utt_idx).rev() {
+            if let Some(fraction) = utt_infos[prev_idx].overlap_onset_fraction {
+                return Some(fraction);
+            }
+            if utt_infos[prev_idx].has_bullet {
+                break;
+            }
         }
     }
 
@@ -292,6 +528,7 @@ pub fn recover_overlap_timing(
     asr_tokens: &[AsrTimingToken],
     window_start_ms: u64,
     window_end_ms: u64,
+    dp_match_mode: MatchMode,
 ) -> Option<(u64, u64)> {
     // Filter ASR tokens to those overlapping the window.
     let windowed: Vec<(usize, &AsrTimingToken)> = asr_tokens
@@ -306,7 +543,7 @@ pub fn recover_overlap_timing(
 
     let windowed_texts: Vec<String> = windowed.iter().map(|(_, t)| t.text.clone()).collect();
 
-    let alignment = dp_align::align(words, &windowed_texts, MatchMode::CaseInsensitive);
+    let alignment = dp_align::align(words, &windowed_texts, dp_match_mode);
 
     let mut min_start: Option<u64> = None;
     let mut max_end: Option<u64> = None;
@@ -352,7 +589,7 @@ mod tests {
     fn test_recover_overlap_timing_finds_mhm_in_window() {
         let words = vec!["mhm".to_string()];
         let tokens = make_asr_tokens(&[("mhm", 1800, 2200)]);
-        let result = recover_overlap_timing(&words, &tokens, 0, 3000);
+        let result = recover_overlap_timing(&words, &tokens, 0, 3000, MatchMode::CaseInsensitive);
         assert_eq!(result, Some((1800, 2200)));
     }
 
@@ -360,7 +597,7 @@ mod tests {
     fn test_recover_overlap_timing_no_match_outside_window() {
         let words = vec!["mhm".to_string()];
         let tokens = make_asr_tokens(&[("mhm", 5000, 5500)]);
-        let result = recover_overlap_timing(&words, &tokens, 0, 3000);
+        let result = recover_overlap_timing(&words, &tokens, 0, 3000, MatchMode::CaseInsensitive);
         assert_eq!(result, None);
     }
 
@@ -368,7 +605,7 @@ mod tests {
     fn test_recover_overlap_timing_multi_word() {
         let words = vec!["oh".to_string(), "okay".to_string()];
         let tokens = make_asr_tokens(&[("oh", 1500, 1700), ("okay", 1800, 2200)]);
-        let result = recover_overlap_timing(&words, &tokens, 0, 3000);
+        let result = recover_overlap_timing(&words, &tokens, 0, 3000, MatchMode::CaseInsensitive);
         assert_eq!(result, Some((1500, 2200)));
     }
 
@@ -377,7 +614,7 @@ mod tests {
         let words = vec!["mhm".to_string()];
         let tokens = make_asr_tokens(&[("mhm", 1800, 2200)]);
         // Window that doesn't overlap any tokens
-        let result = recover_overlap_timing(&words, &tokens, 5000, 6000);
+        let result = recover_overlap_timing(&words, &tokens, 5000, 6000, MatchMode::CaseInsensitive);
         assert_eq!(result, None);
     }
 
@@ -420,7 +657,7 @@ mod tests {
             None,               // +< utterance
         ];
         // "mhm" at 1800 is within narrow window (1000-500=500, 3000+500=3500)
-        let result = recover_with_adaptive_window(&words, &tokens, 1, &bullets);
+        let result = recover_with_adaptive_window(&words, &tokens, 1, &bullets, None, &TwoPassConfig::default());
         assert_eq!(result, Some((1800, 2200)));
     }
 
@@ -434,7 +671,7 @@ mod tests {
             Some((1000, 3000)), // predecessor: 2s duration
             None,               // +< utterance
         ];
-        let result = recover_with_adaptive_window(&words, &tokens, 1, &bullets);
+        let result = recover_with_adaptive_window(&words, &tokens, 1, &bullets, None, &TwoPassConfig::default());
         assert_eq!(result, Some((6500, 6800)));
     }
 
@@ -443,8 +680,51 @@ mod tests {
         let words = vec!["mhm".to_string()];
         let tokens = make_asr_tokens(&[("mhm", 1800, 2200)]);
         let bullets = vec![None]; // no predecessor
-        let result = recover_with_adaptive_window(&words, &tokens, 0, &bullets);
+        let result = recover_with_adaptive_window(&words, &tokens, 0, &bullets, None, &TwoPassConfig::default());
         assert_eq!(result, None);
+    }
+
+    /// When the predecessor has ⌈ markers (overlap onset fraction), the search
+    /// window anchors at the estimated onset point, enabling a tighter match.
+    #[test]
+    fn test_adaptive_window_with_ca_onset_fraction() {
+        let words = vec!["yeah".to_string()];
+        // Predecessor spans 10000..15000 (5s duration).
+        // ⌈ at fraction 0.6 → onset at 13000ms.
+        // "yeah" at 13200ms should be found with the tight ±500ms window
+        // around the onset (12500..15500).
+        let tokens = make_asr_tokens(&[("yeah", 13200, 13500)]);
+        let bullets = vec![
+            Some((10000, 15000)), // predecessor
+            None,                 // overlap utterance
+        ];
+        let result =
+            recover_with_adaptive_window(&words, &tokens, 1, &bullets, Some(0.6), &TwoPassConfig::default());
+        assert_eq!(result, Some((13200, 13500)));
+    }
+
+    /// Without onset fraction, a token near the end of a long predecessor
+    /// would still be found (but by the wider window). With onset fraction,
+    /// the tight window finds it immediately.
+    #[test]
+    fn test_adaptive_window_onset_fraction_narrows_window() {
+        let words = vec!["mhm".to_string()];
+        // Predecessor spans 0..20000 (20s duration).
+        // Without onset fraction: tight window ±500ms around 0..20000 would
+        // search 0..20500 and find "mhm" at 16000ms.
+        // With onset fraction 0.8: tight window ±500ms around 16000..20000
+        // would search 15500..20500 and find it.
+        let tokens = make_asr_tokens(&[("mhm", 16000, 16300)]);
+        let bullets = vec![
+            Some((0, 20000)), // predecessor: 20s
+            None,             // overlap utterance
+        ];
+
+        // Both should find the token
+        let without = recover_with_adaptive_window(&words, &tokens, 1, &bullets, None, &TwoPassConfig::default());
+        let with = recover_with_adaptive_window(&words, &tokens, 1, &bullets, Some(0.8), &TwoPassConfig::default());
+        assert!(without.is_some(), "should find without onset fraction too");
+        assert_eq!(with, Some((16000, 16300)));
     }
 
     /// When pass 2 leaves more unmatched than global would, the best-of-both

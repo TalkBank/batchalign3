@@ -289,7 +289,7 @@ pub fn clear_morphosyntax_selective(
 pub fn validate_mor_alignment(
     chat_file: &talkbank_model::model::ChatFile,
 ) -> Vec<AlignmentWarning> {
-    use talkbank_model::alignment::helpers::{AlignmentDomain, count_alignable_content};
+    use talkbank_model::alignment::helpers::{TierDomain, count_tier_positions};
     use talkbank_model::model::DependentTier;
 
     let mut warnings = Vec::new();
@@ -309,7 +309,7 @@ pub fn validate_mor_alignment(
             continue; // No %mor tier -- nothing to validate
         };
 
-        let main_count = count_alignable_content(&utt.main.content.content, AlignmentDomain::Mor);
+        let main_count = count_tier_positions(&utt.main.content.content, TierDomain::Mor);
         let mor_count = mor.len();
 
         if main_count != mor_count {

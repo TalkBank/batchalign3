@@ -11,6 +11,7 @@ publish = false
 aho-corasick = "1.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 blake3 = { workspace = true }
 smallvec = { version = "1.15", features = ["serde", "union", "const_generics"] }
 thiserror = { workspace = true }
@@ -21,6 +22,8 @@ zhconv = "0.4.1"
 talkbank-direct-parser = { path = "../../../talkbank-tools/crates/talkbank-direct-parser" }
 talkbank-model = { path = "../../../talkbank-tools/crates/talkbank-model" }
 talkbank-parser = { path = "../../../talkbank-tools/crates/talkbank-parser" }
+strsim = "0.11.1"
+whatlang = "0.16"
 
 [dev-dependencies]
 insta = { workspace = true }

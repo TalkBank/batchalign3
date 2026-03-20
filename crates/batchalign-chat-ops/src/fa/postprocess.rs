@@ -1,7 +1,7 @@
 //! Post-processing: fix end times, bound by utterance, update bullets.
 
 use talkbank_model::alignment::helpers::{
-    ContentLeaf, ContentLeafMut, for_each_leaf, for_each_leaf_mut,
+    WordItem, WordItemMut, walk_words, walk_words_mut,
 };
 use talkbank_model::model::{Bullet, Utterance, UtteranceContent, Word};
 
@@ -94,14 +94,14 @@ pub fn postprocess_utterance_timings(utterance: &mut Utterance, timing_mode: FaT
 /// original (spoken) word's timing is collected.
 pub(super) fn collect_word_timings(content: &[UtteranceContent], out: &mut Vec<Option<TimeSpan>>) {
     // domain=None: recurse into all groups unconditionally
-    for_each_leaf(content, None, &mut |leaf| match leaf {
-        ContentLeaf::Word(word, _annotations) => {
+    walk_words(content, None, &mut |leaf| match leaf {
+        WordItem::Word(word) => {
             out.push(get_word_timing(word));
         }
-        ContentLeaf::ReplacedWord(replaced) => {
+        WordItem::ReplacedWord(replaced) => {
             out.push(get_word_timing(&replaced.word));
         }
-        ContentLeaf::Separator(_) => {}
+        WordItem::Separator(_) => {}
     });
 }
 
@@ -115,14 +115,14 @@ fn set_word_timings(
     idx: &mut usize,
 ) {
     // domain=None: recurse into all groups unconditionally
-    for_each_leaf_mut(content, None, &mut |leaf| match leaf {
-        ContentLeafMut::Word(word, _annotations) => {
+    walk_words_mut(content, None, &mut |leaf| match leaf {
+        WordItemMut::Word(word) => {
             set_word_timing(word, timings, idx);
         }
-        ContentLeafMut::ReplacedWord(replaced) => {
+        WordItemMut::ReplacedWord(replaced) => {
             set_word_timing(&mut replaced.word, timings, idx);
         }
-        ContentLeafMut::Separator(_) => {}
+        WordItemMut::Separator(_) => {}
     });
 }
 

@@ -23,6 +23,7 @@ use crate::options::{
     AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, CustomEngineName,
     MorphotagOptions, OpensmileOptions, TranscribeOptions, UtrEngine, UtrOverlapStrategy,
 };
+use crate::api::DurationMs;
 use crate::params::{CachePolicy, FaParams, MergeAbbrevPolicy, WorTierPolicy};
 use batchalign_chat_ops::fa::{FaEngineType, FaTimingMode};
 use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, TokenizationMode};
@@ -62,9 +63,9 @@ pub(crate) fn extract_fa_dispatch_params(
     let engine = FaEngineType::from_str_lossy(fa_engine.as_wire_name());
 
     let (timing_mode, max_group_ms) = match engine {
-        FaEngineType::Wave2Vec => (FaTimingMode::Continuous, 15_000u64),
-        FaEngineType::WhisperFa if pauses => (FaTimingMode::WithPauses, 20_000u64),
-        FaEngineType::WhisperFa => (FaTimingMode::Continuous, 20_000u64),
+        FaEngineType::Wave2Vec => (FaTimingMode::Continuous, DurationMs(15_000)),
+        FaEngineType::WhisperFa if pauses => (FaTimingMode::WithPauses, DurationMs(20_000)),
+        FaEngineType::WhisperFa => (FaTimingMode::Continuous, DurationMs(20_000)),
     };
 
     Some(FaDispatchParams {
@@ -232,9 +233,11 @@ mod tests {
             fa_engine: fa_engine.into(),
             utr_engine,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses,
             wor: wor.into(),
             merge_abbrev: merge_abbrev.into(),
+            media_dir: None,
         })
     }
 
@@ -263,7 +266,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p1.fa_params.timing_mode, FaTimingMode::WithPauses);
-        assert_eq!(p1.fa_params.max_group_ms, 20_000);
+        assert_eq!(p1.fa_params.max_group_ms, DurationMs(20_000));
 
         let p2 = extract_fa_dispatch_params(
             &align_opts("whisper_fa", None, false, true, false),
@@ -330,9 +333,11 @@ mod tests {
             fa_engine: "wav2vec_fa".into(),
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: false,
             wor: true.into(),
             merge_abbrev: true.into(),
+            media_dir: None,
         });
         let params = extract_fa_dispatch_params(&opts, CachePolicy::UseCache).unwrap();
         assert!(params.merge_abbrev.should_merge());
@@ -345,9 +350,11 @@ mod tests {
             fa_engine: "wav2vec_fa".into(),
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: false,
             wor: true.into(),
             merge_abbrev: false.into(),
+            media_dir: None,
         });
         let params = extract_fa_dispatch_params(&opts, CachePolicy::SkipCache).unwrap();
         assert_eq!(params.fa_params.cache_policy, CachePolicy::SkipCache);
@@ -518,9 +525,11 @@ mod tests {
             fa_engine: "wav2vec_fa".into(),
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
             pauses: false,
             wor: true.into(),
             merge_abbrev: false.into(),
+            media_dir: None,
         });
         assert!(extract_transcribe_dispatch_params(&align).is_none());
         assert!(extract_morphotag_dispatch_params(&align).is_none());
@@ -561,9 +570,11 @@ mod tests {
                 fa_engine: "wav2vec_fa".into(),
                 utr_engine: None,
                 utr_overlap_strategy: Default::default(),
+            utr_two_pass: Default::default(),
                 pauses: false,
                 wor: true.into(),
                 merge_abbrev: false.into(),
+                media_dir: None,
             }),
             CommandOptions::Transcribe(TranscribeOptions {
                 common: common.clone(),

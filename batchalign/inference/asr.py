@@ -6,10 +6,13 @@ No CHAT assembly, no number expansion, no retokenization.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 import pycountry
 
 from batchalign.inference._domain_types import (
@@ -17,6 +20,7 @@ from batchalign.inference._domain_types import (
     ConfidenceScore,
     LanguageCode,
     NumSpeakers,
+    RevAiJobId,
     SampleRate,
     SpeakerId,
     TimestampSeconds,
@@ -36,7 +40,7 @@ class AsrBatchItem(BaseModel):
     audio_path: AudioPath
     lang: LanguageCode = "eng"
     num_speakers: NumSpeakers = 1
-    rev_job_id: str | None = None
+    rev_job_id: RevAiJobId | None = None
 
 
 class AsrElement(BaseModel):
@@ -86,14 +90,25 @@ class WhisperChunksAsrResponse(BaseModel):
 
 
 def iso3_to_language_name(iso3: LanguageCode) -> str:
-    """Convert ISO-639-3 language code to a Whisper language name."""
-    special: dict[str, str] = {"yue": "Cantonese", "cmn": "chinese"}
+    """Convert ISO-639-3 language code to a Whisper language name.
+
+    Raises ``ValueError`` if the code is not recognized by pycountry.
+    Previously this silently fell back to ``"english"``, which caused
+    wrong-language transcription with no warning — a regression from
+    batchalign2 which used the same pycountry lookup but in a context
+    where unrecognized codes would surface earlier.
+    """
+    special: dict[str, str] = {"yue": "Cantonese", "cmn": "chinese", "auto": "auto"}
     if iso3 in special:
         return special[iso3]
     lang_obj = pycountry.languages.get(alpha_3=iso3)
     if lang_obj is not None:
         return str(lang_obj.name).lower()
-    return "english"
+    raise ValueError(
+        f"Unrecognized ISO 639-3 language code '{iso3}' — pycountry has no "
+        f"entry for this code. Whisper cannot determine the target language. "
+        f"Check that the --lang value is a valid ISO 639-3 code."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,15 +252,26 @@ def infer_whisper_prepared_audio(
     )
 
     chunks = raw.get("chunks", []) if isinstance(raw, dict) else []
+    clamped_chunks: list[WhisperChunkSpanV2] = []
+    for chunk in chunks:
+        start_s: float = (chunk.get("timestamp") or [None, None])[0] or 0.0
+        end_s: float = (chunk.get("timestamp") or [None, None])[1] or 0.0
+        if end_s < start_s:
+            logger.warning(
+                "Whisper chunk has inverted timestamps (start=%.1f > end=%.1f), swapping",
+                start_s,
+                end_s,
+            )
+            start_s, end_s = end_s, start_s
+        clamped_chunks.append(
+            WhisperChunkSpanV2(
+                text=str(chunk.get("text", "")),
+                start_s=start_s,
+                end_s=end_s,
+            )
+        )
     return WhisperChunkResultPayloadV2(
         lang=lang,
         text=raw.get("text", "") if isinstance(raw, dict) else "",
-        chunks=[
-            WhisperChunkSpanV2(
-                text=str(chunk.get("text", "")),
-                start_s=(chunk.get("timestamp") or [None, None])[0] or 0.0,
-                end_s=(chunk.get("timestamp") or [None, None])[1] or 0.0,
-            )
-            for chunk in chunks
-        ],
+        chunks=clamped_chunks,
     )

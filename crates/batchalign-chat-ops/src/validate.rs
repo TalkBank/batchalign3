@@ -14,7 +14,7 @@
 //!
 //! Each level includes all checks from lower levels.
 
-use talkbank_model::model::{ChatFile, Line};
+use talkbank_model::model::{ChatFile, ChatOptionFlag, Line};
 
 /// Validity level for pre-validation gates.
 ///
@@ -99,10 +99,18 @@ fn check_structurally_complete(file: &ChatFile, errors: &mut Vec<ValidationError
         });
     }
 
-    // Check every utterance has a terminator and a declared speaker
+    // CA files (Conversation Analysis) can have utterances without terminators —
+    // incomplete turns, backchannels, trailing-off speech. Skip the terminator
+    // check when @Options: CA is set.
+    let is_ca = file
+        .options
+        .iter()
+        .any(|f| matches!(f, ChatOptionFlag::Ca));
+
+    // Check every utterance has a terminator (non-CA) and a declared speaker
     for line in &file.lines {
         if let Line::Utterance(utt) = line {
-            if utt.main.content.terminator.is_none() {
+            if !is_ca && utt.main.content.terminator.is_none() {
                 let speaker = utt.main.speaker.as_str();
                 errors.push(ValidationError {
                     message: format!("Utterance by *{speaker} has no terminator"),
@@ -176,7 +184,7 @@ pub fn validate_output(file: &ChatFile, command: &str) -> Result<(), Vec<Validat
 
 /// Post-validation for morphotag: %mor word count must match main tier.
 fn validate_morphotag_output(file: &ChatFile, errors: &mut Vec<ValidationError>) {
-    use talkbank_model::alignment::helpers::AlignmentDomain;
+    use talkbank_model::alignment::helpers::TierDomain;
 
     for line in &file.lines {
         if let Line::Utterance(utt) = line {
@@ -184,7 +192,7 @@ fn validate_morphotag_output(file: &ChatFile, errors: &mut Vec<ValidationError>)
             let mut extracted = Vec::new();
             crate::extract::collect_utterance_content(
                 &utt.main.content.content,
-                AlignmentDomain::Mor,
+                TierDomain::Mor,
                 &mut extracted,
             );
             let word_count = extracted.len();
@@ -266,6 +274,51 @@ mod tests {
         let chat = parse_chat_file(chat_text).unwrap();
         // Valid morphotag output should pass
         assert!(validate_output(&chat, "morphotag").is_ok());
+    }
+
+    /// CA files with `@Options: CA` should not fail L1 validation for
+    /// missing terminators — CA utterances can legitimately lack terminators
+    /// (incomplete turns, backchannels, trailing-off speech).
+    #[test]
+    fn test_ca_file_skips_terminator_check() {
+        use talkbank_model::model::Line;
+
+        let chat_text = include_str!("../../../test-fixtures/eng_hello_world_with_mor_gra.cha");
+        let mut chat = parse_chat_file(chat_text).unwrap();
+
+        // Add @Options: CA and remove terminators
+        chat.options.push(ChatOptionFlag::Ca);
+        for line in &mut chat.lines {
+            if let Line::Utterance(utt) = line {
+                utt.main.content.terminator = None;
+            }
+        }
+
+        // Should pass L1 because CA files skip the terminator check
+        let result = validate_to_level(&chat, 0, ValidityLevel::StructurallyComplete);
+        assert!(
+            result.is_ok(),
+            "CA files should pass L1 even without terminators: {result:?}"
+        );
+    }
+
+    /// Non-CA files with missing terminators should still fail L1.
+    #[test]
+    fn test_non_ca_file_fails_without_terminator() {
+        use talkbank_model::model::Line;
+
+        let chat_text = include_str!("../../../test-fixtures/eng_hello_world_with_mor_gra.cha");
+        let mut chat = parse_chat_file(chat_text).unwrap();
+
+        // Remove terminators WITHOUT setting CA option
+        for line in &mut chat.lines {
+            if let Line::Utterance(utt) = line {
+                utt.main.content.terminator = None;
+            }
+        }
+
+        let result = validate_to_level(&chat, 0, ValidityLevel::StructurallyComplete);
+        assert!(result.is_err(), "Non-CA files should fail without terminators");
     }
 
     #[test]

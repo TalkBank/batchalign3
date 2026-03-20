@@ -57,6 +57,19 @@ class TestWhisperASRHandle:
         assert kw["language"] == "english"
         assert kw["generation_config"] == "my_config"
 
+    def test_gen_kwargs_auto_omits_language(self) -> None:
+        """When lang is ``"auto"``, Whisper should auto-detect — no ``language`` key."""
+        handle = WhisperASRHandle(
+            pipe=None,
+            config="my_config",
+            lang="auto",
+            sample_rate=16000,
+        )
+        kw = handle.gen_kwargs("auto")
+        assert "language" not in kw, "auto-detect must omit 'language' so Whisper detects it"
+        assert kw["generation_config"] == "my_config"
+        assert kw["repetition_penalty"] == 1.001
+
     def test_gen_kwargs_cantonese(self) -> None:
         handle = WhisperASRHandle(
             pipe=None,

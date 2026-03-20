@@ -1,7 +1,7 @@
 //! Payload extraction and language helpers.
 
 use talkbank_model::WriteChat;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::Line;
 
 use super::{
@@ -106,7 +106,7 @@ pub fn collect_payloads(
             let mut words = Vec::new();
             extract::collect_utterance_content(
                 &utt.main.content.content,
-                AlignmentDomain::Mor,
+                TierDomain::Mor,
                 &mut words,
             );
 

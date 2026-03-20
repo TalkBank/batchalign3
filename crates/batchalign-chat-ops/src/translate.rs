@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use talkbank_model::Span;
-use talkbank_model::alignment::helpers::AlignmentDomain;
+use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{
     ChatFile, DependentTier, Line, NonEmptyString, UserDefinedDependentTier,
 };
@@ -24,7 +24,7 @@ use crate::extract;
 /// Input payload for a single translation request.
 ///
 /// Matches the Python `TranslateBatchItem` wire format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TranslateBatchItem {
     /// Source-language text to translate.
     pub text: String,
@@ -60,7 +60,7 @@ pub fn collect_translate_payloads(chat_file: &ChatFile) -> Vec<(usize, Translate
         let mut words = Vec::new();
         extract::collect_utterance_content(
             &utt.main.content.content,
-            AlignmentDomain::Mor,
+            TierDomain::Mor,
             &mut words,
         );
 

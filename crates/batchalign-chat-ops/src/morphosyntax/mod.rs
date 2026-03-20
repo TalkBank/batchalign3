@@ -77,19 +77,58 @@ impl MultilingualPolicy {
 // ---------------------------------------------------------------------------
 
 /// Batch item for NLP processing.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+///
+/// `special_forms` carries typed enums internally (for Rust-side injection)
+/// but serializes to `(Option<String>, Option<String>)` for the Python V2
+/// wire protocol, where Pydantic expects `list[list[str | None]]`.
+#[derive(Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct MorphosyntaxBatchItem {
     /// Word texts for NLP processing.
     pub words: Vec<String>,
     /// Utterance terminator string.
     pub terminator: String,
     /// Special form and language per word: (form_type, resolved_language).
+    ///
+    /// Serializes form_type via `FormType::write_chat()` and language via
+    /// `LanguageResolution::as_language_code()` so the JSON wire format is
+    /// `[string|null, string|null]` — matching the Python Pydantic model.
+    #[serde(serialize_with = "serialize_special_forms")]
+    #[schemars(with = "Vec<(Option<String>, Option<String>)>")]
     pub special_forms: Vec<(
         Option<talkbank_model::model::FormType>,
         Option<talkbank_model::validation::LanguageResolution>,
     )>,
     /// Language code for this utterance (ISO 639-3).
+    #[schemars(with = "String")]
     pub lang: talkbank_model::model::LanguageCode,
+}
+
+/// Serialize `special_forms` as `Vec<(Option<String>, Option<String>)>` for
+/// the Python V2 wire protocol. Rust-side code uses the typed enums directly
+/// via field access; this flattening only affects JSON serialization.
+fn serialize_special_forms<S: serde::Serializer>(
+    forms: &[(
+        Option<talkbank_model::model::FormType>,
+        Option<talkbank_model::validation::LanguageResolution>,
+    )],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    use talkbank_model::WriteChat;
+
+    let mut seq = serializer.serialize_seq(Some(forms.len()))?;
+    for (form_type, lang_res) in forms {
+        let ft_str: Option<String> = form_type.as_ref().map(|ft| {
+            let mut buf = String::new();
+            ft.write_chat(&mut buf);
+            buf
+        });
+        let lang_str: Option<String> = lang_res.as_ref().and_then(|lr| {
+            lr.languages().first().map(|lc| lc.to_string())
+        });
+        seq.serialize_element(&(ft_str, lang_str))?;
+    }
+    seq.end()
 }
 
 /// A collected batch item with its position in the ChatFile, for injection.

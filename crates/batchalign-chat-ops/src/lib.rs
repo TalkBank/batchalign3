@@ -156,5 +156,7 @@ pub use cache_key::{CacheKey, CacheTaskName};
 
 // Re-export talkbank_model types commonly needed by downstream crates
 // (e.g. batchalign-server) that shouldn't depend on talkbank_model directly.
-pub use talkbank_model::alignment::helpers::AlignmentDomain;
-pub use talkbank_model::model::{ChatFile, LanguageCode, Line, Utterance};
+pub use talkbank_model::alignment::helpers::TierDomain;
+pub use talkbank_model::model::{
+    ChatFile, DependentTier, LanguageCode, Line, Utterance, UserDefinedDependentTier,
+};

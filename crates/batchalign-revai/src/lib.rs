@@ -18,5 +18,8 @@
 pub mod client;
 pub mod types;
 
-pub use client::{Result, RevAiClient, RevAiError, extract_timed_words};
-pub use types::{Element, Job, JobStatus, Monologue, SubmitOptions, TimedWord, Transcript};
+pub use client::{Result, RevAiClient, RevAiError, TranscriptResult, extract_timed_words};
+pub use types::{
+    Element, Job, JobStatus, LangIdResult, LanguageConfidence, Monologue, SubmitOptions, TimedWord,
+    Transcript,
+};

@@ -158,6 +158,7 @@ pub mod daemon;
 pub mod discover;
 pub mod dispatch;
 pub mod error;
+pub mod ipc_schema;
 pub mod jobs_cmd;
 pub mod logs_cmd;
 pub mod models_cmd;
@@ -170,6 +171,7 @@ pub mod serve_cmd;
 pub mod setup_cmd;
 pub mod tui;
 pub mod update_check;
+pub mod worker_cmd;
 
 /// Build fingerprint — changes on every rebuild, even when the version stays
 /// the same.  Used for stale-binary detection during development.
@@ -224,7 +226,29 @@ pub async fn run_command(cli: args::Cli) -> Result<(), error::CliError> {
             }
             Ok(())
         }
+        Commands::IpcSchema(a) => {
+            let schema = ipc_schema::generate_ipc_schema();
+            if a.check {
+                let output = a.output.as_deref().unwrap_or("ipc-schema").to_string();
+                ipc_schema::check_ipc_schema(&schema, &output).map_err(|e| {
+                    error::CliError::Server(batchalign_app::error::ServerError::Validation(
+                        e.to_string(),
+                    ))
+                })?;
+                eprintln!("IPC schema is up to date: {output}");
+            } else if let Some(dir) = &a.output {
+                ipc_schema::write_ipc_schema(&schema, dir).map_err(|e| {
+                    error::CliError::Server(batchalign_app::error::ServerError::Validation(
+                        e.to_string(),
+                    ))
+                })?;
+            } else {
+                println!("{}", serde_json::to_string_pretty(&schema)?);
+            }
+            Ok(())
+        }
         Commands::Cache(a) => cache_cmd::run(a).await,
+        Commands::Worker(a) => worker_cmd::run(a, cli.global.verbose).await,
         Commands::Version => {
             eprintln!(
                 "batchalign3 {} (build {})",
@@ -303,6 +327,8 @@ pub async fn run_command(cli: args::Cli) -> Result<(), error::CliError> {
                 cli.global.open_dashboard && !cli.global.no_open_dashboard,
                 cli.global.force_cpu,
                 before,
+                cli.global.workers,
+                cli.global.timeout,
             )
             .await
         }

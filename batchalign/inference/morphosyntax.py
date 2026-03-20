@@ -130,8 +130,8 @@ def validate_ud_words(sents: list[list[UdWordRaw]]) -> None:
 
 def batch_infer_morphosyntax(
     req: BatchInferRequest,
-    nlp_pipelines: dict[str, StanzaNLP],
-    contexts: dict[str, TokenizerContext],
+    nlp_pipelines: dict[LanguageCode, StanzaNLP],
+    contexts: dict[LanguageCode, TokenizerContext],
     nlp_lock: threading.Lock,
     free_threaded: bool,
     mwt_lexicon: dict[str, list[str]] | None = None,

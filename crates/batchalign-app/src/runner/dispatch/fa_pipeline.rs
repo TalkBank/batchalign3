@@ -1,11 +1,15 @@
 //! Forced alignment dispatch and per-file FA pipeline.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::api::{EngineVersion, FileName, LanguageCode3, UnixTimestamp};
+use crate::api::{
+    ContentType, DurationMs, EngineVersion, FileName, LanguageCode3, NumWorkers, RevAiJobId,
+    UnixTimestamp,
+};
 use crate::cache::UtteranceCache;
+use crate::options::CommandOptions;
 use crate::params::{AudioContext, FaParams};
 use crate::pipeline::PipelineServices;
 use crate::runner::debug_dumper::DebugDumper;
@@ -18,7 +22,8 @@ use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 use super::super::util::{
     FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_server_error,
     compute_audio_identity, drain_supervised_file_tasks, get_audio_duration_ms,
-    is_retryable_worker_failure, resolve_audio_for_chat, spawn_progress_forwarder,
+    is_retryable_worker_failure, resolve_audio_for_chat,
+    resolve_audio_for_chat_with_media_dir, spawn_progress_forwarder,
     spawn_supervised_file_task, user_facing_error,
 };
 use super::FaDispatchPlan;
@@ -38,9 +43,9 @@ pub(in crate::runner) struct FaDispatchRuntime {
     /// Current engine version string for cache partitioning.
     pub engine_version: EngineVersion,
     /// Optional preflight Rev.AI job ids keyed by original audio path.
-    pub rev_job_ids: Arc<HashMap<String, String>>,
+    pub rev_job_ids: Arc<HashMap<PathBuf, RevAiJobId>>,
     /// Maximum number of file tasks to run concurrently for this job.
-    pub num_workers: usize,
+    pub num_workers: NumWorkers,
 }
 
 /// Shared per-file FA dependencies.
@@ -60,17 +65,19 @@ struct FaFileContext<'a> {
     /// Whether merge-abbrev should run before writing the result.
     should_merge_abbrev: bool,
     /// Optional before-file path for incremental align reruns.
-    before_path: Option<&'a str>,
+    before_path: Option<&'a std::path::Path>,
     /// Optional UTR engine for the pre-pass and fallback paths.
     utr_engine: Option<&'a crate::options::UtrEngine>,
     /// Overlap strategy for `+<` utterances during UTR.
     utr_overlap_strategy: crate::options::UtrOverlapStrategy,
     /// Rev.AI preflight job ids keyed by original provider audio path.
-    rev_job_ids: &'a HashMap<String, String>,
+    rev_job_ids: &'a HashMap<PathBuf, RevAiJobId>,
     /// Job language used for UTR and worker-side FA/ASR requests.
     lang: &'a LanguageCode3,
     /// Debug artifact writer for offline replay.
     dumper: DebugDumper,
+    /// Custom media directory from `--media-dir`.
+    media_dir: Option<&'a str>,
 }
 
 /// Dispatch FA (forced alignment) via the server-side infer path.
@@ -87,7 +94,8 @@ pub(in crate::runner) async fn dispatch_fa_infer(
     plan: FaDispatchPlan,
 ) {
     let job_id = &job.identity.job_id;
-    let job_lang = job.dispatch.lang.clone();
+    let fallback_lang = LanguageCode3::from("eng");
+    let job_lang = job.dispatch.lang.resolve_or(&fallback_lang);
     let fa_params = plan.options.fa_params;
     let should_merge_abbrev = plan.options.merge_abbrev.should_merge();
     let utr_engine = plan.options.utr_engine;
@@ -97,7 +105,7 @@ pub(in crate::runner) async fn dispatch_fa_infer(
     let before_paths = job.filesystem.before_paths.clone();
 
     // Process files concurrently, bounded by available workers.
-    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.max(1)));
+    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.0.max(1)));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -142,6 +150,13 @@ pub(in crate::runner) async fn dispatch_fa_infer(
                         .as_deref()
                         .map(std::path::Path::new),
                 );
+                let media_dir_str;
+                let media_dir_ref = if let CommandOptions::Align(ref opts) = job.dispatch.options {
+                    media_dir_str = opts.media_dir.clone();
+                    media_dir_str.as_deref()
+                } else {
+                    None
+                };
                 let context = FaFileContext {
                     job: &job,
                     store: &store,
@@ -154,6 +169,7 @@ pub(in crate::runner) async fn dispatch_fa_infer(
                     rev_job_ids: rev_job_ids.as_ref(),
                     lang: &job_lang,
                     dumper,
+                    media_dir: media_dir_ref,
                 };
                 process_one_fa_file(&file, context).await
             },
@@ -187,9 +203,10 @@ async fn process_one_fa_file(
         rev_job_ids,
         lang,
         ref dumper,
+        media_dir,
     } = context;
     let job_id = &job.identity.job_id;
-    let correlation_id = job.identity.correlation_id.as_str();
+    let correlation_id = &*job.identity.correlation_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
     let lifecycle = FileRunTracker::new(store, job_id, filename);
@@ -204,10 +221,10 @@ async fn process_one_fa_file(
         .await;
 
     // Read the CHAT file
-    let read_path = if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
+    let read_path: PathBuf = if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
         job.filesystem.source_paths[file_index].clone()
     } else {
-        format!("{}/input/{filename}", job.filesystem.staging_dir)
+        job.filesystem.staging_dir.join("input").join(filename)
     };
     let paths_mode = job.filesystem.paths_mode;
     let output_paths = job.filesystem.output_paths.clone();
@@ -236,9 +253,9 @@ async fn process_one_fa_file(
     //   3. Media roots (server-configured search directories)
     //   4. Alongside staged file (last resort)
     let original_audio_path = if paths_mode {
-        resolve_audio_for_chat(&read_path).await
+        resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await
     } else {
-        let mut found = None;
+        let mut found: Option<PathBuf> = None;
 
         // Strategy 1: Media mapping
         if found.is_none() && !media_mapping.is_empty() {
@@ -257,11 +274,11 @@ async fn process_one_fa_file(
                 } else {
                     format!("{media_subdir}/{file_parent}")
                 };
-                let search_dir = std::path::PathBuf::from(&root).join(&full_subdir);
+                let search_dir = PathBuf::from(&root).join(&full_subdir);
                 for ext in crate::runner::util::KNOWN_MEDIA_EXTENSIONS {
                     let candidate = search_dir.join(format!("{stem}.{ext}"));
                     if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-                        found = Some(candidate.to_string_lossy().to_string());
+                        found = Some(candidate);
                         break;
                     }
                 }
@@ -271,14 +288,14 @@ async fn process_one_fa_file(
         // Strategy 2: Source directory — the client's original input path.
         // Works when the server shares the same filesystem (e.g. fleet machines
         // with the same /Users/macw/ layout).
-        if found.is_none() && !source_dir.is_empty() {
+        if found.is_none() && !source_dir.as_os_str().is_empty() {
             let source_path =
-                Path::new(&source_dir).join(Path::new(filename).file_name().unwrap_or_default());
-            let source_audio = resolve_audio_for_chat(&source_path.to_string_lossy()).await;
+                source_dir.join(Path::new(filename).file_name().unwrap_or_default());
+            let source_audio = resolve_audio_for_chat_with_media_dir(&source_path, media_dir.map(Path::new)).await;
             if source_audio.is_some() {
                 info!(
                     filename,
-                    source_dir = %source_dir,
+                    source_dir = %source_dir.display(),
                     "Resolved audio via client source directory"
                 );
                 found = source_audio;
@@ -295,7 +312,7 @@ async fn process_one_fa_file(
                 for ext in crate::runner::util::KNOWN_MEDIA_EXTENSIONS {
                     let candidate = Path::new(root).join(format!("{file_stem}.{ext}"));
                     if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-                        found = Some(candidate.to_string_lossy().to_string());
+                        found = Some(candidate);
                         break 'roots;
                     }
                 }
@@ -304,7 +321,7 @@ async fn process_one_fa_file(
 
         // Strategy 4: Alongside staged file (last resort)
         if found.is_none() {
-            found = resolve_audio_for_chat(&read_path).await;
+            found = resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await;
         }
 
         found
@@ -329,12 +346,12 @@ async fn process_one_fa_file(
         }
     };
 
-    let rev_job_id = rev_job_ids.get(&original_audio_path).map(String::as_str);
+    let rev_job_id = rev_job_ids.get(&original_audio_path).map(|id| &**id);
 
     // Convert non-WAV media (e.g. mp4) to WAV via ffmpeg if needed.
     // soundfile (Python) cannot read container formats like mp4 directly.
     let audio_path =
-        match crate::ensure_wav::ensure_wav(Path::new(&original_audio_path), None).await {
+        match crate::ensure_wav::ensure_wav(&original_audio_path, None).await {
             Ok(p) => p,
             Err(e) => {
                 let err_msg = format!("Media conversion failed for {filename}: {e}");
@@ -357,7 +374,7 @@ async fn process_one_fa_file(
     // Get total audio duration via ffprobe (optional -- for untimed utterance estimation)
     let total_audio_ms = get_audio_duration_ms(&audio_path_str).await;
     let utr_audio_path = if utr_engine.is_some_and(crate::options::UtrEngine::is_rust_owned) {
-        Path::new(&original_audio_path)
+        original_audio_path.as_path()
     } else {
         audio_path.as_path()
     };
@@ -387,7 +404,7 @@ async fn process_one_fa_file(
                     services,
                     audio_identity: &audio_identity,
                     cache_policy: fa_params.cache_policy,
-                    total_audio_ms,
+                    total_audio_ms: total_audio_ms.map(DurationMs),
                     max_group_ms: Some(fa_params.max_group_ms),
                     filename,
                     engine: utr_engine,
@@ -446,7 +463,7 @@ async fn process_one_fa_file(
         let audio = AudioContext {
             audio_path: &audio_path,
             audio_identity: &audio_identity,
-            total_audio_ms,
+            total_audio_ms: total_audio_ms.map(DurationMs),
         };
 
         let fa_result = if let Some(ref bt) = before_text {
@@ -499,10 +516,10 @@ async fn process_one_fa_file(
                 let write_path = if paths_mode && file_index < output_paths.len() {
                     apply_result_filename(&output_paths[file_index], filename)
                 } else {
-                    format!("{staging_dir}/output/{filename}")
+                    staging_dir.join("output").join(filename)
                 };
 
-                if let Some(parent) = Path::new(&write_path).parent() {
+                if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
 
@@ -517,7 +534,7 @@ async fn process_one_fa_file(
                 }
 
                 lifecycle
-                    .complete_with_result(FileName::from(filename), "chat", finished_at)
+                    .complete_with_result(FileName::from(filename), ContentType::Chat, finished_at)
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }
@@ -562,7 +579,7 @@ async fn process_one_fa_file(
                                 services,
                                 audio_identity: &audio_identity,
                                 cache_policy: fa_params.cache_policy,
-                                total_audio_ms,
+                                total_audio_ms: total_audio_ms.map(DurationMs),
                                 max_group_ms: Some(fa_params.max_group_ms),
                                 filename,
                                 engine: utr_engine,

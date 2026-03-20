@@ -22,49 +22,37 @@ from batchalign.worker._types import BatchInferRequest, BatchInferResponse, Infe
 from batchalign.worker._types_v2 import (
     AvqiRequestV2,
     AvqiResultV2,
-    AvqiTaskRequestV2,
     AsrBackendV2,
     AsrRequestV2,
-    AsrTaskRequestV2,
     ExecuteErrorV2,
     ExecuteRequestV2,
     ExecuteSuccessV2,
     FaBackendV2,
     FaTextModeV2,
     ForcedAlignmentRequestV2,
-    ForcedAlignmentTaskRequestV2,
     InferenceTaskV2,
     MonologueAsrResultV2,
     CorefRequestV2,
     CorefResultV2,
-    CorefTaskRequestV2,
     MorphosyntaxRequestV2,
     MorphosyntaxResultV2,
-    MorphosyntaxTaskRequestV2,
     OpenSmileRequestV2,
     OpenSmileResultV2,
-    OpenSmileTaskRequestV2,
-    PreparedAudioAsrInputV2,
     PreparedAudioEncodingV2,
     PreparedAudioInputV2,
     PreparedAudioRefV2,
     PreparedTextEncodingV2,
     PreparedTextRefV2,
-    ProviderMediaAsrInputV2,
     ProviderMediaInputV2,
     ProtocolErrorCodeV2,
     SpeakerBackendV2,
     SpeakerPreparedAudioInputV2,
-    SpeakerPreparedAudioRefInputV2,
     SpeakerRequestV2,
     SpeakerResultV2,
-    SpeakerTaskRequestV2,
     TranslateRequestV2,
     TranslationResultV2,
-    TranslateTaskRequestV2,
     UtsegRequestV2,
     UtsegResultV2,
-    UtsegTaskRequestV2,
     WhisperChunkResultPayloadV2,
     WhisperChunkResultV2,
     WhisperChunkSpanV2,
@@ -141,14 +129,12 @@ def _make_fa_request(tmp_path: Path) -> (
             byte_offset=0,
             byte_len=16,
         ),
-        ForcedAlignmentTaskRequestV2(
-            data=ForcedAlignmentRequestV2(
-                backend=FaBackendV2.WHISPER,
-                payload_ref_id="payload-ref-1",
-                audio_ref_id="audio-ref-1",
-                text_mode=FaTextModeV2.SPACE_JOINED,
-                pauses=True,
-            )
+        ForcedAlignmentRequestV2(
+            backend=FaBackendV2.WHISPER,
+            payload_ref_id="payload-ref-1",
+            audio_ref_id="audio-ref-1",
+            text_mode=FaTextModeV2.SPACE_JOINED,
+            pauses=True,
         ),
     )
 
@@ -179,8 +165,8 @@ def test_routes_forced_alignment_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, WhisperTokenTimingResultV2)
-    assert response.result.data.tokens[0].text == "hello"
-    assert response.result.data.tokens[1].time_s == 0.3
+    assert response.result.tokens[0].text == "hello"
+    assert response.result.tokens[1].time_s == 0.3
 
 
 def test_routes_asr_execute_v2_request(tmp_path: Path) -> None:
@@ -192,14 +178,10 @@ def test_routes_asr_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-asr-1",
             task=InferenceTaskV2.ASR,
-            payload=AsrTaskRequestV2(
-                data=AsrRequestV2(
-                    lang="eng",
-                    backend=AsrBackendV2.LOCAL_WHISPER,
-                    input=PreparedAudioAsrInputV2(
-                        data=PreparedAudioInputV2(audio_ref_id="audio-ref-1")
-                    ),
-                )
+            payload=AsrRequestV2(
+                lang="eng",
+                backend=AsrBackendV2.LOCAL_WHISPER,
+                input=PreparedAudioInputV2(audio_ref_id="audio-ref-1"),
             ),
             attachments=[audio_attachment],
         ),
@@ -224,7 +206,7 @@ def test_routes_asr_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, WhisperChunkResultV2)
-    assert response.result.data.text == "hello"
+    assert response.result.text == "hello"
 
 
 def test_routes_provider_media_asr_execute_v2_request() -> None:
@@ -234,17 +216,13 @@ def test_routes_provider_media_asr_execute_v2_request() -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-asr-provider-1",
             task=InferenceTaskV2.ASR,
-            payload=AsrTaskRequestV2(
-                data=AsrRequestV2(
-                    lang="yue",
-                    backend=AsrBackendV2.HK_TENCENT,
-                    input=ProviderMediaAsrInputV2(
-                        data=ProviderMediaInputV2(
-                            media_path="/tmp/provider.wav",
-                            num_speakers=2,
-                        )
-                    ),
-                )
+            payload=AsrRequestV2(
+                lang="yue",
+                backend=AsrBackendV2.HK_TENCENT,
+                input=ProviderMediaInputV2(
+                    media_path="/tmp/provider.wav",
+                    num_speakers=2,
+                ),
             ),
             attachments=[],
         ),
@@ -267,8 +245,8 @@ def test_routes_provider_media_asr_execute_v2_request() -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, MonologueAsrResultV2)
-    assert response.result.data.monologues[0].speaker == "1"
-    assert response.result.data.monologues[0].elements[0].value == "/tmp/provider.wav"
+    assert response.result.monologues[0].speaker == "1"
+    assert response.result.monologues[0].elements[0].value == "/tmp/provider.wav"
 
 
 def test_routes_speaker_execute_v2_request(tmp_path: Path) -> None:
@@ -280,14 +258,10 @@ def test_routes_speaker_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-speaker-1",
             task=InferenceTaskV2.SPEAKER,
-            payload=SpeakerTaskRequestV2(
-                data=SpeakerRequestV2(
-                    backend=SpeakerBackendV2.PYANNOTE,
-                    input=SpeakerPreparedAudioRefInputV2(
-                        data=SpeakerPreparedAudioInputV2(audio_ref_id="audio-ref-speaker-1")
-                    ),
-                    expected_speakers=3,
-                )
+            payload=SpeakerRequestV2(
+                backend=SpeakerBackendV2.PYANNOTE,
+                input=SpeakerPreparedAudioInputV2(audio_ref_id="audio-ref-speaker-1"),
+                expected_speakers=3,
             ),
             attachments=[
                 PreparedAudioRefV2(
@@ -321,8 +295,8 @@ def test_routes_speaker_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, SpeakerResultV2)
-    assert response.result.data.segments[0].speaker == "SPEAKER_3_16000_4"
-    assert response.result.data.segments[0].end_ms == 1200
+    assert response.result.segments[0].speaker == "SPEAKER_3_16000_4"
+    assert response.result.segments[0].end_ms == 1200
 
 
 def test_routes_opensmile_execute_v2_request(tmp_path: Path) -> None:
@@ -335,12 +309,10 @@ def test_routes_opensmile_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-opensmile-1",
             task=InferenceTaskV2.OPENSMILE,
-            payload=OpenSmileTaskRequestV2(
-                data=OpenSmileRequestV2(
-                    audio_ref_id="audio-ref-opensmile-1",
-                    feature_set="eGeMAPSv02",
-                    feature_level="functionals",
-                )
+            payload=OpenSmileRequestV2(
+                audio_ref_id="audio-ref-opensmile-1",
+                feature_set="eGeMAPSv02",
+                feature_level="functionals",
             ),
             attachments=[
                 PreparedAudioRefV2(
@@ -372,8 +344,8 @@ def test_routes_opensmile_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, OpenSmileResultV2)
-    assert response.result.data.rows[0]["f0_mean"] == 100.0
-    assert response.result.data.feature_set == "eGeMAPSv02"
+    assert response.result.rows[0]["f0_mean"] == 100.0
+    assert response.result.feature_set == "eGeMAPSv02"
 
 
 def test_invalid_opensmile_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
@@ -386,12 +358,10 @@ def test_invalid_opensmile_host_output_becomes_runtime_failure(tmp_path: Path) -
         request=ExecuteRequestV2(
             request_id="req-execute-v2-opensmile-invalid-1",
             task=InferenceTaskV2.OPENSMILE,
-            payload=OpenSmileTaskRequestV2(
-                data=OpenSmileRequestV2(
-                    audio_ref_id="audio-ref-opensmile-invalid-1",
-                    feature_set="eGeMAPSv02",
-                    feature_level="functionals",
-                )
+            payload=OpenSmileRequestV2(
+                audio_ref_id="audio-ref-opensmile-invalid-1",
+                feature_set="eGeMAPSv02",
+                feature_level="functionals",
             ),
             attachments=[
                 PreparedAudioRefV2(
@@ -436,11 +406,9 @@ def test_routes_avqi_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-avqi-1",
             task=InferenceTaskV2.AVQI,
-            payload=AvqiTaskRequestV2(
-                data=AvqiRequestV2(
-                    cs_audio_ref_id="audio-ref-avqi-cs-1",
-                    sv_audio_ref_id="audio-ref-avqi-sv-1",
-                )
+            payload=AvqiRequestV2(
+                cs_audio_ref_id="audio-ref-avqi-cs-1",
+                sv_audio_ref_id="audio-ref-avqi-sv-1",
             ),
             attachments=[
                 PreparedAudioRefV2(
@@ -485,8 +453,8 @@ def test_routes_avqi_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, AvqiResultV2)
-    assert response.result.data.avqi == 3.14
-    assert response.result.data.cs_file.endswith("sample.cs.pcm")
+    assert response.result.avqi == 3.14
+    assert response.result.cs_file.endswith("sample.cs.pcm")
 
 
 def test_invalid_avqi_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
@@ -501,11 +469,9 @@ def test_invalid_avqi_host_output_becomes_runtime_failure(tmp_path: Path) -> Non
         request=ExecuteRequestV2(
             request_id="req-execute-v2-avqi-invalid-1",
             task=InferenceTaskV2.AVQI,
-            payload=AvqiTaskRequestV2(
-                data=AvqiRequestV2(
-                    cs_audio_ref_id="audio-ref-avqi-invalid-cs-1",
-                    sv_audio_ref_id="audio-ref-avqi-invalid-sv-1",
-                )
+            payload=AvqiRequestV2(
+                cs_audio_ref_id="audio-ref-avqi-invalid-cs-1",
+                sv_audio_ref_id="audio-ref-avqi-invalid-sv-1",
             ),
             attachments=[
                 PreparedAudioRefV2(
@@ -574,12 +540,10 @@ def test_routes_morphosyntax_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-morphosyntax-1",
             task=InferenceTaskV2.MORPHOSYNTAX,
-            payload=MorphosyntaxTaskRequestV2(
-                data=MorphosyntaxRequestV2(
-                    lang="eng",
-                    payload_ref_id="text-ref-morphosyntax-1",
-                    item_count=1,
-                )
+            payload=MorphosyntaxRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-morphosyntax-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -639,8 +603,8 @@ def test_routes_morphosyntax_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, MorphosyntaxResultV2)
-    assert response.result.data.items[0].raw_sentences is not None
-    assert response.result.data.items[0].raw_sentences[0][1]["lemma"] == "see"
+    assert response.result.items[0].raw_sentences is not None
+    assert response.result.items[0].raw_sentences[0][1]["lemma"] == "see"
 
 
 def test_routes_morphosyntax_unicode_special_forms_request(tmp_path: Path) -> None:
@@ -714,12 +678,10 @@ def test_routes_morphosyntax_unicode_special_forms_request(tmp_path: Path) -> No
         request=ExecuteRequestV2(
             request_id="req-execute-v2-morphosyntax-unicode-1",
             task=InferenceTaskV2.MORPHOSYNTAX,
-            payload=MorphosyntaxTaskRequestV2(
-                data=MorphosyntaxRequestV2(
-                    lang="yue",
-                    payload_ref_id="text-ref-morphosyntax-unicode-1",
-                    item_count=1,
-                )
+            payload=MorphosyntaxRequestV2(
+                lang="yue",
+                payload_ref_id="text-ref-morphosyntax-unicode-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -738,7 +700,7 @@ def test_routes_morphosyntax_unicode_special_forms_request(tmp_path: Path) -> No
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, MorphosyntaxResultV2)
-    assert response.result.data.items[0].raw_sentences[0][1]["text"] == "食緊"
+    assert response.result.items[0].raw_sentences[0][1]["text"] == "食緊"
     assert isinstance(captured["items"], list)
     assert captured["items"][0]["special_forms"][1] == ["食緊", "eat.PROG"]
     assert captured["mwt"] == {"食緊": ["食", "緊"]}
@@ -767,12 +729,10 @@ def test_invalid_morphosyntax_host_output_becomes_runtime_failure(tmp_path: Path
         request=ExecuteRequestV2(
             request_id="req-execute-v2-morphosyntax-invalid-1",
             task=InferenceTaskV2.MORPHOSYNTAX,
-            payload=MorphosyntaxTaskRequestV2(
-                data=MorphosyntaxRequestV2(
-                    lang="eng",
-                    payload_ref_id="text-ref-morphosyntax-invalid-1",
-                    item_count=1,
-                )
+            payload=MorphosyntaxRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-morphosyntax-invalid-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -809,12 +769,10 @@ def test_routes_utseg_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-utseg-1",
             task=InferenceTaskV2.UTSEG,
-            payload=UtsegTaskRequestV2(
-                data=UtsegRequestV2(
-                    lang="eng",
-                    payload_ref_id="text-ref-utseg-1",
-                    item_count=1,
-                )
+            payload=UtsegRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-utseg-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -840,7 +798,7 @@ def test_routes_utseg_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, UtsegResultV2)
-    assert response.result.data.items[0].trees == ["(ROOT (S hello world))"]
+    assert response.result.items[0].trees == ["(ROOT (S hello world))"]
 
 
 def test_invalid_utseg_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
@@ -853,12 +811,10 @@ def test_invalid_utseg_host_output_becomes_runtime_failure(tmp_path: Path) -> No
         request=ExecuteRequestV2(
             request_id="req-execute-v2-utseg-invalid-1",
             task=InferenceTaskV2.UTSEG,
-            payload=UtsegTaskRequestV2(
-                data=UtsegRequestV2(
-                    lang="eng",
-                    payload_ref_id="text-ref-utseg-invalid-1",
-                    item_count=1,
-                )
+            payload=UtsegRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-utseg-invalid-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -892,13 +848,11 @@ def test_routes_translate_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-translate-1",
             task=InferenceTaskV2.TRANSLATE,
-            payload=TranslateTaskRequestV2(
-                data=TranslateRequestV2(
-                    source_lang="eng",
-                    target_lang="spa",
-                    payload_ref_id="text-ref-translate-1",
-                    item_count=1,
-                )
+            payload=TranslateRequestV2(
+                source_lang="eng",
+                target_lang="spa",
+                payload_ref_id="text-ref-translate-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -924,7 +878,7 @@ def test_routes_translate_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, TranslationResultV2)
-    assert response.result.data.items[0].raw_translation == "hola"
+    assert response.result.items[0].raw_translation == "hola"
 
 
 def test_invalid_translate_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
@@ -937,13 +891,11 @@ def test_invalid_translate_host_output_becomes_runtime_failure(tmp_path: Path) -
         request=ExecuteRequestV2(
             request_id="req-execute-v2-translate-invalid-1",
             task=InferenceTaskV2.TRANSLATE,
-            payload=TranslateTaskRequestV2(
-                data=TranslateRequestV2(
-                    source_lang="eng",
-                    target_lang="spa",
-                    payload_ref_id="text-ref-translate-invalid-1",
-                    item_count=1,
-                )
+            payload=TranslateRequestV2(
+                source_lang="eng",
+                target_lang="spa",
+                payload_ref_id="text-ref-translate-invalid-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -977,12 +929,10 @@ def test_routes_coref_execute_v2_request(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-coref-1",
             task=InferenceTaskV2.COREF,
-            payload=CorefTaskRequestV2(
-                data=CorefRequestV2(
-                    lang="eng",
-                    payload_ref_id="text-ref-coref-1",
-                    item_count=1,
-                )
+            payload=CorefRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-coref-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -1020,8 +970,8 @@ def test_routes_coref_execute_v2_request(tmp_path: Path) -> None:
 
     assert isinstance(response.outcome, ExecuteSuccessV2)
     assert isinstance(response.result, CorefResultV2)
-    assert response.result.data.items[0].annotations is not None
-    assert response.result.data.items[0].annotations[0].words[0][0].chain_id == 0
+    assert response.result.items[0].annotations is not None
+    assert response.result.items[0].annotations[0].words[0][0].chain_id == 0
 
 
 def test_invalid_coref_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
@@ -1034,12 +984,10 @@ def test_invalid_coref_host_output_becomes_runtime_failure(tmp_path: Path) -> No
         request=ExecuteRequestV2(
             request_id="req-execute-v2-coref-invalid-1",
             task=InferenceTaskV2.COREF,
-            payload=CorefTaskRequestV2(
-                data=CorefRequestV2(
-                    lang="eng",
-                    payload_ref_id="text-ref-coref-invalid-1",
-                    item_count=1,
-                )
+            payload=CorefRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-coref-invalid-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(
@@ -1073,13 +1021,11 @@ def test_returns_typed_error_for_missing_text_v2_host(tmp_path: Path) -> None:
         request=ExecuteRequestV2(
             request_id="req-execute-v2-unsupported-1",
             task=InferenceTaskV2.TRANSLATE,
-            payload=TranslateTaskRequestV2(
-                data=TranslateRequestV2(
-                    source_lang="eng",
-                    target_lang="spa",
-                    payload_ref_id="text-ref-unsupported-1",
-                    item_count=1,
-                )
+            payload=TranslateRequestV2(
+                source_lang="eng",
+                target_lang="spa",
+                payload_ref_id="text-ref-unsupported-1",
+                item_count=1,
             ),
             attachments=[
                 PreparedTextRefV2(

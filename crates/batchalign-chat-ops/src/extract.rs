@@ -4,8 +4,8 @@
 //! "alignable" for a given domain (Mor, Wor, Pho, Sin).
 
 use talkbank_model::alignment::helpers::{
-    AlignmentDomain, ContentLeaf, annotations_have_alignment_ignore, for_each_leaf,
-    is_tag_marker_separator, should_align_replaced_word_in_pho_sin, word_is_alignable,
+    TierDomain, WordItem, annotations_have_alignment_ignore, walk_words,
+    is_tag_marker_separator, should_align_replaced_word_in_pho_sin, counts_for_tier,
 };
 use talkbank_model::model::{
     ChatFile, Line, ReplacedWord, Separator, UtteranceContent, Word, WriteChat,
@@ -48,7 +48,7 @@ pub struct ExtractedUtterance {
 /// * `chat_file` - The parsed CHAT file to extract words from.
 /// * `domain` - The alignment domain governing which words are
 ///   considered alignable (`Mor`, `Wor`, `Pho`, or `Sin`).
-pub fn extract_words(chat_file: &ChatFile, domain: AlignmentDomain) -> Vec<ExtractedUtterance> {
+pub fn extract_words(chat_file: &ChatFile, domain: TierDomain) -> Vec<ExtractedUtterance> {
     let mut results = Vec::new();
     let mut utt_idx = 0;
 
@@ -82,18 +82,18 @@ pub fn extract_words(chat_file: &ChatFile, domain: AlignmentDomain) -> Vec<Extra
 /// * `out` - Accumulator that extracted words are pushed into.
 pub fn collect_utterance_content(
     content: &[UtteranceContent],
-    domain: AlignmentDomain,
+    domain: TierDomain,
     out: &mut Vec<ExtractedWord>,
 ) {
-    for_each_leaf(content, Some(domain), &mut |leaf| match leaf {
-        ContentLeaf::Word(word, annotations) => {
-            collect_alignable_word(word, annotations, domain, out);
+    walk_words(content, Some(domain), &mut |leaf| match leaf {
+        WordItem::Word(word) => {
+            collect_alignable_word(word, &[], domain, out);
         }
-        ContentLeaf::ReplacedWord(replaced) => {
+        WordItem::ReplacedWord(replaced) => {
             collect_replaced_word(replaced, domain, out);
         }
-        ContentLeaf::Separator(sep) => {
-            if domain == AlignmentDomain::Mor && is_tag_marker_separator(sep) {
+        WordItem::Separator(sep) => {
+            if domain == TierDomain::Mor && is_tag_marker_separator(sep) {
                 let sep_text = render_separator(sep);
                 out.push(ExtractedWord {
                     text: crate::text_types::ChatCleanedText::new(sep_text.clone()),
@@ -110,14 +110,14 @@ pub fn collect_utterance_content(
 fn collect_alignable_word(
     word: &Word,
     annotations: &[talkbank_model::model::ScopedAnnotation],
-    domain: AlignmentDomain,
+    domain: TierDomain,
     out: &mut Vec<ExtractedWord>,
 ) {
-    if domain == AlignmentDomain::Mor && annotations_have_alignment_ignore(annotations) {
+    if domain == TierDomain::Mor && annotations_have_alignment_ignore(annotations) {
         return;
     }
 
-    if !word_is_alignable(word, domain) {
+    if !counts_for_tier(word, domain) {
         return;
     }
 
@@ -132,20 +132,20 @@ fn collect_alignable_word(
 
 fn collect_replaced_word(
     entry: &ReplacedWord,
-    domain: AlignmentDomain,
+    domain: TierDomain,
     out: &mut Vec<ExtractedWord>,
 ) {
-    if domain == AlignmentDomain::Mor
+    if domain == TierDomain::Mor
         && annotations_have_alignment_ignore(&entry.scoped_annotations)
     {
         return;
     }
 
     match domain {
-        AlignmentDomain::Mor => {
+        TierDomain::Mor => {
             if !entry.replacement.words.is_empty() {
                 for word in &entry.replacement.words {
-                    if word_is_alignable(word, AlignmentDomain::Mor) {
+                    if counts_for_tier(word, TierDomain::Mor) {
                         out.push(ExtractedWord {
                             text: crate::text_types::ChatCleanedText::new(
                                 word.cleaned_text().to_string(),
@@ -159,7 +159,7 @@ fn collect_replaced_word(
                         });
                     }
                 }
-            } else if word_is_alignable(&entry.word, AlignmentDomain::Mor) {
+            } else if counts_for_tier(&entry.word, TierDomain::Mor) {
                 out.push(ExtractedWord {
                     text: crate::text_types::ChatCleanedText::new(
                         entry.word.cleaned_text().to_string(),
@@ -173,7 +173,7 @@ fn collect_replaced_word(
                 });
             }
         }
-        AlignmentDomain::Pho | AlignmentDomain::Sin | AlignmentDomain::Wor => {
+        TierDomain::Pho | TierDomain::Sin | TierDomain::Wor => {
             if should_align_replaced_word_in_pho_sin(
                 &entry.word,
                 !entry.replacement.words.is_empty(),
