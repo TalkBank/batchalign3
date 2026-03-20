@@ -29,8 +29,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{DurationMs, DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers};
-use crate::types::worker::WorkerPid;
+use crate::{DurationMs, DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers};
+use crate::worker::WorkerPid;
 
 string_id!(
     /// Stable identifier for one V2 protocol request/response pair.

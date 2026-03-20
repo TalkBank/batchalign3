@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
-use batchalign_app::api::{DurationMs, DurationSeconds};
-use batchalign_app::types::worker_v2::{
+use batchalign_types::{DurationMs, DurationSeconds};
+use batchalign_types::worker_v2::{
     ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2, FaBackendV2, FaTextModeV2,
     ForcedAlignmentRequestV2, IndexedWordTimingResultV2, IndexedWordTimingV2, InferenceTaskV2,
     ProtocolErrorCodeV2, TaskRequestV2, TaskResultV2, WhisperTokenTimingResultV2,

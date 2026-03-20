@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use batchalign_app::types::worker_v2::{
+use batchalign_types::worker_v2::{
     ArtifactRefV2, PreparedAudioEncodingV2, PreparedAudioRefV2, PreparedTextEncodingV2,
     PreparedTextRefV2,
 };

@@ -1,6 +1,4 @@
 //! Domain newtypes and small enums shared across modules.
-//!
-//! These are re-exported from [`super::api`] for backward compatibility.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

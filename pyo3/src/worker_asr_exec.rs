@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
-use batchalign_app::api::{DurationSeconds, LanguageCode3};
-use batchalign_app::types::worker_v2::{
+use batchalign_types::{DurationSeconds, LanguageCode3};
+use batchalign_types::worker_v2::{
     AsrBackendV2, AsrElementKindV2, AsrElementV2, AsrInputV2, AsrMonologueV2, AsrRequestV2,
     ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2, InferenceTaskV2, MonologueAsrResultV2,
     ProtocolErrorCodeV2, TaskRequestV2, TaskResultV2, WhisperChunkResultV2,

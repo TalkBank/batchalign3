@@ -1,0 +1,14 @@
+[package]
+name = "batchalign-types"
+version = "0.1.0"
+description = "Shared domain newtypes and worker IPC types for batchalign3"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+utoipa = { workspace = true }
+schemars = { workspace = true }
+thiserror = { workspace = true }

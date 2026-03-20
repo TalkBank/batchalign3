@@ -312,6 +312,7 @@ dependencies = [
  "axum",
  "batchalign-chat-ops",
  "batchalign-revai",
+ "batchalign-types",
  "blake3",
  "chrono",
  "dashmap",
@@ -408,6 +409,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "batchalign-types"
+version = "0.1.0"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "utoipa",
 ]
 
 [[package]]

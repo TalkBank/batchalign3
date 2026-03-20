@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/batchalign-types",
     "crates/batchalign-revai",
     "crates/batchalign-chat-ops",
     "crates/batchalign-app",
@@ -15,6 +16,7 @@ repository = "https://github.com/TalkBank/batchalign3"
 
 [workspace.dependencies]
 # Shared crates
+batchalign-types = { path = "crates/batchalign-types" }
 batchalign-chat-ops = { path = "crates/batchalign-chat-ops" }
 batchalign-revai = { path = "crates/batchalign-revai" }
 batchalign-app = { path = "crates/batchalign-app" }

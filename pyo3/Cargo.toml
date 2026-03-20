@@ -26,10 +26,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Shared batchalign crates
+batchalign-types = { path = "../crates/batchalign-types" }
 batchalign-chat-ops = { path = "../crates/batchalign-chat-ops" }
 batchalign-revai = { path = "../crates/batchalign-revai" }
 batchalign-cli = { path = "../crates/batchalign-cli", default-features = false }
-batchalign-app = { path = "../crates/batchalign-app" }
 
 # CLI runtime
 tokio = { version = "1", features = ["full"] }

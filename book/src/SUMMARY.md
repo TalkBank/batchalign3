@@ -132,6 +132,7 @@
 - [Debugging Transcribe Pipelines](developer/debugging-transcribe-pipelines.md)
 - [Apple MPS Workarounds](developer/apple-mps-workarounds.md)
 - [Arena Allocators](developer/arena-allocators.md)
+- [Maturin Build and PyO3 Surface](developer/maturin-pyo3-surface.md)
 - [Tauri + React Dashboard](developer/tauri-react-dashboard.md)
 
 # Design Decisions

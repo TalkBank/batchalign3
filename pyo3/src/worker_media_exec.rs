@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
-use batchalign_app::api::DurationSeconds;
-use batchalign_app::types::worker_v2::{
+use batchalign_types::DurationSeconds;
+use batchalign_types::worker_v2::{
     AvqiRequestV2, AvqiResultV2, ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2,
     InferenceTaskV2, OpenSmileRequestV2, OpenSmileResultV2, ProtocolErrorCodeV2, SpeakerBackendV2,
     SpeakerInputV2, SpeakerRequestV2, SpeakerResultV2, TaskRequestV2, TaskResultV2,
