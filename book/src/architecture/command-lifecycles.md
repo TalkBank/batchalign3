@@ -1,7 +1,7 @@
 # Command Lifecycles
 
 **Status:** Current
-**Last updated:** 2026-03-14
+**Last updated:** 2026-03-18
 
 End-to-end sequence diagrams showing how jobs flow through the system,
 from CLI invocation to output files. Every batchalign command follows one
@@ -271,6 +271,18 @@ Transcription creates CHAT from scratch rather than modifying existing
 files. It has the longest pipeline: ASR → post-processing → CHAT assembly
 → optional follow-up commands.
 
+**Speaker label handling:** `convert_asr_response()` **always** uses speaker
+labels from the ASR engine when present (matching BA2's `process_generation()`
+which unconditionally reads `utterance["speaker"]`). The `--diarization` flag
+only controls whether a dedicated Pyannote/NeMo stage runs — it does not
+suppress ASR-provided labels. This means `batchalign3 transcribe` (without
+`--diarization`) still produces multi-speaker output when Rev.AI returns
+speaker-labeled monologues.
+
+**Rev.AI `skip_postprocessing`:** For English and French,
+`skip_postprocessing=true` is sent to Rev.AI (matching BA2), so BA3's own
+utseg BERT model handles segmentation from raw output.
+
 ```mermaid
 sequenceDiagram
     participant CLI
@@ -285,7 +297,7 @@ sequenceDiagram
 
     opt Rev.AI engine selected
         Server->>Server: parallel Rev.AI preflight uploads
-        Note over Server: Rust control plane uses shared Rev.AI client
+        Note over Server: Rust Rev.AI client, skip_postprocessing=true for en/fr
     end
 
     Server->>Server: resolve audio path
@@ -295,41 +307,44 @@ sequenceDiagram
 
     Server->>W: execute_v2(task="asr", typed_input)
     Note over W: Run ASR model or provider SDK<br/>(Whisper local or HK engine)
-    W-->>Server: typed raw ASR result (`monologue_asr_result` or `whisper_chunk_result`)
+    W-->>Server: typed raw ASR result (monologue_asr_result or whisper_chunk_result)
     Note over Server: Worker returned to pool
 
-    opt diarize requested and ASR labels absent
+    Note over Server: convert_asr_response() — ALWAYS groups<br/>tokens by speaker label (no flag gating)
+
+    opt --diarization enabled AND ASR labels absent
         Server->>Pool: checkout worker
         Pool-->>Server: CheckedOutWorker
         Server->>W: execute_v2(task="speaker", prepared_audio)
         Note over W: Run diarization model<br/>(Pyannote default, NeMo optional)
-        W-->>Server: typed raw speaker result (`speaker_result`)
+        W-->>Server: typed raw speaker result (speaker_result)
         Note over Server: Worker returned to pool
     end
 
-    Note over Server: Rust normalizes payload, then runs post-processing<br/>(batchalign-chat-ops::asr_postprocess)
+    Note over Server: Rust post-processing: process_raw_asr()<br/>(batchalign-chat-ops::asr_postprocess)
 
     Server->>Server: 1. Compound merging (adjacent subword tokens)
-    Server->>Server: 2. Number expansion (digits → words)
-    Server->>Server: 3. Retokenization (DP-align model tokens to word boundaries)
-    Server->>Server: 4. Cantonese normalization (if applicable)
-    Server->>Server: 5. Long-turn splitting (>300 words → split on punctuation)
-    Server->>Server: 6. Seconds → milliseconds
+    Server->>Server: 2. Timed word extraction (seconds to ms)
+    Server->>Server: 3. Multi-word splitting (timestamp interpolation)
+    Server->>Server: 4. Number expansion (digits to words)
+    Server->>Server: 4b. Cantonese normalization (lang=yue only)
+    Server->>Server: 5. Long-turn splitting (chunk at >300 words)
+    Server->>Server: 6. Retokenization (punctuation-based utterance splitting)
 
-    Server->>Server: build_chat() → ChatFile AST
-    Note over Server: Generate headers: @Languages, @Participants,<br/>@ID (PAR/INV/CHI/MOT...), @Media<br/>Build utterances with %wor tiers
+    Server->>Server: build_chat() — ChatFile AST
+    Note over Server: Generate headers: @Languages, @Participants,<br/>@ID (PAR/INV/CHI/MOT...), @Media<br/>Build utterances with %wor tiers<br/>Speaker codes from ASR labels used directly
     opt dedicated speaker segments present
-        Server->>Server: reassign_speakers() → rewrite utterance speakers,<br/>@Participants, and @ID from raw diarization segments
+        Server->>Server: reassign_speakers() — rewrite utterance speakers,<br/>@Participants, and @ID from raw diarization segments
     end
 
-    opt with_utseg=true
+    opt with_utseg=true (default)
         Server->>Server: process_utseg() — re-segment utterance boundaries
     end
-    opt with_morphosyntax=true
+    opt with_morphosyntax=true (default: false)
         Server->>Server: process_morphosyntax() — add %mor/%gra tiers
     end
 
-    Server->>Server: validate → serialize → .cha output
+    Server->>Server: validate — serialize — .cha output
     Server-->>CLI: output .cha file
 ```
 
@@ -339,26 +354,38 @@ sequenceDiagram
    pre-submits all audio files in parallel before the per-file loop. This lets
    Rev.AI start processing immediately, reducing wall-clock time 2-5x for large
    batches. The `rev_job_id` is stored in the job's runtime state and passed to
-   the worker later.
+   the worker later. For English and French, `skip_postprocessing=true` is sent
+   so BA3's own utseg model handles segmentation.
 2. The worker runs ASR and returns **raw tokens** — words with timestamps,
    optional speaker labels, and confidence scores. The worker has zero CHAT
    awareness.
-3. **All post-processing happens in Rust** (`batchalign-chat-ops`), not Python:
-   - *Compound merging* joins adjacent subword tokens
-   - *Number expansion* converts digits to spelled-out words (language-aware)
-   - *Retokenization* uses character-level DP alignment to reconcile model token
-     boundaries with linguistic word boundaries
-   - *Cantonese normalization* converts simplified Chinese to HK traditional and
-     applies domain-specific replacements (via `zhconv` crate, pure Rust)
-   - *Long-turn splitting* breaks monologues >300 words at punctuation
+2b. **Speaker label handling:** `convert_asr_response()` **always** groups tokens
+   by their speaker labels when present. There is no `use_speaker_labels`
+   parameter — this matches BA2's unconditional speaker reading. The
+   `--diarization` flag only gates the dedicated Pyannote/NeMo stage (step 2c),
+   not the use of ASR-provided labels.
+2c. **Dedicated diarization** (optional): If `--diarization enabled` is set AND
+   the ASR response lacks usable speaker labels, the server dispatches
+   `execute_v2(task="speaker")` to run Pyannote (default) or NeMo. If the ASR
+   already has speaker labels (e.g., Rev.AI monologues), this stage is skipped
+   even when diarization is requested.
+3. **All post-processing happens in Rust** (`batchalign-chat-ops`), not Python.
+   The six stages in `process_raw_asr()` are:
+   1. *Compound merging* — joins adjacent subword tokens
+   2. *Timed word extraction* — seconds to milliseconds, filter pauses
+   3. *Multi-word splitting* — split space-separated tokens, interpolate timestamps
+   4. *Number expansion* — digits to spelled-out words (language-aware)
+   4b. *Cantonese normalization* (lang=yue only) — simplified to HK traditional
+       via `zhconv` + domain replacements (pure Rust)
+   5. *Long-turn splitting* — chunk monologues at >300 words
+   6. *Retokenization* — punctuation-based utterance splitting
 4. **CHAT assembly** (`build_chat`) creates a complete `ChatFile` AST with
    proper headers (participant codes derived from speaker indices: PAR, INV,
-   CHI, MOT, etc.) and utterances with `%wor` timing tiers. If `transcribe_s`
-   needed dedicated speaker diarization, Rust then rewrites utterance speaker
-   codes plus `@Participants` / `@ID` headers from the raw speaker segments.
-5. Optional **follow-up commands** (utseg, morphotag) are chained automatically,
-   reusing the same worker pool. This means `transcribe --with-utseg
-   --with-morphosyntax` produces a fully annotated CHAT file in one invocation.
+   CHI, MOT, etc.) and utterances with `%wor` timing tiers. If dedicated
+   speaker diarization produced segments, Rust then rewrites utterance speaker
+   codes plus `@Participants` / `@ID` headers via `reassign_speakers()`.
+5. Optional **follow-up commands** (utseg defaults on, morphotag defaults off)
+   are chained automatically, reusing the same worker pool.
 
 ---
 

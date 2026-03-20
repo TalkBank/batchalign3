@@ -1,8 +1,6 @@
 //! Word extraction for forced alignment (Wor domain).
 
-use talkbank_model::alignment::helpers::{
-    TierDomain, WordItem, walk_words, counts_for_tier,
-};
+use talkbank_model::alignment::helpers::{TierDomain, WordItem, counts_for_tier, walk_words};
 use talkbank_model::model::UtteranceContent;
 
 /// Collect alignable word texts from utterance content for forced alignment.

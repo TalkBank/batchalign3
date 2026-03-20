@@ -295,11 +295,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             .as_resolved()
             .cloned()
             .unwrap_or_else(|| LanguageCode3::from_worker_lang("auto"));
-        let job_engine_overrides = job
-            .dispatch
-            .options
-            .common()
-            .engine_overrides_json();
+        let job_engine_overrides = job.dispatch.options.common().engine_overrides_json();
         pool.pre_scale_with_overrides(
             &command,
             &pre_scale_lang,
@@ -684,7 +680,11 @@ async fn dispatch_test_echo_files(
         }
 
         lifecycle
-            .complete_with_result(FileName::from(result_filename), ContentType::Chat, unix_now())
+            .complete_with_result(
+                FileName::from(result_filename),
+                ContentType::Chat,
+                unix_now(),
+            )
             .await;
     }
 }

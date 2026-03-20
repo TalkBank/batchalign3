@@ -351,7 +351,10 @@ mod tests {
         dumper.dump_utr_tokens("sample.cha", &tokens);
         dumper.dump_utr_output("sample.cha", chat, &utr_result);
         dumper.dump_fa_output("sample.cha", chat);
-        dumper.dump_asr_response("sample.wav", &serde_json::json!({"tokens": [{"text": "hello"}]}));
+        dumper.dump_asr_response(
+            "sample.wav",
+            &serde_json::json!({"tokens": [{"text": "hello"}]}),
+        );
         dumper.dump_post_asr_chat("sample.wav", chat);
         dumper.dump_pre_utseg_chat("sample.wav", chat);
         dumper.dump_post_utseg_chat("sample.wav", chat);

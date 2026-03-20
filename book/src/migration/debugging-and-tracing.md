@@ -1,7 +1,7 @@
 # Debugging and Tracing Migration
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-19
 
 ## BA2 Baseline: No Principled Debugging Story
 
@@ -35,29 +35,67 @@ structured CHAT/JSON artifact dumps at each pipeline stage. This enables:
   without running ML models
 - **Test fixture generation**: debug artifacts from real pipeline runs become
   regression test inputs
-- **Stage decomposition**: inspect intermediate state between UTR, FA grouping,
-  and FA alignment
+- **Stage decomposition**: inspect intermediate state between every pipeline
+  stage
 
-Directory layout for a file `sample.cha`:
+**Coverage:** debug artifact dumps are wired into both the **align** (FA/UTR)
+and **transcribe** (ASR → build CHAT → utseg → morphosyntax) pipelines.
+
+Full directory layout for all artifact types:
 
 ```
 debug-dir/
-  sample_utr_input.cha         # CHAT before UTR injection
-  sample_utr_tokens.json       # ASR timing tokens fed to UTR
-  sample_utr_output.cha        # CHAT after UTR injection
-  sample_utr_result.json       # UTR injection statistics
-  sample_fa_input.cha          # CHAT before FA (after UTR)
-  sample_fa_grouping.json      # FA group plan (time windows, words)
-  sample_fa_group_0.json       # Per-group words + timings
+  # ── Transcribe pipeline artifacts ──
+  sample_asr_response.json       # Raw ASR tokens + timestamps
+  sample_post_asr.cha            # CHAT after assembly (before utseg)
+  sample_pre_utseg.cha           # CHAT entering utterance segmentation
+  sample_post_utseg.cha          # CHAT after utterance segmentation
+  sample_pre_morphosyntax.cha    # CHAT entering morphosyntax
+
+  # ── Align pipeline artifacts ──
+  sample_utr_input.cha           # CHAT before UTR injection
+  sample_utr_tokens.json         # ASR timing tokens fed to UTR
+  sample_utr_output.cha          # CHAT after UTR injection
+  sample_utr_result.json         # UTR injection statistics
+  sample_fa_input.cha            # CHAT before FA (after UTR)
+  sample_fa_grouping.json        # FA group plan (time windows, words)
+  sample_fa_group_0.json         # Per-group words + timings
   sample_fa_group_1.json
-  sample_fa_output.cha         # Final aligned CHAT
+  sample_fa_output.cha           # Final aligned CHAT
 ```
+
+### Tier 2b: Always-On Error Logging
+
+Even without `--debug-dir`, certain failure modes automatically log diagnostic
+data at `WARN` level — zero cost in the happy path:
+
+| Failure | What is logged |
+|---------|---------------|
+| Utseg pre-validation fails | Full CHAT text + parse error details |
+| Whisper inverted timestamps | Warning with start/end values |
+| MOR item count mismatch | Word count + MOR count + utterance text |
+| Stanza sentence count mismatch | Expected vs actual counts |
 
 ### Tier 3: Dashboard Traces (`debug_traces`)
 
 When `--debug-dir` is specified, `debug_traces` is automatically enabled on job
 submissions. The server collects `FaTimelineTrace` data for each file and
 exposes it via `GET /jobs/{id}/traces` for dashboard visualization.
+
+## Example Workflow: Reproduce a Transcribe-to-Utseg Failure
+
+```bash
+# 1. Run transcription with debug artifacts
+batchalign3 transcribe audio/ output/ --lang eng --debug-dir /tmp/ba3-debug
+
+# 2. If utseg fails, inspect the CHAT that was produced
+cat /tmp/ba3-debug/sample_post_asr.cha
+
+# 3. Validate it offline to find the exact parse error
+cargo run -p talkbank-cli -- validate /tmp/ba3-debug/sample_post_asr.cha
+
+# 4. Without --debug-dir, check server logs for the automatic warn! dump
+```
 
 ## Example Workflow: Reproduce a UTR Failure
 

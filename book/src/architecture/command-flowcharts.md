@@ -1,7 +1,7 @@
 # Command Flowcharts
 
 **Status:** Current
-**Last updated:** 2026-03-14
+**Last updated:** 2026-03-19
 
 Option-driven flowcharts for every batchalign processing command. Each
 diagram shows how CLI flags route through different code paths at runtime.
@@ -91,6 +91,38 @@ flowchart TD
     validate --> done([Output .cha file])
 ```
 
+### UTR Detail: Language-Aware Strategy Selection
+
+When `--utr-strategy auto` (the default), the strategy is selected based on
+both the **language** and the **file content**:
+
+```mermaid
+flowchart TD
+    auto(["--utr-strategy auto"]) --> lang_check{"Language == eng?"}
+    lang_check -->|No| global_safe["GlobalUtr\n(monotonic single-pass)"]
+    lang_check -->|Yes| overlap_check{"File has +< or\nCA overlap markers?"}
+    overlap_check -->|Yes| two_pass["TwoPassOverlapUtr\n(overlap-aware recovery)"]
+    overlap_check -->|No| global_eng["GlobalUtr\n(no overlaps to recover)"]
+
+    explicit_global(["--utr-strategy global"]) --> force_global["GlobalUtr\n(explicit override)"]
+    explicit_two(["--utr-strategy two-pass"]) --> force_two["TwoPassOverlapUtr\n(explicit override)"]
+```
+
+**Why non-English defaults to GlobalUtr:** The two-pass strategy depends on
+accurate ASR token timestamps to recover overlap timing. Non-English ASR
+produces noisier output (wider FA groups, less precise timestamps), causing
+the overlap recovery pass to misalign words and *lose* timing coverage.
+Experimental validation (2026-03-19) on 7 non-English files across 4 languages
+(Hakka, Welsh, German, Serbian) confirmed that GlobalUtr matches or beats
+TwoPassOverlapUtr for every non-English file tested. The language-aware gate
+preserves English gains (+4.3pp SBCSAE, +3.8pp Jefferson) while eliminating
+non-English regressions.
+
+**Implementation:** `resolve_strategy()` in
+`crates/batchalign-app/src/runner/dispatch/utr.rs`. The language gate is in
+the app layer (policy), while `select_strategy()` in
+`batchalign-chat-ops/src/fa/utr.rs` (library) remains language-agnostic.
+
 ### UTR Detail: `run_utr_pass()` internals
 
 The UTR pre-pass and fallback share the same `run_utr_pass()` helper,
@@ -144,21 +176,35 @@ flowchart TD
 Creates CHAT from audio. The longest pipeline, with optional follow-up
 commands chained automatically.
 
+**Important:** Speaker labels from the ASR engine (e.g., Rev.AI monologue
+speaker indices) are **always** used when present, matching batchalign2's
+`process_generation()` which unconditionally reads `utterance["speaker"]`.
+The `--diarization` CLI flag controls only whether a **dedicated** speaker
+model (Pyannote/NeMo) runs as a separate pipeline stage — it does not
+suppress labels the ASR engine already provides.
+
+**Rev.AI `skip_postprocessing`:** For English (`en`) and French (`fr`),
+Rev.AI is called with `skip_postprocessing=true`, matching BA2. This lets
+BA3's own BERT utterance segmentation model handle sentence boundaries from
+raw ASR output, rather than relying on Rev.AI's built-in punctuation which
+produces giant monologue blobs. For all other languages, Rev.AI applies its
+own post-processing.
+
 ```mermaid
 flowchart TD
     start([transcribe invoked]) --> resolve[Resolve audio file]
     resolve --> ensure_wav[ensure_wav — convert if needed]
 
     ensure_wav --> diarize_check{--diarization?}
-    diarize_check -->|Yes| transcribe_s[Command: transcribe_s\nASR + diarization]
-    diarize_check -->|No| transcribe_m[Command: transcribe\nASR only]
+    diarize_check -->|"enabled"| transcribe_s[Command: transcribe_s\nASR + dedicated diarization stage]
+    diarize_check -->|"auto/disabled"| transcribe_m[Command: transcribe\nASR only — speaker labels from ASR\nare still used when present]
 
     transcribe_s --> engine_check
     transcribe_m --> engine_check
 
     engine_check{--asr-engine?}
     engine_check -->|whisper| whisper[Whisper local ASR]
-    engine_check -->|rev| rev_preflight[Rev.AI preflight\nPre-submit audio in parallel]
+    engine_check -->|rev| rev_preflight["Rev.AI preflight\nPre-submit audio in parallel\nskip_postprocessing=true for en/fr"]
     engine_check -->|whisperx| whisperx[WhisperX ASR]
     engine_check -->|whisper_oai| whisper_oai[OpenAI Whisper ASR]
 
@@ -169,33 +215,35 @@ flowchart TD
     whisperx --> asr_tokens
     whisper_oai --> asr_tokens
 
-    asr_tokens[Raw ASR tokens\nword + start_s + end_s + optional speaker + confidence]
-    asr_tokens --> speaker_source{Diarize requested\nand ASR labels missing?}
-    speaker_source -->|No| postprocess
-    speaker_source -->|Yes| speaker_v2[execute_v2(task="speaker")\nprepared audio → raw diarization segments]
+    asr_tokens["Raw ASR tokens\nword + start_s + end_s + optional speaker + confidence"]
+    asr_tokens --> convert["convert_asr_response()\nALWAYS groups tokens by speaker label\nNo use_speaker_labels parameter"]
+    convert --> dedicated_check{"--diarization enabled\nAND ASR lacks speaker labels?"}
+    dedicated_check -->|No| postprocess
+    dedicated_check -->|Yes| speaker_v2["execute_v2(task=speaker)\nprepared audio → raw diarization segments\nDefault: Pyannote — or NeMo via engine_overrides"]
     speaker_v2 --> postprocess
 
-    subgraph postprocess [Rust post-processing pipeline]
+    subgraph postprocess ["Rust post-processing: process_raw_asr()"]
         direction TB
-        p1[1. Compound merging] --> p2[2. Number expansion]
-        p2 --> p3[3. Retokenization]
-        p3 --> p4{lang=yue?}
-        p4 -->|Yes| p4b[4b. Cantonese normalization\nzhconv + domain replacements]
-        p4 -->|No| p5
-        p4b --> p5[5. Long-turn splitting >300 words]
-        p5 --> p6[6. Seconds → milliseconds]
+        p1[1. Compound merging] --> p2[2. Timed word extraction\nseconds → milliseconds]
+        p2 --> p3[3. Multi-word splitting\ntimestamp interpolation]
+        p3 --> p4[4. Number expansion\ndigits → word form]
+        p4 --> p4check{lang=yue?}
+        p4check -->|Yes| p4b["4b. Cantonese normalization\nzhconv + domain replacements"]
+        p4check -->|No| p5
+        p4b --> p5[5. Long-turn splitting\nchunk at >300 words]
+        p5 --> p6[6. Retokenization\npunctuation-based utterance splitting]
     end
 
-    postprocess --> build_chat[build_chat → ChatFile AST\nHeaders, participants, %wor tiers]
+    postprocess --> build_chat["build_chat → ChatFile AST\nHeaders, participants, %wor tiers\nSpeaker codes from ASR labels: PAR, INV, CHI, ..."]
     build_chat --> speaker_apply{Dedicated speaker\nsegments present?}
-    speaker_apply -->|Yes| reassign[batchalign-chat-ops::speaker::reassign_speakers\nrewrite speakers + headers]
-    speaker_apply -->|No| utseg_check{with_utseg?\ndefault: yes}
+    speaker_apply -->|Yes| reassign["reassign_speakers()\nRewrite utterance speakers +\n@Participants + @ID headers\nfrom raw diarization segments"]
+    speaker_apply -->|No| utseg_check{"with_utseg?\ndefault: true"}
     reassign --> utseg_check
 
     utseg_check -->|Yes| run_utseg[process_utseg\nBERT-based re-segmentation]
     utseg_check -->|No| mor_check
 
-    run_utseg --> mor_check{with_morphosyntax?\ndefault: yes}
+    run_utseg --> mor_check{"with_morphosyntax?\ndefault: false"}
     mor_check -->|Yes| run_mor[process_morphosyntax\nPOS + lemma + depparse]
     mor_check -->|No| merge_check
 

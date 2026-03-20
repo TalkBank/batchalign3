@@ -1,7 +1,7 @@
 # Architecture Audit
 
 **Status:** Current
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-20
 
 This page records the current internal architecture audit for `batchalign3`.
 It is intentionally focused on present structure and next refactor targets,
@@ -14,6 +14,33 @@ rather than accumulate inline here.
 This audit material is temporary developer-facing content. Keep it focused on
 the current structure and active refactor fronts rather than letting it turn
 into a historical planning archive.
+
+## 2026-03-20 Review Wave
+
+This review wave paired a full pre-push history cleanup with a fresh audit of
+the code that landed after `origin/main`.
+
+What now looks materially stronger:
+
+- alignment and transcribe behavior are backed by larger parity/golden
+  coverage instead of ad hoc spot checks
+- the worker runtime now has a clearer long-lived process model, explicit GPU
+  pool behavior, and reaper infrastructure instead of one large bootstrap path
+- CLI, dashboard, and migration docs now describe the actual post-cutover
+  behavior rather than intermediate branch states
+- language handling is more explicit and typed at the command boundary
+
+What still needs concentrated follow-up:
+
+- the worker/runtime stack is structurally clearer, but it is still too broad:
+  pool lifecycle, target selection, and process supervision remain tightly
+  coupled
+- some server/store transitions still read like coordinated mutation on a
+  shared registry rather than a smaller actor/reducer boundary
+- the type-driven cleanup is real, but strings and loosely named config fields
+  still cross too many seams before becoming domain types
+- the test surface is much larger, but the cost and runtime of the ML-heavy
+  suites now make suite tiering and ownership more important than before
 
 ## Scope
 

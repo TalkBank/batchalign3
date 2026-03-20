@@ -29,10 +29,7 @@ string_id!(
 /// characters, lowercased. Sentinel values like `"auto"` are rejected — use
 /// [`LanguageSpec`] at boundaries where auto-detection is meaningful.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash,
-    serde::Serialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
+    Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, utoipa::ToSchema, schemars::JsonSchema,
 )]
 #[serde(transparent)]
 pub struct LanguageCode3(pub String);
@@ -104,28 +101,40 @@ impl From<&str> for LanguageCode3 {
 }
 
 impl From<LanguageCode3> for String {
-    fn from(v: LanguageCode3) -> String { v.0 }
+    fn from(v: LanguageCode3) -> String {
+        v.0
+    }
 }
 
 impl std::ops::Deref for LanguageCode3 {
     type Target = str;
-    fn deref(&self) -> &str { &self.0 }
+    fn deref(&self) -> &str {
+        &self.0
+    }
 }
 
 impl AsRef<str> for LanguageCode3 {
-    fn as_ref(&self) -> &str { &self.0 }
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 
 impl PartialEq<&str> for LanguageCode3 {
-    fn eq(&self, other: &&str) -> bool { self.0 == *other }
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
 }
 
 impl std::borrow::Borrow<str> for LanguageCode3 {
-    fn borrow(&self) -> &str { &self.0 }
+    fn borrow(&self) -> &str {
+        &self.0
+    }
 }
 
 impl Default for LanguageCode3 {
-    fn default() -> Self { Self("eng".to_string()) }
+    fn default() -> Self {
+        Self("eng".to_string())
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for LanguageCode3 {

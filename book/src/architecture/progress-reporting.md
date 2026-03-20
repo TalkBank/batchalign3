@@ -1,7 +1,7 @@
 # Progress Reporting
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-19
 
 The server reports per-file progress to all connected clients (CLI, TUI, React
 dashboard) in real time. This chapter covers the data model, data flow, and how
@@ -165,26 +165,118 @@ with a per-file counter as results are saved to disk.
 ### TUI (ratatui)
 
 ```
-  ⠋ corpus001.cha          Aligning  5/12
-  ⠋ corpus002.cha          Resolving audio
-  ✓ corpus003.cha                          2.1s
+  morphotag — 3/50 files  3✓ 2⠋ 1✗ 44·  [00:42]  ~03:15
+  Workers: infer:asr:eng · infer:morphosyntax:eng    Warmup: complete
+  Memory: [████████████░░░░░░░░] 148/256 GB   Gate: 2 GB ● safe
+
+  ⠋ corpus001.cha              ●●●○○  Aligning  5/12  1:23
+  ⠋ corpus002.cha              ●○○○○  Resolving audio  0:05
+  ✓ corpus003.cha                                      2.1s
+  · corpus004.cha
+  ▼ 42 more below
 ```
 
 The TUI render thread owns the full `AppState`, grouped into progress,
-directory-view, error-panel, and interaction sub-state. Polling code only
-sends typed `TuiUpdate` messages, so rendering and navigation state are not
-shared behind a mutex.
+directory-view, error-panel, metrics, and interaction sub-state. Polling code
+only sends typed `TuiUpdate` messages, so rendering and navigation state are
+not shared behind a mutex.
+
+**Header:** Status breakdown (`3✓ 2⠋ 1✗ 44·`), elapsed time, and ETA
+(throughput-based `~MM:SS`). On completion, shows "Done!" or "Done — N failed".
+
+**Pipeline phase dots** — processing file rows show a 5-dot indicator
+(`●●○○○`) using the same phase mapping as the React `PipelineStageBar`.
+Completed phases are green, the active phase is cyan, and future phases are
+gray. Dots only appear when the server reports a typed `progress_stage`.
+
+**Per-file elapsed** — processing files show a running `M:SS` timer from
+`started_at`, helping spot stuck files.
+
+**Scroll indicators** — `▲ N more above` / `▼ N more below` at group edges.
+
+**Auto-collapse** — non-focused all-terminal groups show condensed titles.
+
+**Error codes** — error panel entries include structured codes from poll data.
+
+**Gate warning** — memory gauge warns when near or below gate threshold.
+
+**Health metrics** — the TUI polls `GET /health` every ~5 seconds (slower
+than the job status poll) and renders two rows between the header gauge and
+the directory groups:
+
+- **Worker line**: lists active `live_worker_keys` and warmup status.
+- **Memory gauge**: 20-character bar with used/total GB and gate proximity
+  coloring (green >4×, yellow 2-4×, red <2× headroom above gate threshold).
+
+The `m` key toggles the metrics rows. The `ProgressSink` trait has an
+`update_health()` method (default no-op) that `TuiProgress` implements to
+forward `HealthResponse` into the reducer as a `TuiUpdate::HealthSnapshot`.
 
 ### React Dashboard
 
+The dashboard (`frontend/`) consumes progress data via both WebSocket push
+(real-time `file_update` events) and REST polling (health endpoint for system
+panels). It renders several distinct progress surfaces:
+
+#### File-Level Progress (FileTable)
+
+In `frontend/src/components/FileTable.tsx`, each processing file row shows:
+
+- **Pipeline phase indicator** (`PipelineStageBar`) — 5 compact segments
+  mapping the 23 `FileProgressStage` variants to visual phases:
+  Read → Transcribe → Align → Analyze → Finalize. The active segment pulses
+  using the existing `status-dot-pulse` CSS animation. Completed phases are
+  filled; future phases are gray. Component: `frontend/src/components/PipelineStageBar.tsx`.
 - **Label-only stages**: italic text next to the status dot
-- **Label + counter**: inline blue counter (e.g., "3/12") next to the label
+- **Label + counter**: inline blue mini-bar with counter (e.g., "Aligning 3/7")
 - **Indeterminate shimmer**: shown for batched commands while no files have
   completed, proving the app is alive during the frozen inference window
-- **Stage-specific hints**: subtle italic text below the file row explaining
-  *why* a stage is slow (e.g., "Rev.AI runs roughly in real-time"). Hints are
-  defined in `stageHint()` in `ProcessingProgress.tsx`.
+- **Stage-specific hints**: subtle italic text explaining *why* a stage is slow
+  (e.g., "Rev.AI runs roughly in real-time"). Defined in `stageHint()` in
+  `ProcessingProgress.tsx`.
 - **Elapsed timer**: always visible while running, ticks every second
+
+#### Dashboard System Panels
+
+The main dashboard page (`/dashboard`) uses a two-column layout. The right
+column stacks three system-health panels:
+
+- **WorkerProfilePanel** (`frontend/src/components/WorkerProfilePanel.tsx`) —
+  parses `live_worker_keys` strings from the health endpoint into profile
+  summaries (GPU/Stanza/IO). Shows active/idle counts, languages, engine
+  overrides, and a model-sharing callout for the GPU profile. Also shows
+  warmup status.
+
+- **MemoryPanel** (`frontend/src/components/MemoryPanel.tsx`) — displays system
+  RAM usage from the health endpoint fields `system_memory_total_mb`,
+  `system_memory_available_mb`, `system_memory_used_mb`. Shows a segmented
+  gauge bar with the `memory_gate_threshold_mb` marked as a vertical line.
+  Color-codes proximity to the gate threshold (green/amber/red) and shows
+  cumulative gate rejection count.
+
+- **VitalsRow** (`frontend/src/components/VitalsRow.tsx`) — compact badges for
+  operational counters: `worker_crashes`, `forced_terminal_errors`,
+  `memory_gate_aborts`, `attempts_started`, `attempts_retried`,
+  `deferred_work_units`. Only nonzero counters render. Error counters are red,
+  warnings amber, throughput counters gray.
+
+#### Health Endpoint Memory Fields
+
+The `HealthResponse` struct exposes system memory data for the dashboard:
+
+```rust
+pub system_memory_total_mb: u64,      // sysinfo::total_memory()
+pub system_memory_available_mb: u64,  // sysinfo::available_memory()
+pub system_memory_used_mb: u64,       // total - available
+pub memory_gate_threshold_mb: u64,    // from ServerConfig
+```
+
+These are queried fresh on each `GET /health` call via `sysinfo::System`. On
+macOS, `available_memory()` returns only free + purgeable (not inactive), which
+can undercount effective availability. The dashboard shows the raw values
+without correction.
+
+#### Stage Type Contract
 
 The dashboard should treat `progress_stage` as the stable contract field.
 `progress_label` exists so the UI can render operator-facing text without

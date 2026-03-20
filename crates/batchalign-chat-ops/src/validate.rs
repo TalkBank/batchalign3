@@ -102,10 +102,7 @@ fn check_structurally_complete(file: &ChatFile, errors: &mut Vec<ValidationError
     // CA files (Conversation Analysis) can have utterances without terminators —
     // incomplete turns, backchannels, trailing-off speech. Skip the terminator
     // check when @Options: CA is set.
-    let is_ca = file
-        .options
-        .iter()
-        .any(|f| matches!(f, ChatOptionFlag::Ca));
+    let is_ca = file.options.iter().any(|f| matches!(f, ChatOptionFlag::Ca));
 
     // Check every utterance has a terminator (non-CA) and a declared speaker
     for line in &file.lines {
@@ -318,7 +315,10 @@ mod tests {
         }
 
         let result = validate_to_level(&chat, 0, ValidityLevel::StructurallyComplete);
-        assert!(result.is_err(), "Non-CA files should fail without terminators");
+        assert!(
+            result.is_err(),
+            "Non-CA files should fail without terminators"
+        );
     }
 
     #[test]

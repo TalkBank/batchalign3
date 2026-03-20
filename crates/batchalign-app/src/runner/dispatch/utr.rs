@@ -109,12 +109,10 @@ fn resolve_strategy(
             }
         }
         UtrOverlapStrategy::Global => Box::new(batchalign_chat_ops::fa::GlobalUtr),
-        UtrOverlapStrategy::TwoPass => {
-            Box::new(batchalign_chat_ops::fa::TwoPassOverlapUtr {
-                grouping_context,
-                config: batchalign_chat_ops::fa::TwoPassConfig::default(),
-            })
-        }
+        UtrOverlapStrategy::TwoPass => Box::new(batchalign_chat_ops::fa::TwoPassOverlapUtr {
+            grouping_context,
+            config: batchalign_chat_ops::fa::TwoPassConfig::default(),
+        }),
     }
 }
 

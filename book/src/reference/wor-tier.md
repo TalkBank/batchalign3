@@ -1,5 +1,8 @@
 # %wor Tier Specification
 
+**Status:** Current
+**Last updated:** 2026-03-18
+
 How main tier words map to the %wor (word-level timing) dependent tier.
 
 ## Overview
@@ -146,7 +149,7 @@ is:
 %wor:    I 100_200 want 200_400 I 500_600 need 600_800 cookie 800_1200 .
 ```
 
-The `generate_wor_tier` code calls `for_each_leaf` with `domain=None`,
+The `generate_wor_tier` code calls `walk_words` with `domain=None`,
 which unconditionally descends into all groups including `AnnotatedGroup`
 (retrace/reformulation groups are only skipped for the Mor domain).
 
@@ -203,7 +206,7 @@ A complete %wor tier has:
    `WorTier`
 6. The `WorTier` is serialized via `WriteChat` into the `%wor:\t...` line
 
-Steps 1 and 5 both use `for_each_leaf()` with `domain=None`, guaranteeing
+Steps 1 and 5 both use `walk_words()` with `domain=None`, guaranteeing
 identical traversal order and 1-1 correspondence.
 
 ## Comparison with %mor Domain
@@ -223,29 +226,29 @@ identical traversal order and 1-1 correspondence.
 ## Source Code References
 
 - **Content walker**: `talkbank-model/src/alignment/helpers/walk/` —
-  `for_each_leaf()`, `for_each_leaf_mut()`, `ContentLeaf`, `ContentLeafMut`.
+  `walk_words()`, `walk_words_mut()`, `WordItem`, `WordItemMut`.
   Centralizes recursive traversal of `UtteranceContent` and `BracketedItem`;
   used by %wor generation, FA extraction, FA injection, and FA postprocessing.
 - **Alignability rules**: `talkbank-model/src/alignment/helpers/rules.rs` —
-  `word_is_alignable()`, `should_skip_group()`,
+  `counts_for_tier()`, `should_skip_group()`,
   `should_align_replaced_word_in_pho_sin()`
 - **%wor tier model**: `talkbank-model/src/model/dependent_tier/wor.rs` —
   `WorWord`, `WorTier`, serialization
 - **%wor generation from AST**:
   `talkbank-model/src/model/content/main_tier.rs` —
-  `generate_wor_tier()`, `collect_wor_items_content()` (uses `for_each_leaf`)
+  `generate_wor_tier()`, `collect_wor_items_content()` (uses `walk_words`)
 - **FA word extraction**: `batchalign-chat-ops/src/fa/extraction.rs` —
-  `collect_fa_words()` (uses `for_each_leaf`)
+  `collect_fa_words()` (uses `walk_words`)
 - **Timing injection**: `batchalign-chat-ops/src/fa/injection.rs` —
-  `inject_timings_for_utterance()` (uses `for_each_leaf_mut`)
+  `inject_timings_for_utterance()` (uses `walk_words_mut`)
 - **Timing postprocessing**: `batchalign-chat-ops/src/fa/postprocess.rs` —
-  `postprocess_utterance_timings()` (uses both `for_each_leaf` and `for_each_leaf_mut`)
+  `postprocess_utterance_timings()` (uses both `walk_words` and `walk_words_mut`)
 - **Word categories**:
   `talkbank-model/src/model/content/word/category.rs` —
   `WordCategory` enum
 - **Untranscribed status**:
   `talkbank-model/src/model/content/word/untranscribed.rs` —
   `UntranscribedStatus` enum
-- **Alignment domains**:
+- **Tier domains**:
   `talkbank-model/src/alignment/helpers/domain.rs` —
-  `AlignmentDomain` enum
+  `TierDomain` enum

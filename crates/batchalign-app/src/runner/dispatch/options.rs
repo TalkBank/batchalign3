@@ -18,12 +18,12 @@
 // carried forward for future pipeline wiring even when today's orchestrator
 // does not yet consume them.
 
+use crate::api::DurationMs;
 #[allow(unused_imports)]
 use crate::options::{
     AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, CustomEngineName,
     MorphotagOptions, OpensmileOptions, TranscribeOptions, UtrEngine, UtrOverlapStrategy,
 };
-use crate::api::DurationMs;
 use crate::params::{CachePolicy, FaParams, MergeAbbrevPolicy, WorTierPolicy};
 use batchalign_chat_ops::fa::{FaEngineType, FaTimingMode};
 use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, TokenizationMode};
@@ -570,7 +570,7 @@ mod tests {
                 fa_engine: "wav2vec_fa".into(),
                 utr_engine: None,
                 utr_overlap_strategy: Default::default(),
-            utr_two_pass: Default::default(),
+                utr_two_pass: Default::default(),
                 pauses: false,
                 wor: true.into(),
                 merge_abbrev: false.into(),

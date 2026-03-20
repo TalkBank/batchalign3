@@ -223,10 +223,7 @@ async fn submit_with(plan: &RevAiPreflightPlan, submitter: RevAiSubmitFn) -> Rev
             speakers_count,
             metadata: format!(
                 "batchalign3_{}",
-                audio_path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
+                audio_path.file_stem().unwrap_or_default().to_string_lossy()
             ),
         };
         let submitter = submitter.clone();
@@ -260,7 +257,9 @@ async fn submit_with(plan: &RevAiPreflightPlan, submitter: RevAiSubmitFn) -> Rev
                 result.job_ids.insert(path, RevAiJobId::from(job_id));
             }
             Ok((path, Err(error))) => {
-                result.errors.insert(path.to_string_lossy().into_owned(), error);
+                result
+                    .errors
+                    .insert(path.to_string_lossy().into_owned(), error);
             }
             Err(err) => {
                 result.errors.insert(
@@ -317,7 +316,8 @@ mod tests {
         let result = submit_with(
             &plan,
             Arc::new(|request| {
-                if request.audio_path.ends_with("a.wav") {  // PathBuf ends_with works for last component
+                if request.audio_path.ends_with("a.wav") {
+                    // PathBuf ends_with works for last component
                     Ok("job-a".to_string())
                 } else {
                     Err("boom".to_string())
@@ -327,7 +327,10 @@ mod tests {
         .await;
 
         assert_eq!(
-            result.job_ids.get(&PathBuf::from("/tmp/a.wav")).map(|id| &**id),
+            result
+                .job_ids
+                .get(&PathBuf::from("/tmp/a.wav"))
+                .map(|id| &**id),
             Some("job-a")
         );
         assert_eq!(

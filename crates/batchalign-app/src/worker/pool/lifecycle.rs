@@ -105,8 +105,7 @@ impl WorkerPool {
             if global_total >= global_max {
                 warn!(
                     global_total,
-                    global_max,
-                    "Global worker cap reached, rejecting spawn"
+                    global_max, "Global worker cap reached, rejecting spawn"
                 );
                 return Err(current);
             }

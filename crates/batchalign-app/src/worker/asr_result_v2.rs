@@ -109,7 +109,10 @@ pub fn parse_asr_response_v2(
 }
 
 /// Resolve a worker-provided language against the control-plane fallback.
-fn resolve_worker_lang(worker_lang: &LanguageCode3, fallback_lang: &LanguageCode3) -> LanguageCode3 {
+fn resolve_worker_lang(
+    worker_lang: &LanguageCode3,
+    fallback_lang: &LanguageCode3,
+) -> LanguageCode3 {
     if worker_lang.trim().is_empty() {
         fallback_lang.clone()
     } else {

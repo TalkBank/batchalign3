@@ -469,7 +469,9 @@ fn retokenize(speaker: SpeakerIndex, words: Vec<AsrWord>) -> Vec<Utterance> {
     for word in words {
         // Normalize Japanese period and remove inverted punctuation
         let word = AsrWord {
-            text: word.text.map(|t| t.replace('。', ".").replace(['¿', '¡'], " ")),
+            text: word
+                .text
+                .map(|t| t.replace('。', ".").replace(['¿', '¡'], " ")),
             ..word
         };
 
@@ -490,11 +492,7 @@ fn retokenize(speaker: SpeakerIndex, words: Vec<AsrWord>) -> Vec<Utterance> {
             // Last character is ending punct — split the word
             let text = buf.pop().unwrap();
             let s = text.text.as_str();
-            let last_char_boundary = s
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
+            let last_char_boundary = s.char_indices().next_back().map(|(i, _)| i).unwrap_or(0);
             let word_part = &s[..last_char_boundary];
             let punct_part = &s[last_char_boundary..];
 

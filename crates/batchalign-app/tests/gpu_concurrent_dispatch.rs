@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 
 use batchalign_app::api::LanguageCode3;
 use batchalign_app::types::worker_v2::{
-    AsrBackendV2, AsrInputV2, AsrRequestV2, ExecuteRequestV2, ExecuteResponseV2,
-    InferenceTaskV2, PreparedAudioInputV2, TaskRequestV2, WorkerArtifactIdV2, WorkerRequestIdV2,
+    AsrBackendV2, AsrInputV2, AsrRequestV2, ExecuteRequestV2, ExecuteResponseV2, InferenceTaskV2,
+    PreparedAudioInputV2, TaskRequestV2, WorkerArtifactIdV2, WorkerRequestIdV2,
 };
 use batchalign_app::worker::pool::{PoolConfig, WorkerPool};
 use batchalign_app::worker::{BatchInferRequest, InferTask};
@@ -129,7 +129,12 @@ async fn gpu_concurrent_dispatch_all_responses_arrive() {
         );
     }
 
-    assert_eq!(results.len(), n, "expected {n} responses, got {}", results.len());
+    assert_eq!(
+        results.len(),
+        n,
+        "expected {n} responses, got {}",
+        results.len()
+    );
 
     pool.shutdown().await;
 }
@@ -267,7 +272,10 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
         }));
     }
     for handle in handles {
-        handle.await.expect("task panicked").expect("dispatch failed");
+        handle
+            .await
+            .expect("task panicked")
+            .expect("dispatch failed");
     }
 
     // Health check should still work via the control channel.
@@ -416,7 +424,11 @@ async fn stanza_worker_survives_many_sequential_requests() {
         );
     }
 
-    assert_eq!(pool.worker_count(), 1, "should reuse 1 worker for all 10 requests");
+    assert_eq!(
+        pool.worker_count(),
+        1,
+        "should reuse 1 worker for all 10 requests"
+    );
     pool.shutdown().await;
 }
 
@@ -547,7 +559,11 @@ async fn stanza_sequential_dispatch_reuses_worker() {
     }
 
     // All 5 requests should have used 1 worker.
-    assert_eq!(pool.worker_count(), 1, "expected 1 Stanza worker for sequential dispatch");
+    assert_eq!(
+        pool.worker_count(),
+        1,
+        "expected 1 Stanza worker for sequential dispatch"
+    );
 
     pool.shutdown().await;
 }

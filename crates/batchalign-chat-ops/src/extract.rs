@@ -4,8 +4,8 @@
 //! "alignable" for a given domain (Mor, Wor, Pho, Sin).
 
 use talkbank_model::alignment::helpers::{
-    TierDomain, WordItem, annotations_have_alignment_ignore, walk_words,
-    is_tag_marker_separator, should_align_replaced_word_in_pho_sin, counts_for_tier,
+    TierDomain, WordItem, annotations_have_alignment_ignore, counts_for_tier,
+    is_tag_marker_separator, should_align_replaced_word_in_pho_sin, walk_words,
 };
 use talkbank_model::model::{
     ChatFile, Line, ReplacedWord, Separator, UtteranceContent, Word, WriteChat,
@@ -130,14 +130,8 @@ fn collect_alignable_word(
     });
 }
 
-fn collect_replaced_word(
-    entry: &ReplacedWord,
-    domain: TierDomain,
-    out: &mut Vec<ExtractedWord>,
-) {
-    if domain == TierDomain::Mor
-        && annotations_have_alignment_ignore(&entry.scoped_annotations)
-    {
+fn collect_replaced_word(entry: &ReplacedWord, domain: TierDomain, out: &mut Vec<ExtractedWord>) {
+    if domain == TierDomain::Mor && annotations_have_alignment_ignore(&entry.scoped_annotations) {
         return;
     }
 

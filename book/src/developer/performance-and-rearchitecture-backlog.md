@@ -1,7 +1,7 @@
 # Performance and Re-Architecture Backlog
 
 **Status:** Current
-**Last updated:** 2026-03-14
+**Last updated:** 2026-03-20
 
 This is a running developer-facing backlog for opportunities spotted during
 architecture work, code audits, and routine refactors.
@@ -23,6 +23,48 @@ follow-on opportunities that remain once that migration is underway.
 The Python cutover is complete. Live audio tasks and text-only NLP tasks now
 use the typed V2 worker protocol; the remaining backlog is about tightening the
 last compatibility seams and improving throughput on top of that boundary.
+
+## 2026-03-20 Review Additions
+
+These items were promoted during the pre-push review and history cleanup.
+
+### A. Split worker supervision from worker selection
+
+The new TCP/persistent-worker path is a real improvement, but pool lifecycle,
+GPU sharing, target resolution, and stale-process cleanup still live too close
+to each other.
+
+Potential directions:
+
+- split worker target planning from process lifecycle ownership
+- make stale/crashed-worker cleanup one explicit subsystem with narrow inputs
+- keep per-resource-class scheduling separate from daemon bootstrap/reap logic
+
+### B. Remove the remaining stringly typed configuration seams
+
+The newtype push landed in important server paths, but several config and
+request seams still accept strings or loosely named fields before converting
+them deeper in the stack.
+
+Potential directions:
+
+- convert command/runtime identifiers at boundary entry instead of in interior
+  helpers
+- keep language, worker-target, and artifact identifiers typed end to end
+- audit display labels versus semantic stage identifiers so operators see
+  strings but internals do not depend on them
+
+### C. Tier the ML-heavy test matrix explicitly
+
+Coverage is better, but the suite now mixes fast structural checks with slow
+runtime-heavy golden verification.
+
+Potential directions:
+
+- define explicit fast, medium, and heavy verification tiers
+- make ownership clear for snapshot/golden regeneration workflows
+- isolate environment-sensitive suites so concurrency and timeout issues are
+  diagnosed as harness problems rather than product regressions
 
 ## How to use this page
 

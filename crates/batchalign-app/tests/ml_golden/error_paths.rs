@@ -5,12 +5,10 @@
 //!
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
-use batchalign_app::api::{FilePayload, JobStatus, JobSubmission, NumSpeakers};
-use batchalign_app::options::{
-    AlignOptions, CommandOptions, CommonOptions, MorphotagOptions,
-};
-use batchalign_app::worker::InferTask;
 use crate::common::{poll_job_done, require_live_server, submit_and_complete};
+use batchalign_app::api::{FilePayload, JobStatus, JobSubmission, NumSpeakers};
+use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
+use batchalign_app::worker::InferTask;
 
 // ---------------------------------------------------------------------------
 // Error path tests
@@ -19,8 +17,7 @@ use crate::common::{poll_job_done, require_live_server, submit_and_complete};
 /// Align with missing audio should fail gracefully (not crash the server).
 #[tokio::test]
 async fn error_align_missing_audio() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };

@@ -446,7 +446,11 @@ fn test_fuzzy_exact_match_is_fast_path() {
         MatchMode::Fuzzy { threshold: 0.90 },
     );
     assert_eq!(result.len(), 2);
-    assert!(result.iter().all(|r| matches!(r, AlignResult::Match { .. })));
+    assert!(
+        result
+            .iter()
+            .all(|r| matches!(r, AlignResult::Match { .. }))
+    );
 }
 
 #[test]
@@ -470,8 +474,16 @@ fn test_fuzzy_dissimilar_words_dont_match() {
         MatchMode::Fuzzy { threshold: 0.80 },
     );
     // Should produce extra payload + extra reference (no match)
-    assert!(result.iter().any(|r| matches!(r, AlignResult::ExtraPayload { .. })));
-    assert!(result.iter().any(|r| matches!(r, AlignResult::ExtraReference { .. })));
+    assert!(
+        result
+            .iter()
+            .any(|r| matches!(r, AlignResult::ExtraPayload { .. }))
+    );
+    assert!(
+        result
+            .iter()
+            .any(|r| matches!(r, AlignResult::ExtraReference { .. }))
+    );
 }
 
 #[test]
@@ -489,11 +501,15 @@ fn test_fuzzy_threshold_controls_strictness() {
     );
     // Strict should NOT match, lenient SHOULD
     assert!(
-        strict.iter().any(|r| matches!(r, AlignResult::ExtraPayload { .. })),
+        strict
+            .iter()
+            .any(|r| matches!(r, AlignResult::ExtraPayload { .. })),
         "strict threshold should reject"
     );
     assert!(
-        lenient.iter().all(|r| matches!(r, AlignResult::Match { .. })),
+        lenient
+            .iter()
+            .all(|r| matches!(r, AlignResult::Match { .. })),
         "lenient threshold should accept"
     );
 }
@@ -529,7 +545,9 @@ fn test_fuzzy_backchannel_variants() {
     let result = align(&transcript, &asr, MatchMode::Fuzzy { threshold: 0.80 });
     // "mhm" vs "mmhm" — JW ~0.83
     assert!(
-        result.iter().any(|r| matches!(r, AlignResult::Match { .. })),
+        result
+            .iter()
+            .any(|r| matches!(r, AlignResult::Match { .. })),
         "mhm/mmhm should fuzzy-match at 0.80 threshold"
     );
 }

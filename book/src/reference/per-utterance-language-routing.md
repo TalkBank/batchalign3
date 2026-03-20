@@ -1,55 +1,72 @@
 # Per-Utterance Language Routing
 
-**Status:** Current behavior reference  
-**Last verified:** 2026-03-05
+**Status:** Current
+**Last updated:** 2026-03-19
 
-## Current behavior
+## What it does
 
-Batchalign supports per-utterance language handling through utterance-level
-language directives and file-level language metadata.
+When a CHAT file contains utterances in multiple languages, batchalign3
+routes each utterance to the correct language-specific Stanza model for
+morphosyntax analysis. This means a bilingual interview where the
+interviewer speaks English and the participant speaks French will get
+correct `%mor` and `%gra` tiers for both languages — each processed by
+the appropriate Stanza pipeline.
 
-Current practical behavior:
+## How it works
 
-- utterance language information is represented in the parsed CHAT structure
-- current morphosyntax/runtime paths can use utterance-level language
-  information when deciding how to process or skip utterances
-- this is the supported current language-routing boundary in the public product
+Language is determined per utterance in this priority order:
 
-## Why this matters
+1. **`[- lang]` precode** on the utterance (e.g., `[- fra]`) — highest priority
+2. **`@Languages` header** — first declared language used as fallback
+3. **`--lang` CLI flag** — used when no file-level language is declared
 
-Per-utterance routing is the current released mechanism for multilingual
-handling that is more precise than a single file-wide language and simpler than
-full per-word routing.
+For example, in a bilingual English/French file:
 
-This is the important distinction for users:
+```
+@Languages: eng, fra
+*INV: how are you today ? 0_3000
+*PAR: [- fra] je suis bien merci . 3000_6000
+```
 
-- file-wide language alone is often too coarse for multilingual corpora
-- per-word routing is not the current public runtime boundary
-- per-utterance routing is the supported middle ground
+The investigator's utterance is processed with the English Stanza pipeline,
+and the participant's utterance (marked `[- fra]`) is processed with the
+French Stanza pipeline.
 
-## Interaction with `skipmultilang`
+## Stanza pipeline loading
 
-Current logic may use utterance-level language directives to decide whether an
-utterance should be processed normally or skipped under multilingual-safety
-rules, depending on command options and workflow.
+Stanza pipelines are loaded **on demand**. The worker starts with the
+primary language model, then loads additional language models as it
+encounters utterances in new languages. This means:
 
-## Relationship to current migration story
+- No upfront cost for monolingual files (only one model loaded)
+- First utterance in a new language may take a few seconds (model download + load)
+- Subsequent utterances in the same language reuse the loaded pipeline
 
-If you are comparing released BA2 to current BA3, the migration-relevant point
-is that current BA3 is more explicit about language-aware routing boundaries and
-about what is handled at utterance level versus what is not handled at word
-level.
+## Improvement over batchalign2
 
-The full Jan 9 BA2 -> Feb 9 BA2 -> current BA3 history belongs in the migration
-book, not here.
+batchalign2 parsed the `[- lang]` precode but **did not use it for
+routing** — all utterances were processed with the primary language's
+Stanza pipeline regardless of their language directive. Non-primary
+utterances either got wrong-language morphosyntax (default) or were
+skipped entirely (`skipmultilang=True`).
 
-## Current limit
+batchalign3 implements true per-utterance routing: each language group
+is batched separately and sent to its own Stanza pipeline.
 
-Per-utterance routing should not be read as full per-word bilingual analysis.
-That richer behavior is outside the current released public contract.
+## Limitations
 
-See:
+- **Per-word routing is not supported.** Words marked with `@s:lang`
+  (language-switched words within an utterance) are not routed to a
+  different Stanza model. They receive an `L2|xxx` placeholder in `%mor`.
+  See [Per-Word Language Routing](per-word-language-routing.md).
 
-- [Per-Word Language Routing](per-word-language-routing.md)
-- [Multilingual Support](multilingual.md)
-- [Language Data Model](language-handling.md)
+- **ASR is not per-utterance.** The `--lang` flag selects a single ASR
+  engine/model for the entire file. Transcription of multilingual audio
+  uses one language model throughout.
+
+## See also
+
+- [Per-Word Language Routing](per-word-language-routing.md) — `@s:` handling
+- [Multilingual Support](multilingual.md) — overview
+- [Language Code Resolution](language-code-resolution.md) — how codes map to models
+- [Language Data Model](language-handling.md) — internal representation

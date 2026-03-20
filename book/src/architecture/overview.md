@@ -1,7 +1,7 @@
 # Data Flow Overview
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-18
 
 This document traces the complete data flow for every batchalign command,
 from CLI invocation through the Rust server to Python ML inference and back.
@@ -157,17 +157,28 @@ infer only when all inputs are CHAT files (not raw audio).
 audio file
   → Rust Rev.AI client OR worker execute_v2(task="asr")
     → Python: run ASR model/SDK → typed raw ASR result
+  → Rust: convert_asr_response() — ALWAYS groups tokens by speaker label
+    (no use_speaker_labels param; matches BA2 process_generation())
+  → optional: dedicated diarization (--diarization enabled AND ASR lacks labels)
+    → execute_v2(task="speaker") → Pyannote/NeMo segments
   → Rust: process_raw_asr() (batchalign-chat-ops/src/asr_postprocess/)
-    - compound merging (adjacent subword tokens)
-    - num2words conversion (digits → spelled-out words)
-    - Cantonese normalization (simplified → HK traditional, if applicable)
-    - timing: seconds → milliseconds
-    - long-turn splitting (>300 words, split on punctuation)
+    1. compound merging (adjacent subword tokens)
+    2. timed word extraction (seconds → milliseconds)
+    3. multi-word splitting (timestamp interpolation)
+    4. number expansion (digits → spelled-out words)
+    4b. Cantonese normalization (lang=yue: simplified → HK traditional)
+    5. long-turn splitting (chunk at >300 words)
+    6. retokenization (punctuation-based utterance splitting)
   → Rust: build_chat() → ChatFile AST with headers, utterances, %wor tiers
-  → optional: process_utseg() → re-segment utterances
-  → optional: process_morphosyntax() → add %mor/%gra tiers
+  → optional: reassign_speakers() if dedicated diarization segments present
+  → optional: process_utseg() → re-segment utterances (default: on)
+  → optional: process_morphosyntax() → add %mor/%gra tiers (default: off)
   → validate → serialize → CHAT text out
 ```
+
+**Rev.AI settings:** For Rev.AI-backed transcription, `skip_postprocessing=true`
+is sent for English and French (matching BA2), letting BA3's own utseg BERT
+model handle segmentation. `speakers_count` is sent for English and Spanish.
 
 **Rev.AI preflight:** For Rev.AI-backed transcription and Rev-backed UTR, the
 Rust server can pre-submit all audio files in parallel before the per-file

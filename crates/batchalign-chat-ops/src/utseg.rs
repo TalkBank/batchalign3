@@ -59,11 +59,7 @@ pub fn collect_utseg_payloads(chat_file: &ChatFile) -> Vec<(usize, UtsegBatchIte
         };
 
         let mut words = Vec::new();
-        extract::collect_utterance_content(
-            &utt.main.content.content,
-            TierDomain::Mor,
-            &mut words,
-        );
+        extract::collect_utterance_content(&utt.main.content.content, TierDomain::Mor, &mut words);
 
         if words.len() > 1 {
             // Single pass: build both `text` (space-joined) and `word_texts` together
@@ -161,11 +157,7 @@ pub fn build_word_to_content_map(content: &[UtteranceContent]) -> Vec<usize> {
 
     for (content_idx, item) in content.iter().enumerate() {
         let mut words = Vec::new();
-        extract::collect_utterance_content(
-            std::slice::from_ref(item),
-            TierDomain::Mor,
-            &mut words,
-        );
+        extract::collect_utterance_content(std::slice::from_ref(item), TierDomain::Mor, &mut words);
         for _ in &words {
             word_to_content.push(content_idx);
         }

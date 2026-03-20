@@ -86,7 +86,19 @@ pub enum WorkerKindV2 {
 }
 
 /// High-level V2 task family.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceTaskV2 {
     /// Morphosyntax tagging.

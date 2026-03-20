@@ -312,9 +312,9 @@ pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, 
     );
 
     let mut child: Command = cmd.into();
-    let mut child = child.spawn().map_err(|e| {
-        WorkerError::SpawnFailed(format!("failed to spawn TCP worker daemon: {e}"))
-    })?;
+    let mut child = child
+        .spawn()
+        .map_err(|e| WorkerError::SpawnFailed(format!("failed to spawn TCP worker daemon: {e}")))?;
 
     // Read stderr for the ready signal: {"ready": true, "pid": N, "transport": "tcp", "port": P}
     let stderr = child

@@ -4,14 +4,14 @@
 //! - prepared workers stay warm across isolated server sessions
 //! - each acquired session gets a fresh runtime layout with no prior jobs
 
+use crate::common::{
+    LiveServerSession, assert_completed_without_errors, require_live_server, submit_and_complete,
+};
 use batchalign_app::api::FilePayload;
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CorefOptions, MorphotagOptions, TranslateOptions, UtsegOptions,
 };
 use batchalign_app::worker::InferTask;
-use crate::common::{
-    LiveServerSession, assert_completed_without_errors, require_live_server, submit_and_complete,
-};
 
 /// Minimal English CHAT sample for morphotag fixture checks.
 const ENG_SIMPLE: &str = "\

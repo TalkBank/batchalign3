@@ -15,24 +15,24 @@
 //!
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
+use crate::common::{
+    assert_completed_without_errors, prepare_audio_fixtures, prepare_named_audio,
+    require_live_server, require_revai_key, submit_paths_and_complete,
+};
 use batchalign_app::api::JobStatus;
 use batchalign_app::options::{
     AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, FaEngineName,
     OpensmileOptions, TranscribeOptions, WorTierPolicy,
 };
 use batchalign_app::worker::InferTask;
-use crate::common::{
-    assert_completed_without_errors, prepare_audio_fixtures, prepare_named_audio,
-    require_live_server, require_revai_key, submit_paths_and_complete,
-};
 
 // ---------------------------------------------------------------------------
 // Structural assertion helpers (AST-based, not string hacking)
 // ---------------------------------------------------------------------------
 
+use batchalign_chat_ops::TierDomain;
 use batchalign_chat_ops::extract::extract_words;
 use batchalign_chat_ops::parse::parse_lenient;
-use batchalign_chat_ops::TierDomain;
 
 /// Parse CHAT text into a typed AST, asserting no parse errors.
 fn parse_chat(chat: &str, label: &str) -> batchalign_chat_ops::ChatFile {
@@ -93,8 +93,7 @@ fn assert_valid_chat_structure(chat: &str, label: &str) {
 /// Forced alignment with Wave2Vec, %wor tier included.
 #[tokio::test]
 async fn golden_align_eng_wav2vec() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };
@@ -103,7 +102,9 @@ async fn golden_align_eng_wav2vec() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_align_wav2vec"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_align_wav2vec");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
@@ -142,8 +143,7 @@ async fn golden_align_eng_wav2vec() {
 /// Forced alignment with Whisper FA engine, %wor tier included.
 #[tokio::test]
 async fn golden_align_eng_whisper_fa() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };
@@ -152,7 +152,9 @@ async fn golden_align_eng_whisper_fa() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_align_whisper"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_align_whisper");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
@@ -191,8 +193,7 @@ async fn golden_align_eng_whisper_fa() {
 /// Forced alignment with %wor tier excluded.
 #[tokio::test]
 async fn golden_align_eng_no_wor() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };
@@ -201,7 +202,9 @@ async fn golden_align_eng_no_wor() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_align_no_wor"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_align_no_wor");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
@@ -255,7 +258,9 @@ async fn golden_transcribe_eng_whisper() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_whisper"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_transcribe_whisper");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
@@ -313,7 +318,9 @@ async fn golden_transcribe_eng_revai() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_revai"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_transcribe_revai");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
@@ -362,7 +369,9 @@ async fn golden_transcribe_eng_whisper_wor() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_wor"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_transcribe_wor");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
@@ -422,7 +431,9 @@ async fn golden_opensmile_eng() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_opensmile"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.csv");
+    let out_dir = server.state_dir().join("out_opensmile");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.csv");
 
     let options = CommandOptions::Opensmile(OpensmileOptions {
         common: CommonOptions {
@@ -460,8 +471,11 @@ async fn golden_opensmile_eng() {
 /// Benchmark (WER) with real audio and gold CHAT.
 #[tokio::test]
 async fn golden_benchmark_eng() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer (required for benchmark)").await
+    let Some(server) = require_live_server(
+        InferTask::Asr,
+        "Server does not support ASR infer (required for benchmark)",
+    )
+    .await
     else {
         return;
     };
@@ -566,20 +580,13 @@ async fn transcribe_audio_clip(audio_name: &str, lang: &str, label: &str) {
 }
 
 /// Helper: align a named audio clip with its timed CHAT and assert timing output.
-async fn align_audio_clip(
-    audio_name: &str,
-    chat_name: &str,
-    lang: &str,
-    label: &str,
-) {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+async fn align_audio_clip(audio_name: &str, chat_name: &str, lang: &str, label: &str) {
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) =
-        prepare_named_audio(server.state_dir(), audio_name, Some(chat_name))
+    let Some(fixtures) = prepare_named_audio(server.state_dir(), audio_name, Some(chat_name))
     else {
         return;
     };
@@ -637,13 +644,7 @@ async fn transcribe_spa_whisper() {
 
 #[tokio::test]
 async fn align_spa_wav2vec() {
-    align_audio_clip(
-        "spa_marrero_clip",
-        "spa_marrero_timed",
-        "spa",
-        "align_spa",
-    )
-    .await;
+    align_audio_clip("spa_marrero_clip", "spa_marrero_timed", "spa", "align_spa").await;
 }
 
 // --- French ---
@@ -655,13 +656,7 @@ async fn transcribe_fra_whisper() {
 
 #[tokio::test]
 async fn align_fra_wav2vec() {
-    align_audio_clip(
-        "fra_geneva_clip",
-        "fra_geneva_timed",
-        "fra",
-        "align_fra",
-    )
-    .await;
+    align_audio_clip("fra_geneva_clip", "fra_geneva_timed", "fra", "align_fra").await;
 }
 
 // --- Japanese ---
@@ -673,13 +668,7 @@ async fn transcribe_jpn_whisper() {
 
 #[tokio::test]
 async fn align_jpn_wav2vec() {
-    align_audio_clip(
-        "jpn_tyo_clip",
-        "jpn_tyo_timed",
-        "jpn",
-        "align_jpn",
-    )
-    .await;
+    align_audio_clip("jpn_tyo_clip", "jpn_tyo_timed", "jpn", "align_jpn").await;
 }
 
 // --- Cantonese ---
@@ -691,13 +680,7 @@ async fn transcribe_yue_whisper() {
 
 #[tokio::test]
 async fn align_yue_wav2vec() {
-    align_audio_clip(
-        "yue_hku_clip",
-        "yue_hku_timed",
-        "yue",
-        "align_yue",
-    )
-    .await;
+    align_audio_clip("yue_hku_clip", "yue_hku_timed", "yue", "align_yue").await;
 }
 
 // --- Bilingual ---
@@ -756,7 +739,9 @@ async fn transcribe_eng_diarize() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_diarize"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_transcribe_diarize");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
@@ -806,7 +791,9 @@ async fn parity_transcribe_disfluency_markup() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_disfluency"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_disfluency");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
@@ -861,7 +848,9 @@ async fn parity_transcribe_retrace_markup() {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_retrace"); std::fs::create_dir_all(&out_dir).expect("mkdir"); let output_path = out_dir.join("test.cha");
+    let out_dir = server.state_dir().join("out_retrace");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let output_path = out_dir.join("test.cha");
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {

@@ -1,5 +1,8 @@
 # Dynamic Programming in batchalign3
 
+**Status:** Current
+**Last updated:** 2026-03-18
+
 ## Purpose
 
 This document inventories all runtime uses of dynamic programming (DP) in
@@ -87,6 +90,80 @@ runtime DP callsites appear outside allowlisted surfaces. The allowlist permits:
 - `crates/batchalign-chat-ops/src/compare.rs` — transcript comparison (1 call)
 - `crates/batchalign-chat-ops/src/fa/utr.rs` — UTR timing recovery (1 call)
 
+## Fuzzy Matching in DP Alignment
+
+The DP aligner supports three word-comparison modes via the `MatchMode` enum:
+
+```mermaid
+flowchart LR
+    words["Word pair:<br/>transcript 'gonna'<br/>ASR 'gona'"]
+
+    subgraph Exact["MatchMode::Exact"]
+        exact_cmp["'gonna' == 'gona'?"]
+        exact_no["NO match<br/>cost = 2 (substitution)"]
+    end
+
+    subgraph CaseInsensitive["MatchMode::CaseInsensitive"]
+        ci_cmp["'gonna' =~ 'gona'?<br/>(case-insensitive)"]
+        ci_no["NO match<br/>cost = 2"]
+    end
+
+    subgraph Fuzzy["MatchMode::Fuzzy threshold=0.85"]
+        fast["Fast path:<br/>exact case-insensitive?"]
+        jw["Jaro-Winkler similarity:<br/>JW('gonna','gona') = 0.95"]
+        threshold{"0.95 >= 0.85?"}
+        fuzzy_yes["YES match!<br/>cost = 0"]
+    end
+
+    words --> exact_cmp --> exact_no
+    words --> ci_cmp --> ci_no
+    words --> fast -->|"no"| jw --> threshold -->|"yes"| fuzzy_yes
+
+    style Fuzzy fill:#e8f4e8
+    style fuzzy_yes fill:#90ee90
+```
+
+**How Jaro-Winkler works:** Compares two strings by counting matching
+characters within a distance window, penalizing transpositions, and
+boosting for common prefixes. Returns a similarity score from 0.0
+(completely different) to 1.0 (identical). Better than Levenshtein for
+short words because it doesn't penalize length differences as harshly.
+
+**Why fuzzy helps DP alignment:** Without fuzzy matching, a single ASR
+substitution ("gonna" vs "gona") forces the DP to treat it as a gap
+(cost 2) rather than a match (cost 0). This can cascade — the mismatched
+word shifts subsequent alignments, potentially leaving entire utterances
+unmatched. With fuzzy matching, the substitution is recognized as a match,
+keeping the alignment anchored.
+
+**Impact on DP cost matrix:**
+
+```
+Without fuzzy:            With fuzzy (0.85):
+  g o n a                   g o n a
+g [0 1 2 3]               g [0 _ _ _]  ← match at (0,0)
+o [1 0 1 2]               o [_ _ _ _]
+n [2 1 0 1]               n [_ _ _ _]
+n [3 2 1 2]  ← mismatch   a [_ _ _ 0]  ← fuzzy match!
+a [4 3 2 2]
+```
+
+The fuzzy match produces cost 0 for the "gonna"/"gona" pair, allowing
+the DP to find a shorter path through the cost matrix.
+
+**Default threshold (0.85):** Tuned empirically across 6 corpora and
+59 files. Jaro-Winkler similarity examples at this threshold:
+
+| Pair | JW | Match at 0.85? |
+|------|-----|---------------|
+| "gonna" / "gona" | 0.95 | Yes |
+| "went" / "wen" | 0.94 | Yes |
+| "yesterday" / "yestarday" | 0.92 | Yes |
+| "mhm" / "mmhm" | 0.83 | No |
+| "the" / "da" | 0.00 | No |
+| "he" / "she" | 0.61 | No |
+| "cat" / "dog" | 0.00 | No |
+
 ## Algorithmic optimizations (dp_align.rs)
 
 The Hirschberg implementation includes two optimizations beyond the
@@ -103,6 +180,83 @@ middle portion enters Hirschberg recursion.
 Monomorphization ensures zero overhead while eliminating ~200 lines of
 duplicated code (4 pairs of copy-pasted functions unified into 4 generic
 functions).
+
+## UTR Strategy: Two-Pass Overlap-Aware Alignment
+
+When the file has overlap markers (`+<` linkers or CA `⌊` markers), UTR
+uses a two-pass strategy to handle backchannel timing recovery:
+
+```mermaid
+flowchart TD
+    file["CHAT file with overlaps"]
+    density{"Overlap density<br/>> 30%?"}
+
+    subgraph Pass1["Pass 1: Global DP"]
+        exclude["Exclude overlap utterances<br/>from word sequence"]
+        include["Include ALL utterances<br/>(density too high to exclude)"]
+        global["Hirschberg DP alignment<br/>(fuzzy matching 0.85)"]
+    end
+
+    subgraph Pass2["Pass 2: Backchannel Recovery"]
+        find_pred["Find predecessor utterance"]
+        ca_check{"Predecessor has<br/>CA marker ⌈?"}
+        full_window["Search full predecessor<br/>time range"]
+        narrow_window["Narrow search to<br/>onset position ± buffer"]
+        windowed_dp["Small windowed DP<br/>on ASR tokens in window"]
+    end
+
+    subgraph Fallback["Best-of-Both Comparison"]
+        compare{"Two-pass creates<br/>fewer FA groups?"}
+        keep["Keep two-pass result"]
+        revert["Revert to global result"]
+    end
+
+    file --> density
+    density -->|"no (<= 30%)"| exclude --> global
+    density -->|"yes (> 30%)"| include --> global
+    global --> find_pred --> ca_check
+    ca_check -->|"yes"| narrow_window --> windowed_dp
+    ca_check -->|"no"| full_window --> windowed_dp
+    windowed_dp --> compare
+    compare -->|"no (equal or more)"| keep
+    compare -->|"yes (fewer groups)"| revert
+
+    style Pass1 fill:#e8e8f4
+    style Pass2 fill:#e8f4e8
+    style Fallback fill:#f4e8e8
+```
+
+### Configurable Parameters
+
+| Flag | Default | What it controls |
+|------|---------|-----------------|
+| `--utr-strategy` | `auto` | `auto` (detect overlaps), `global`, `two-pass` |
+| `--utr-ca-markers` | `enabled` | Use ⌈⌉⌊⌋ for onset windowing |
+| `--utr-density-threshold` | `0.30` | Max overlap fraction before skipping exclusion |
+| `--utr-tight-buffer` | `500` | Pass-2 tight window ±ms |
+| `--utr-fuzzy` | `0.85` | Jaro-Winkler similarity threshold |
+
+### CA Marker Onset Estimation
+
+When a predecessor utterance has ⌈ markers, the proportional position of
+⌈ among the utterance's words estimates when overlap begins:
+
+```mermaid
+flowchart LR
+    utt["*SPK: no pues de lo que sea ⌈tengo media hora⌉<br/>12660_15585"]
+
+    frac["⌈ at word 7 of 10<br/>fraction = 0.6"]
+    onset["onset = 12660 + 0.6 × (15585-12660)<br/>= 14415ms"]
+    window["Search window:<br/>14415 ± 500ms<br/>(vs full 12660-15585)"]
+
+    utt --> frac --> onset --> window
+
+    style window fill:#90ee90
+```
+
+This narrows the pass-2 search window from the full predecessor range
+(~3 seconds in this example) to ~1 second around the estimated onset —
+roughly a 3x reduction in search space.
 
 ## Known DP Failure Modes
 

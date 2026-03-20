@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::api::{ContentType, FileName, FileResult, FileStatusKind, JobId, JobInfo, JobResultResponse, JobStatus};
+use crate::api::{
+    ContentType, FileName, FileResult, FileStatusKind, JobId, JobInfo, JobResultResponse, JobStatus,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 

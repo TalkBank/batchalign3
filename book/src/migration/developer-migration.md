@@ -1,7 +1,7 @@
 # Developer Architecture Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-18
 
 Comparison anchors for this page:
 
@@ -82,7 +82,106 @@ Jan 9 BA2 → Feb 9 BA2 → BA3 framing. Feb 9 BA2 already gained cache,
 dispatch, and morphotag/alignment cleanup; BA3 moves orchestration, typed
 contracts, and CHAT ownership into Rust.
 
-## 2) Codebase crosswalk for contributors
+## 2) Concurrency and worker model
+
+### batchalign2 model
+
+batchalign2-master (anchored at `84ad500b`) uses Python's `concurrent.futures`
+directly:
+
+```mermaid
+flowchart TD
+    cli["CLI dispatch"]
+    classify{"Engine pool-safe?"}
+    thread["ThreadPoolExecutor\n(shared pipeline, mutex)"]
+    process["ProcessPoolExecutor\n(forked, model copy per worker)"]
+    file1["Worker: process file A"]
+    file2["Worker: process file B"]
+
+    cli --> classify
+    classify -->|"Rev.AI, Google Translate"| thread
+    classify -->|"Whisper, Wave2Vec, Stanza"| process
+    thread --> file1
+    thread --> file2
+    process --> file1
+    process --> file2
+```
+
+Key characteristics:
+
+- **Pool-safe engines** (Rev.AI, Google Translate): `ThreadPoolExecutor` — one
+  pipeline loaded in the main process, threads share models via a mutex.
+  Memory-efficient but limited to API-backed or thread-safe engines.
+- **Pool-unsafe engines** (Whisper, Wave2Vec, Stanza, Pyannote): `ProcessPoolExecutor`
+  — each worker is a forked subprocess with its own model copies. N workers = N×
+  model memory.
+- **Adaptive worker capping**: monitors RSS peaks and throttles new submissions
+  when available memory drops below a reserve (10% of system RAM).
+- **File sorting**: largest files dispatched first to prevent straggler effects.
+- **No persistent workers**: executors are job-scoped — all workers die after
+  each job completes. Next job reloads models from scratch.
+- **Optional shared-models mode** (`--shared-models`): uses `fork()` to inherit
+  parent's loaded models. Linux-only, disabled on macOS+MPS, crash-prone.
+
+Memory characteristics (from BA2 benchmarks):
+
+| Workload | Per-worker peak | Workers | Total |
+|----------|----------------|---------|-------|
+| `align` (Whisper+Wave2Vec) | 3.0–4.2 GB | 4 | ~16 GB |
+| `morphotag` (Stanza) | 1.1–2.5 GB | 4 | ~10 GB |
+
+### batchalign3 model
+
+batchalign3 uses a Rust control plane with persistent Python worker
+subprocesses:
+
+```mermaid
+flowchart TD
+    server["Rust server (batchalign-app)"]
+    pool["WorkerPool"]
+    profile{"WorkerProfile"}
+    gpu["SharedGpuWorker\n1 process, ThreadPoolExecutor\n(ASR + FA + Speaker models)"]
+    stanza["WorkerGroup\nN processes, exclusive checkout\n(Stanza NLP models)"]
+    io["WorkerGroup\n1 process, exclusive checkout\n(Translation, OpenSMILE, AVQI)"]
+    t1["Thread 1: FA file A"]
+    t2["Thread 2: FA file B"]
+    t3["Thread 3: ASR file C"]
+
+    server --> pool
+    pool --> profile
+    profile -->|GPU| gpu
+    profile -->|Stanza| stanza
+    profile -->|IO| io
+    gpu --> t1
+    gpu --> t2
+    gpu --> t3
+```
+
+Key differences from BA2:
+
+| Dimension | BA2 | BA3 |
+|-----------|-----|-----|
+| **Worker lifetime** | Job-scoped (die after each job) | Persistent (idle timeout 10 min) |
+| **Model loading** | Fresh per worker per job | Load once at startup, reused |
+| **GPU model sharing** | Fork-based (crash-prone) or none | ThreadPoolExecutor inside one process (GIL-release) |
+| **CPU parallelism** | ProcessPoolExecutor (N copies) | Stanza profile: N persistent subprocesses |
+| **Concurrency control** | Adaptive RSS monitoring | Auto-tuned + memory gate + per-profile limits |
+| **Worker health** | None | Health checks every 30s, auto-restart |
+| **Warmup** | None (cold start every job) | Concurrent background warmup at server start |
+| **File ordering** | Largest-first sorting | Submission order (largest-first planned) |
+
+Memory comparison (mixed English workload — align + morphotag):
+
+| System | GPU workers | Stanza workers | Total |
+|--------|------------|----------------|-------|
+| BA2 (4 process workers) | 4 × ~4 GB = ~16 GB | 4 × ~2.5 GB = ~10 GB | ~26 GB |
+| BA3 (profiles) | 1 × ~5 GB (shared) | 2 × ~2 GB = ~4 GB | ~9 GB |
+
+The ~3× memory reduction comes from two sources:
+1. GPU profile shares ASR, FA, and Speaker models in one process (vs 3 separate)
+2. Persistent workers eliminate per-job model reloading overhead
+
+## 3) Codebase crosswalk for contributors
 
 | Legacy concern (BA2) | Current concern (BA3) |
 |---|---|
@@ -102,7 +201,7 @@ Baseline anchors used for this crosswalk:
   @ `e8f8bfa`
 - BA3 Rust CLI args/command tree: `crates/batchalign-cli/src/args/mod.rs`
 
-## 2.1) Data-structure shift: what changed and why it matters
+## 3.1) Data-structure shift: what changed and why it matters
 
 The largest durable implementation change is the move from reconstructive
 pipelines to identity-preserving pipelines. This matters more than the
@@ -143,7 +242,7 @@ in concrete ways:
   string output,
 - UTR and FA use explicit IDs/indices where available before any fallback.
 
-## 2.2) Command-by-command orchestration shift
+## 3.2) Command-by-command orchestration shift
 
 The same principle shows up across the command surface:
 
@@ -191,7 +290,7 @@ This is the durable architectural pattern to preserve:
 - inference workers should do inference,
 - orchestration and CHAT ownership should stay on the Rust side.
 
-## 2.3) Utility-command control-plane shift
+## 3.3) Utility-command control-plane shift
 
 The utility command story also changed in code-meaningful ways:
 
@@ -226,7 +325,7 @@ User-facing command/history detail belongs in [user-migration.md](user-migration
 This page keeps the developer-facing architectural consequence: the control
 plane is now explicit, typed, and operationally observable.
 
-## 3) Concurrency and orchestration differences
+## 4) Concurrency and orchestration differences
 
 Batchalign3 makes concurrency explicit at architecture boundaries:
 
@@ -245,7 +344,7 @@ This requires contributors to design for:
 - resumable/observable processing stages,
 - strict input/output schema validation between boundaries.
 
-## 3.1) Performance model shift
+## 4.1) Performance model shift
 
 The durable performance improvement story is architectural:
 
@@ -258,7 +357,7 @@ The durable performance improvement story is architectural:
 This is the kind of performance change that should remain in the migration book.
 Short-lived benchmark spikes or temporary regressions should not.
 
-## 4) Data model and API boundary implications
+## 5) Data model and API boundary implications
 
 For recent DP-migration work, no additional core CHAT AST augmentation was
 required because existing model identity/timing surfaces were sufficient.
@@ -273,7 +372,7 @@ Related rule for migration documentation: explain changes in algorithm choice,
 data structures, and public behavior; do not preserve branch-by-branch
 implementation churn.
 
-## 5) Testing posture for contributors
+## 6) Testing posture for contributors
 
 Migration-era quality now depends on layered tests:
 
@@ -288,7 +387,7 @@ Migration-era quality now depends on layered tests:
   (`batchalign/tests/pipelines/morphosyntax/test_stanza_config_parity.py` —
   MWT exclusion parity, Japanese processor parity, English gum package parity).
 
-## 6) Python API migration
+## 7) Python API migration
 
 ### BA2 Python API that no longer exists
 
@@ -415,7 +514,7 @@ Two capabilities have no BA3 equivalent:
 Neither limitation affects any known external user. See the
 [full usage audit](../../docs/ba2-python-api-usage-findings.md) for evidence.
 
-## 7) Onboarding plan for legacy contributors
+## 8) Onboarding plan for legacy contributors
 
 1. Start with the command/runtime crosswalk plus the current HK engine and
    extension-layer chapters.

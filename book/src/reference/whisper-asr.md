@@ -1,6 +1,6 @@
 # Whisper Usage in Batchalign
 
-**Date:** 2026-02-16
+**Date:** 2026-03-19
 
 ## Overview
 
@@ -83,6 +83,7 @@ Language-specific model resolution lives in `inference/asr.py`:
 | English    | `talkbank/CHATWhisper-en`       | `openai/whisper-large-v2` |
 | Cantonese  | `alvanlii/whisper-small-cantonese` | same                   |
 | Hebrew     | `ivrit-ai/whisper-large-v3`     | same                      |
+| `auto`     | `openai/whisper-large-v3`       | same                      |
 | All others | `openai/whisper-large-v3`       | same                      |
 
 **Only the HuggingFace Whisper engine (`--asr-engine whisper`) uses this resolution.**
@@ -90,6 +91,47 @@ The other engines have hardcoded models:
 
 - OpenAI Whisper (`--asr-engine whisper-oai`): always `"turbo"` (via `whisper.load_model("turbo")`)
 - WhisperX (`--asr-engine whisperx`): always `"large-v2"` (via `whisperx.load_model("large-v2")`)
+
+## Auto-Detect Mode (`--lang auto`)
+
+When `--lang auto` is passed, the `language` and `task` keys are **omitted**
+from Whisper's `generate_kwargs`, allowing the model to auto-detect the spoken
+language from the audio. This enables transcription of bilingual or
+code-switched recordings (e.g., English/Spanish) where forcing a single
+language would cause the model to skip or garble content in the other language.
+
+```bash
+batchalign3 transcribe bilingual_audio/ -o output/ --asr-engine whisper --lang auto
+```
+
+**How it works:**
+
+```mermaid
+graph LR
+    A["--lang auto"] --> B["iso3_to_language_name()"]
+    B --> C["'auto' sentinel"]
+    C --> D["gen_kwargs()"]
+    D --> E["Omit 'language' key"]
+    E --> F["Whisper auto-detects\nfrom first 30s of audio"]
+```
+
+**Behavior per engine:**
+
+| Engine | `--lang auto` behavior |
+|--------|----------------------|
+| `whisper` (HuggingFace) | Uses `openai/whisper-large-v3` (multilingual); omits `language` from kwargs |
+| `whisper-oai` | Turbo model; omits `language` from kwargs |
+| `whisperx` | Uses `large-v2`; omits `language` from kwargs |
+| `rev` (Rev.AI) | Rev.AI has its own auto-detection via the API |
+
+**Limitations:**
+
+- Whisper auto-detects from the **first ~30 seconds** of audio, so the dominant
+  language in the opening segment drives detection for the whole file
+- Language-specific fine-tuned models (e.g., `talkbank/CHATWhisper-en`) are
+  **not used** in auto mode — the generic multilingual model is loaded instead
+- Downstream stages (`morphotag`, `align`) still need an explicit language for
+  their own model selection; `auto` currently applies only to ASR transcription
 
 The TalkBank fine-tuned model (`talkbank/CHATWhisper-en`) is trained on
 conversational speech with CHAT-specific patterns (utterance boundaries, speaker

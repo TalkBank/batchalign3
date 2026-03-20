@@ -35,8 +35,18 @@ impl JobStore {
             submitted_by_name: job.source.submitted_by_name.clone(),
             submitted_at: job.schedule.submitted_at.0,
             paths_mode: job.filesystem.paths_mode,
-            source_paths: job.filesystem.source_paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
-            output_paths: job.filesystem.output_paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            source_paths: job
+                .filesystem
+                .source_paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            output_paths: job
+                .filesystem
+                .output_paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
         };
         let job_id = job.identity.job_id.clone();
         let correlation_id = job.identity.correlation_id.clone();

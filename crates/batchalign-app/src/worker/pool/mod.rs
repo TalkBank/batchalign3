@@ -844,7 +844,11 @@ impl WorkerPool {
                     match shared_gpu::SharedGpuTcpWorker::connect(tcp_info).await {
                         Ok(shared) => {
                             let key = (item.lang.clone(), item.engine_overrides.clone());
-                            gpu_tcp_ref.lock().await.entry(key).or_insert_with(|| Arc::new(shared));
+                            gpu_tcp_ref
+                                .lock()
+                                .await
+                                .entry(key)
+                                .or_insert_with(|| Arc::new(shared));
                             info!(
                                 target = %profile_label,
                                 lang = %item.lang,
@@ -978,9 +982,9 @@ impl WorkerPool {
             let key: WorkerKey = (profile, lang.clone(), engine_overrides.to_owned());
             let has_tcp = {
                 let groups = self.groups.lock().unwrap();
-                groups.get(&key).is_some_and(|g| {
-                    !g.tcp_workers.lock().unwrap().is_empty()
-                })
+                groups
+                    .get(&key)
+                    .is_some_and(|g| !g.tcp_workers.lock().unwrap().is_empty())
             };
             if has_tcp {
                 info!(
@@ -998,10 +1002,7 @@ impl WorkerPool {
         // the TOCTOU race in `get_or_create_gpu_worker` where multiple tasks
         // would each try to spawn their own worker process.
         if profile.is_concurrent() {
-            match self
-                .get_or_create_gpu_worker(lang, engine_overrides)
-                .await
-            {
+            match self.get_or_create_gpu_worker(lang, engine_overrides).await {
                 Ok(_) => {
                     info!(
                         command = %command,
@@ -1127,7 +1128,6 @@ impl WorkerPool {
             }
         }
     }
-
 }
 
 /// Layer 2: kill idle workers when the pool is dropped without calling
@@ -1183,13 +1183,15 @@ impl WorkerPool {
         }
 
         let groups = self.groups.lock().unwrap();
-        groups.iter().any(|((group_profile, group_lang, _), group)| {
-            if *group_profile != profile || group_lang != lang {
-                return false;
-            }
-            !group.idle.lock().unwrap().is_empty()
-                || !group.tcp_workers.lock().unwrap().is_empty()
-        })
+        groups
+            .iter()
+            .any(|((group_profile, group_lang, _), group)| {
+                if *group_profile != profile || group_lang != lang {
+                    return false;
+                }
+                !group.idle.lock().unwrap().is_empty()
+                    || !group.tcp_workers.lock().unwrap().is_empty()
+            })
     }
 
     /// Number of active workers (total across all keys, including checked-out).
@@ -1203,11 +1205,7 @@ impl WorkerPool {
                 .map(|g| g.total.load(Ordering::Relaxed))
                 .sum()
         };
-        let gpu_count = self
-            .gpu_workers
-            .try_lock()
-            .map(|g| g.len())
-            .unwrap_or(0);
+        let gpu_count = self.gpu_workers.try_lock().map(|g| g.len()).unwrap_or(0);
         let tcp_gpu_count = self
             .gpu_tcp_workers
             .try_lock()
@@ -1246,9 +1244,7 @@ impl WorkerPool {
                 } else {
                     format!(":{}", engine_overrides)
                 };
-                keys.push(format!(
-                    "profile:gpu:{lang}{suffix} (1 total, shared)"
-                ));
+                keys.push(format!("profile:gpu:{lang}{suffix} (1 total, shared)"));
             }
         }
 
@@ -1259,9 +1255,7 @@ impl WorkerPool {
                 } else {
                     format!(":{}", engine_overrides)
                 };
-                keys.push(format!(
-                    "profile:gpu:{lang}{suffix} (1 total, tcp-shared)"
-                ));
+                keys.push(format!("profile:gpu:{lang}{suffix} (1 total, tcp-shared)"));
             }
         }
 

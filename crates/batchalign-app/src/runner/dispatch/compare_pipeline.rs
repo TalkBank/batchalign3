@@ -64,12 +64,17 @@ pub(in crate::runner) async fn dispatch_compare(
                     .unwrap_or(0);
                 let gold_read_path = if job.filesystem.paths_mode {
                     if file_index < job.filesystem.source_paths.len() {
-                        crate::compare::gold_path_for(&job.filesystem.source_paths[file_index].to_string_lossy())
+                        crate::compare::gold_path_for(
+                            &job.filesystem.source_paths[file_index].to_string_lossy(),
+                        )
                     } else {
                         crate::compare::gold_path_for(filename)
                     }
                 } else {
-                    format!("{}/input/{gold_filename}", job.filesystem.staging_dir.display())
+                    format!(
+                        "{}/input/{gold_filename}",
+                        job.filesystem.staging_dir.display()
+                    )
                 };
                 match tokio::fs::read_to_string(&gold_read_path).await {
                     Ok(text) => text,
@@ -136,7 +141,11 @@ pub(in crate::runner) async fn dispatch_compare(
                 }
 
                 lifecycle
-                    .complete_with_result(FileName::from(filename.as_str()), ContentType::Chat, finished_at)
+                    .complete_with_result(
+                        FileName::from(filename.as_str()),
+                        ContentType::Chat,
+                        finished_at,
+                    )
                     .await;
             }
             Err(e) => {

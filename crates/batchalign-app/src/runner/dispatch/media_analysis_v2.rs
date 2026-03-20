@@ -153,11 +153,7 @@ async fn process_one_media_analysis_file_v2(
                 }
 
                 lifecycle
-                    .complete_with_result(
-                        result_filename.clone().into(),
-                        output_type,
-                        finished_at,
-                    )
+                    .complete_with_result(result_filename.clone().into(), output_type, finished_at)
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }
@@ -216,7 +212,6 @@ enum DispatchFailure {
     RetryableWorker(String, FailureCategory),
     Terminal(String, FailureCategory),
 }
-
 
 async fn dispatch_one_media_analysis_attempt(
     job: &RunnerJobSnapshot,

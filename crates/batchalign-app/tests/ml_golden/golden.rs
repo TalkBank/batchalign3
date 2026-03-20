@@ -14,6 +14,7 @@
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 //! Update snapshots: `cargo insta review`
 
+use crate::common::{assert_completed_without_errors, require_live_server, submit_and_complete};
 use batchalign_app::api::{FilePayload, JobStatus};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CompareOptions, CorefOptions, MorphotagOptions,
@@ -22,7 +23,6 @@ use batchalign_app::options::{
 use batchalign_app::worker::InferTask;
 use batchalign_chat_ops::parse::parse_lenient;
 use batchalign_chat_ops::{ChatFile, DependentTier};
-use crate::common::{assert_completed_without_errors, require_live_server, submit_and_complete};
 
 // ---------------------------------------------------------------------------
 // AST-based CHAT output helpers

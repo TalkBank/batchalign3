@@ -1,7 +1,7 @@
 # Progress and Feedback
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-19
 
 Batchalign reports real-time progress during processing. This page explains what
 to expect for each command, what the progress indicators mean, and when to worry
@@ -93,11 +93,56 @@ morphotag, faster for translate and utseg.
 Cancellation is cooperative — the current file finishes its in-progress work
 before the job stops.
 
+## Pipeline Phase Indicator
+
+For processing files, the dashboard and desktop app show a compact 5-segment
+phase bar that maps the 23 internal progress stages into visual phases:
+
+| Segment | Pipeline Phase | Stages Included |
+|---------|---------------|-----------------|
+| 1 | **Read** | Reading, Resolving audio, Checking cache |
+| 2 | **Transcribe** | Transcribing, Recovering utterance timing |
+| 3 | **Align** | Aligning, Applying results |
+| 4 | **Analyze** | Morphosyntax, Segmentation, Translation, Coreference, Comparing |
+| 5 | **Finalize** | Post-processing, Building CHAT, Finalizing, Writing |
+
+The active phase pulses; completed phases are filled; future phases are gray.
+Not every command uses all phases — `morphotag` skips Transcribe and Align;
+`align` skips Transcribe and Analyze.
+
 ## Progress Displays
 
 | Client | What you see |
 |--------|-------------|
-| **Desktop app** | Progress bar + file list with stage labels and sub-counters |
+| **Web dashboard** | Two-column layout: job list with pipeline phase bars, system panels (workers, memory, vitals). See [Web Dashboard](dashboard.md) for details. |
+| **Desktop app** | Processing progress view with SSE-driven file list and stage labels |
 | **CLI** | indicatif progress bar with file count and elapsed time |
-| **TUI** | Per-file spinners with stage labels and sub-counters |
-| **Dashboard** | Same as desktop app (shared React components) |
+| **TUI** | Per-file spinners with pipeline phase dots, elapsed timers, status breakdown, ETA, worker status, memory gauge, scroll indicators |
+
+### TUI Details (`--tui`)
+
+The TUI shows the same information as the web dashboard in a terminal-friendly
+format:
+
+- **Header** with status breakdown (`3✓ 2⠋ 1✗ 44·`), elapsed time, and ETA.
+  Shows "Done!" or "Done — N failed" on completion.
+- **Pipeline phase dots** next to each processing file: `●●●○○` maps the 5
+  phases (Read/Transcribe/Align/Analyze/Finalize) using the same grouping as
+  the web dashboard. Green = completed, cyan = active, gray = future.
+- **Per-file elapsed timer** (`M:SS`) on processing files, computed from
+  `started_at`. Helps spot stuck files during long align/transcribe jobs.
+- **Worker status line** between the header and file list: shows active worker
+  keys and warmup status.
+- **Memory gauge** below the worker line: 20-char bar with used/total GB and
+  gate proximity indicator (safe/warn/danger). Warns explicitly when memory
+  is near or below the gate threshold.
+- **Scroll indicators** (`▲ N more above` / `▼ N more below`) when groups
+  have more files than fit on screen.
+- **Auto-collapse** for completed groups: non-focused groups where all files
+  are done or errored show a condensed title.
+- **Error codes** in the error panel, extracted from the server's structured
+  error codes (e.g. `[E362] morph lookup failed`).
+
+**Keybinds:** `q` quit · `c` cancel · `↑↓` scroll · `tab` group · `e` errors · `m` metrics
+
+Press `m` to toggle the worker/memory rows on small terminals.

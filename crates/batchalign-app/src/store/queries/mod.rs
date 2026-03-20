@@ -190,7 +190,7 @@ mod tests {
                 fa_engine: "wav2vec_fa".into(),
                 utr_engine: None,
                 utr_overlap_strategy: Default::default(),
-            utr_two_pass: Default::default(),
+                utr_two_pass: Default::default(),
                 pauses: false,
                 wor: true.into(),
                 merge_abbrev: false.into(),

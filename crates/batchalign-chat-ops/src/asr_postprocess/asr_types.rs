@@ -229,7 +229,9 @@ impl fmt::Display for AsrTimestampSecs {
 ///
 /// Maps to participant codes (`PAR`, `INV`, `SP0`, etc.) during CHAT
 /// assembly in `transcript_from_asr_utterances()`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 #[repr(transparent)]
 pub struct SpeakerIndex(pub usize);

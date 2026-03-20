@@ -59,7 +59,10 @@ mod tests {
     fn apply_result_filename_preserves_dir() {
         use std::path::PathBuf;
         assert_eq!(
-            apply_result_filename(std::path::Path::new("/data/corpus/output/test.mp3"), "test.cha"),
+            apply_result_filename(
+                std::path::Path::new("/data/corpus/output/test.mp3"),
+                "test.cha"
+            ),
             PathBuf::from("/data/corpus/output/test.cha")
         );
     }
@@ -400,7 +403,7 @@ mod tests {
                     fa_engine: "wav2vec_fa".into(),
                     utr_engine: Some(UtrEngine::RevAi),
                     utr_overlap_strategy: Default::default(),
-            utr_two_pass: Default::default(),
+                    utr_two_pass: Default::default(),
                     pauses: false,
                     wor: true.into(),
                     merge_abbrev: false.into(),

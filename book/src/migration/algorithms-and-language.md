@@ -1,7 +1,7 @@
 # Algorithms, Language, and Alignment Migration
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-20
 
 Comparison anchors:
 
@@ -163,6 +163,86 @@ One especially important `align` sub-change is UTR:
 - This fixes the 407-style token-starvation regression class, but it does not
   make UTR non-monotonic. Files with dense overlap and text/audio reordering
   can still remain only partially recoverable.
+
+#### Fuzzy UTR matching (new in BA3)
+
+BA2 used exact string matching between transcript words and ASR tokens.
+BA3 adds fuzzy matching via Jaro-Winkler similarity (threshold 0.85,
+configurable via `--utr-fuzzy`). This improves UTR coverage on files
+with ASR substitutions, dialectal variants, and backchannel
+normalizations (e.g., transcript "mhm" matching ASR "mm-hmm").
+
+Validated on 6 corpora (59 files):
+- SBCSAE: 76.8% coverage (vs lower with exact), 140ms median precision
+- APROCSA, TaiwanHakka, Welsh, German: identical to exact matching
+- No regressions on any corpus
+
+Fuzzy matching is now the default. Exact matching remains available
+via `--utr-fuzzy 1.0`.
+
+#### Two-pass overlap-aware UTR (new in BA3)
+
+BA2 had no overlap awareness in UTR — overlap markers (`+<`, `&*`)
+were treated the same as regular words. BA3 implements a two-pass
+strategy for conversation-analysis data:
+
+1. **Pass 1 (global):** Align all non-overlap words against ASR tokens
+   to establish the timing backbone. Overlap markers are excluded so
+   they don't consume ASR tokens that belong to the primary speaker.
+
+2. **Pass 2 (targeted):** For each unresolved overlap utterance, search
+   for its ASR timing using index-aware onset matching — multiple `⌊`
+   respondents match the correct `⌈` by overlap index with
+   speaker-aware fallback.
+
+When auto-selected (default), two-pass activates only when overlap
+markers are detected. Falls back to single-pass global for files
+without overlap.
+
+#### Density-aware overlap exclusion (new in BA3)
+
+When >30% of utterances have overlap markers (dense CA data like
+Jefferson NB at 47% overlap), excluding all overlap words from pass-1
+starves the aligner of context. BA3 detects this and stops excluding
+overlap words, falling back to global alignment.
+
+Threshold: `MAX_OVERLAP_EXCLUSION_FRACTION = 0.30` (empirically chosen).
+Jefferson NB: pass-1 exclusion recovered 8.8% at 1491ms error; with
+density detection, recovered 10.7% at 691ms error.
+
+#### Language-aware UTR strategy selection (new in BA3)
+
+Non-English files use GlobalUtr (avoiding the two-pass regression from
+noisier non-English ASR), English files use the overlap-inspecting
+auto-selection. Validated experimentally on 7 non-English files across
+4 languages — preserves English gains (+4.3pp SBCSAE, +3.8pp Jefferson)
+while eliminating non-English regressions.
+
+#### CA pre-validation (new in BA3)
+
+Files with `@Options: CA` now skip the utterance terminator check during
+validation. CA transcripts commonly use non-standard terminators. This
+unblocked alignment of Jefferson NB and TaiwanHakka corpora that BA2
+would reject or produce validation errors on.
+
+#### `--media-dir` flag (new in BA3)
+
+`batchalign3 align input/ -o output/ --media-dir /path/to/audio/` allows
+specifying a separate directory for audio files. BA2 required audio files
+to be alongside the `.cha` files. This supports workflows where media
+is stored separately from transcripts (common in corpus archives).
+
+#### Align improvement summary
+
+| Feature | BA2 Jan 9 | BA3 |
+|---|---|---|
+| UTR matching | Exact only | Fuzzy (Jaro-Winkler 0.85) default |
+| Overlap awareness | None | Two-pass with index-aware onset matching |
+| Dense overlap handling | None (all words treated equally) | Density detection (>30% → global fallback) |
+| Language-aware UTR | None (same strategy for all langs) | Auto-gates by language (non-English → GlobalUtr) |
+| CA validation | Strict (rejects CA terminators) | `@Options: CA` pre-validation skip |
+| Custom media directory | Not supported | `--media-dir` flag |
+| FA orchestration | Python string surgery | Rust typed payloads + deterministic transfer |
 
 ## 4) Retokenization and Stanza multi-token outputs
 
@@ -361,3 +441,195 @@ Algorithmic migrations are now defended by:
 That governance change is itself part of the migration: the codebase is less
 willing to accept "looks plausible on a few files" as evidence that an
 algorithmic rewrite is safe.
+
+## Language handling: no silent fallbacks, early validation
+
+### Policy: hard-error on unknown languages, never silent fallback
+
+batchalign3 deliberately rejects unknown or unsupported language codes
+**at the earliest possible point** with a clear, actionable diagnostic.
+This is an improvement over both BA2 and early BA3:
+
+| Scenario | BA2 | BA3 (initial) | BA3 (current) |
+|---|---|---|---|
+| Unknown code → Rev.AI | `pycountry` crash (uncaught `AttributeError`) | Silent wrong code via `&other[..2]` truncation | Hard error at job submission with alternatives |
+| Unknown code → Whisper | `pycountry` crash | Silent English fallback (`return "english"`) | Hard `ValueError` with message |
+| Unsupported Rev.AI language | HTTP 400 deep in pipeline | HTTP 400 deep in pipeline | Rejected at submission: "use `--asr-engine whisper`" |
+
+BA2's behavior was accidentally strict — it crashed because nobody added a
+None check, not because someone designed early validation. BA3's initial
+migration introduced two regressions by trying to be "helpful":
+
+1. **Rev.AI truncation fallback** — `&other[..2]` silently produced wrong
+   codes (e.g., `hak` → `ha`, `pol` → `po`). Fixed 2026-03-19 with a ~75
+   entry explicit mapping table + `"auto"` fallback with tracing warning.
+
+2. **Whisper English fallback** — `return "english"` when `pycountry` found
+   no match. This meant unknown languages were silently transcribed in
+   English — the worst possible outcome, since the user gets output that
+   looks plausible but is completely wrong. Fixed 2026-03-19 with
+   `raise ValueError(...)`.
+
+**Design principle:** A clear error message is always better than silently
+wrong results. Users can recover from "language not supported — try
+`--asr-engine whisper`" but cannot recover from a transcript that looks
+English but should have been Welsh.
+
+### Language-aware UTR strategy selection
+
+The UTR (Utterance Timing Recovery) overlap strategy is now language-aware.
+When `--utr-strategy auto` (the default), non-English files use GlobalUtr
+and English files use the overlap-inspecting auto-selection. This was
+validated experimentally on 7 non-English files across 4 languages:
+English gains are preserved (+4.3pp SBCSAE, +3.8pp Jefferson), non-English
+regressions are eliminated. See
+[Command Flowcharts](../architecture/command-flowcharts.md) for the
+decision diagram.
+
+### Per-utterance language routing: improvement over BA2
+
+**Status:** Implemented in BA3. An improvement over both BA2 and
+batchalign-next's eager-loading approach.
+
+BA3 implements full per-utterance language routing for morphosyntax:
+utterances with `[- fra]` precodes are routed to the French Stanza
+pipeline, `[- spa]` to Spanish, etc. The full chain:
+
+1. **Rust** (`morphosyntax/payloads.rs`): extracts `language_code` from each
+   utterance's `[- lang]` precode, falls back to `@Languages` header, then
+   to primary `--lang`
+2. **Python worker** (`_infer_hosts.py`): discovers all languages from batch
+   items, loads Stanza pipelines on-demand for each new language
+3. **Python inference** (`morphosyntax.py`): groups batch items by language,
+   routes each group to its language-specific Stanza pipeline
+
+| Behavior | BA2 | batchalign-next | BA3 |
+|---|---|---|---|
+| `[- lang]` precode parsed | Yes | Yes | Yes |
+| Per-utterance Stanza routing | **No** (always primary lang) | Yes (eager load) | **Yes** (on-demand load) |
+| `@s:lang` per-word routing | No | No | No |
+
+BA2 parsed the `[- lang]` precode into `override_lang` but **never used it
+for routing** — it always called `nlp(line_cut)` with the single primary
+pipeline, and `parse_sentence(..., lang[0])` always used the first
+declared language. When `skipmultilang=True`, BA2 skipped non-primary
+utterances entirely; when `False` (default), it processed them with the
+wrong language model.
+
+batchalign-next introduced true per-utterance routing via eager pipeline
+loading. BA3 achieves the same result with on-demand loading — more
+memory-efficient for files that happen to use only one language, with
+identical behavior for multilingual files.
+
+See [Language Architecture](../architecture/language-architecture.md) for
+the remaining gaps (per-word `@s:` routing, per-utterance ASR engine
+selection).
+
+### Transcribe: language auto-detection and code-switching (new in BA3)
+
+**Status:** Implemented in BA3. Not available in BA2.
+
+BA3 adds full `--lang auto` support for `transcribe` with two-stage language
+detection and automatic code-switching precode generation. This is entirely
+new functionality — BA2 had no equivalent.
+
+| Capability | BA2 Jan 9 | BA3 |
+|---|---|---|
+| `--lang auto` CLI flag | Not explicitly supported; Whisper auto-detect worked implicitly by omitting the `language` kwarg | Fully supported with Rev.AI Language ID pre-pass |
+| Primary language detection | None — always used user-specified language | Rev.AI Language ID API (audio-based, ~5-30s, high accuracy); whatlang trigram fallback for Whisper |
+| `[- lang]` code-switching precodes | **Never generated during transcribe** | Generated per-utterance via whatlang trigram detection |
+| Multi-language `@Languages` header | Single language only | Multiple languages, frequency-ordered, primary first |
+| Rev.AI Language Identification API | Not used | Used as pre-pass to detect dominant language from audio features before transcription |
+
+#### How it works
+
+When `--lang auto` is passed with the Rev.AI ASR backend (production path):
+
+1. **Rev.AI Language ID API** (~5-30s): submits audio to a dedicated
+   language identification endpoint. Returns `top_language` (e.g., `"es"`)
+   with confidence score (e.g., 0.907). This uses audio/phonetic features,
+   not text analysis, so it correctly identifies Spanish even in heavily
+   code-switched English/Spanish audio.
+
+2. **Transcription with concrete language**: the detected language is used
+   as the language hint for the transcription job, which enables
+   `speakers_count` and `skip_postprocessing` to be set correctly.
+
+3. **Per-utterance language detection**: after ASR post-processing, each
+   utterance is analyzed by `whatlang` (Rust trigram-based detector,
+   ~1ms per utterance). Utterances confidently detected as a different
+   language than the primary get `[- lang]` precodes in the CHAT output.
+
+4. **Multi-language `@Languages` header**: all languages appearing in >= 3
+   utterances are listed in the header, ordered by frequency.
+
+#### Accuracy on bilingual audio
+
+Tested on Miami-Bangor corpus herring03.cha (Spanish-primary, heavy
+English code-switching, 30 minutes, 900 utterances in ground truth):
+
+| Metric | Ground Truth | Rev.AI + Language ID | Whisper + whatlang |
+|---|---|---|---|
+| `@Languages` | `spa, eng` | `spa, eng` (correct) | `eng, spa` (inverted) |
+| Primary language | spa | spa (correct) | eng (wrong) |
+| `[- eng]` precodes | 415 | 9 | 0 |
+
+The low precode count (9 vs 415) is a known limitation of trigram-based
+per-utterance detection — short and code-mixed utterances are below
+detection thresholds. See
+[Language Architecture: Limitations](../architecture/language-architecture.md#accuracy-and-limitations-of---lang-auto)
+for the full accuracy analysis.
+
+#### Why Whisper gets the primary language wrong
+
+Whisper auto-detects language internally per 30-second chunk, but the
+HuggingFace pipeline does not expose which language was detected. The
+pipeline returns text with `lang="auto"` echoed back, forcing fallback
+to whatlang trigram detection on the ASR text output. On code-switched
+bilingual text, whatlang frequently misclassifies the primary language
+because Spanish utterances containing English words generate enough
+English trigrams to tip the majority vote.
+
+Rev.AI's Language ID API avoids this by using audio-level phonetic
+features rather than text trigrams.
+
+### Transcribe: ASR post-processing improvements
+
+BA3 ports all 8 BA2 ASR post-processing stages to Rust with provenance
+newtypes that prevent mixing text at different pipeline stages:
+
+| Stage | BA2 Jan 9 | BA3 |
+|---|---|---|
+| Compound merging | Python, ad-hoc string concat | Rust, 3,584 pairs, O(1) HashSet |
+| Multi-word splitting | Python, timestamp interpolation | Rust, same algorithm |
+| Number expansion | Python, 12 language tables | Rust, same tables |
+| Cantonese normalization | Python (OpenCC dependency) | Rust (`zhconv` crate, no OpenCC needed) |
+| Long-turn splitting | Python, 300-word threshold | Rust, same threshold |
+| Retokenization | Python, punctuation-based | Rust, same algorithm |
+| Disfluency replacement | Python, string matching | Rust, same wordlists |
+| N-gram retrace detection | Python, ad-hoc grouping | Rust, `WordKind::Retrace` enum + CHAT AST annotation |
+
+**Key correctness improvement:** BA3's retrace detection marks words with
+`WordKind::Retrace` in the token pipeline, then `build_chat.rs` wraps them
+in proper CHAT `<...> [/]` AST nodes (`AnnotatedWord` / `AnnotatedGroup`).
+BA2 did string-level wrapping that could produce malformed CHAT when
+retraces crossed word boundaries or contained special characters.
+
+**Provenance newtypes:** The token pipeline uses distinct types at each
+stage (`AsrRawText` → `AsrNormalizedText` → `ChatWordText`) that prevent
+accidentally passing text from one stage to another without the required
+transformation. BA2 used bare `str` throughout.
+
+### Transcribe: Rev.AI language code mapping
+
+BA2 used `pycountry.languages.get(alpha_3=lang).alpha_2` for ISO 639-3
+to Rev.AI code conversion. This had a silent truncation fallback
+(`&other[..2]`) that produced wrong codes for many languages:
+- `pol` → `po` (should be `pl`)
+- `hak` → `ha` (not a valid ISO 639-1 code)
+- `ces` → `ce` (should be `cs`)
+
+BA3 replaces this with an explicit 85+ entry mapping table in
+`revai/preflight.rs`, with an `"auto"` fallback for unmapped languages
+(logged as a warning). The reverse mapping (`revai_code_to_iso639_3`)
+returns `Option` rather than panicking on unknown codes.

@@ -13,16 +13,16 @@
 //!
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
+use crate::common::{
+    assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
+    submit_paths_and_complete,
+};
 use batchalign_app::api::JobStatus;
 use batchalign_app::options::{
     AlignOptions, CommandOptions, CommonOptions, FaEngineName, MorphotagOptions, UtsegOptions,
     WorTierPolicy,
 };
 use batchalign_app::worker::InferTask;
-use crate::common::{
-    assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
-    submit_paths_and_complete,
-};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,7 +51,11 @@ fn extract_worker_keys(health: &serde_json::Value) -> Vec<String> {
         .as_array()
         .expect("live_worker_keys should be an array")
         .iter()
-        .map(|v| v.as_str().expect("worker key should be a string").to_owned())
+        .map(|v| {
+            v.as_str()
+                .expect("worker key should be a string")
+                .to_owned()
+        })
         .collect()
 }
 
@@ -84,8 +88,7 @@ const ENG_TEXT_FIXTURE: &str = "\
 /// copies, consuming N× memory.
 #[tokio::test]
 async fn gpu_profile_uses_single_worker_for_multi_file_align() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };
@@ -176,7 +179,10 @@ async fn gpu_profile_uses_single_worker_for_multi_file_align() {
 
     // No legacy per-task keys should appear.
     let legacy_fa: Vec<&String> = keys.iter().filter(|k| k.starts_with("infer:fa:")).collect();
-    let legacy_asr: Vec<&String> = keys.iter().filter(|k| k.starts_with("infer:asr:")).collect();
+    let legacy_asr: Vec<&String> = keys
+        .iter()
+        .filter(|k| k.starts_with("infer:asr:"))
+        .collect();
     assert!(
         legacy_fa.is_empty(),
         "No legacy infer:fa: keys should exist, got {legacy_fa:?}"
@@ -239,10 +245,12 @@ async fn stanza_profile_groups_morphotag_and_utseg() {
         "morphotag",
         "eng",
         vec![input_path.to_string_lossy().into_owned()],
-        vec![morphotag_out_dir
-            .join("stanza_test.cha")
-            .to_string_lossy()
-            .into_owned()],
+        vec![
+            morphotag_out_dir
+                .join("stanza_test.cha")
+                .to_string_lossy()
+                .into_owned(),
+        ],
         morphotag_options,
     )
     .await;
@@ -271,10 +279,12 @@ async fn stanza_profile_groups_morphotag_and_utseg() {
         "utseg",
         "eng",
         vec![input_path.to_string_lossy().into_owned()],
-        vec![utseg_out_dir
-            .join("stanza_test.cha")
-            .to_string_lossy()
-            .into_owned()],
+        vec![
+            utseg_out_dir
+                .join("stanza_test.cha")
+                .to_string_lossy()
+                .into_owned(),
+        ],
         utseg_options,
     )
     .await;
@@ -348,10 +358,12 @@ async fn profile_worker_keys_use_profile_labels() {
         "morphotag",
         "eng",
         vec![input_path.to_string_lossy().into_owned()],
-        vec![out_dir
-            .join("labels_test.cha")
-            .to_string_lossy()
-            .into_owned()],
+        vec![
+            out_dir
+                .join("labels_test.cha")
+                .to_string_lossy()
+                .into_owned(),
+        ],
         options,
     )
     .await;

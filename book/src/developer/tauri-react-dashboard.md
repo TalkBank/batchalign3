@@ -1,7 +1,7 @@
 # Tauri + React Dashboard
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-19
 
 ## Overview
 
@@ -25,17 +25,64 @@ frontend, which now consumes shell-only capabilities through an explicit
 desktop runtime seam instead of scattering raw Tauri imports across hooks and
 components.
 
-## Web Dashboard
+## Web Dashboard Development
 
-Run locally:
+The dashboard is a React SPA that proxies API calls to a running batchalign3
+server. You need **two terminals**: one for the Rust server, one for the Vite
+dev server.
+
+### Terminal 1: Start the Rust server
+
+```bash
+# Debug build (faster compile, slower runtime — fine for dashboard dev)
+cargo run -p batchalign-cli -- serve start --foreground --port 8000
+```
+
+Or if you already have a release binary:
+
+```bash
+./target/release/batchalign3 serve start --foreground --port 8000
+```
+
+The server must be on port 8000 — the Vite dev config in `frontend/vite.config.ts`
+proxies `/jobs`, `/health`, and `/ws` to `localhost:8000`.
+
+### Terminal 2: Start the Vite dev server
 
 ```bash
 cd frontend
-npm ci
+npm ci          # first time only
 npm run dev
 ```
 
-Build production artifact:
+Vite starts on `http://localhost:5173`. Open:
+
+- **`http://localhost:5173/dashboard`** — fleet monitoring (job list, workers,
+  memory, pipeline stages)
+- **`http://localhost:5173/dashboard/jobs/<id>`** — job detail with file-level
+  progress
+- **`http://localhost:5173/dashboard/visualizations`** — algorithm trace
+  visualizations (DP alignment, retokenization, FA timeline, ASR pipeline)
+- **`http://localhost:5173/process`** — end-user processing flow (desktop-oriented,
+  but works in browser for layout testing)
+
+Changes to `frontend/src/` hot-reload instantly. Changes to Rust types require
+rebuilding the server and regenerating OpenAPI types
+(`bash scripts/generate_dashboard_api_types.sh`).
+
+### Production mode (no dev server)
+
+In production, the built SPA is served directly by the Rust server via
+`ServeDir` with SPA fallback. After building:
+
+```bash
+scripts/build_react_dashboard.sh    # builds to ~/.batchalign3/dashboard/
+```
+
+The dashboard is then available at `http://localhost:8000/dashboard` (same
+origin as the API, no proxy needed).
+
+### Build production artifact:
 
 ```bash
 scripts/build_react_dashboard.sh
@@ -227,6 +274,97 @@ Verify no drift (CI gate):
 ```bash
 scripts/check_dashboard_api_drift.sh
 ```
+
+## Dashboard Component Map
+
+### Pages
+
+| Route | Component | Purpose |
+|-------|-----------|---------|
+| `/dashboard` | `DashboardPage` | Two-column: job list + system panels |
+| `/dashboard/jobs/:id` | `JobPage` → `JobDetailPageView` | Full job detail with file table |
+| `/dashboard/visualizations` | `VisualizationsIndex` | Algorithm trace landing |
+| `/dashboard/visualizations/:type` | `DPAlignmentPage`, etc. | Individual visualizations |
+| `/process` | `ProcessPage` | Desktop processing flow |
+
+### Job Display Components
+
+| Component | File | Role |
+|-----------|------|------|
+| `JobList` | `JobList.tsx` | Renders sorted list of `JobCard`s |
+| `JobCard` | `JobCard.tsx` | Single job summary: command badge, status, progress bar, metadata |
+| `JobDetailPageView` | `JobDetailPageView.tsx` | Full detail: metadata grid, progress, file table, errors |
+| `FileTable` | `FileTable.tsx` | Directory-grouped file rows with status, stage, progress |
+| `PaginatedFileList` | `PaginatedFileList.tsx` | Wraps `FileTable` with pagination controls |
+| `FilterTabs` | `FilterTabs.tsx` | Status filter tabs (All/Processing/Done/Error/Queued) + search |
+| `ProgressBar` | `ProgressBar.tsx` | Animated fill bar with striped/indeterminate modes |
+| `PipelineStageBar` | `PipelineStageBar.tsx` | 5-segment phase indicator (Read/Transcribe/Align/Analyze/Finalize) |
+| `StatusBadge` | `StatusBadge.tsx` | Colored status pill |
+| `ErrorPanel` | `ErrorPanel.tsx` | Error groups by code with expandable file lists |
+| `ErrorCodeGroup` | `ErrorCodeGroup.tsx` | Single error code bucket |
+| `StatusSummaryStrip` | `StatusSummaryStrip.tsx` | Inline done/error/active counts |
+| `ActionButtons` | `ActionButtons.tsx` | Cancel/restart/delete controls |
+
+### System Health Components (Right Column)
+
+These panels live in the dashboard right column and consume `HealthResponse`
+data from the Zustand `healthMap`:
+
+| Component | File | Data Fields Used |
+|-----------|------|-----------------|
+| `WorkerProfilePanel` | `WorkerProfilePanel.tsx` | `live_worker_keys`, `live_workers`, `warmup_status` |
+| `MemoryPanel` | `MemoryPanel.tsx` | `system_memory_total_mb`, `system_memory_available_mb`, `system_memory_used_mb`, `memory_gate_threshold_mb`, `memory_gate_aborts` |
+| `VitalsRow` | `VitalsRow.tsx` | `worker_crashes`, `forced_terminal_errors`, `memory_gate_aborts`, `attempts_started`, `attempts_retried`, `deferred_work_units` |
+
+The `DashboardPage` wires these by reading the first server's health from
+`useStore((s) => s.healthMap)`. When a server filter is active, it uses that
+server's health.
+
+### Pipeline Phase Mapping
+
+`PipelineStageBar` groups the 23 `FileProgressStage` enum variants into 5
+visual phases. The mapping is defined in `PHASES` at the top of the component:
+
+| Phase | Color | Stages |
+|-------|-------|--------|
+| Read | zinc | `reading`, `resolving_audio`, `checking_cache` |
+| Transcribe | emerald | `transcribing`, `recovering_utterance_timing`, `recovering_timing_fallback` |
+| Align | indigo | `aligning`, `applying_results` |
+| Analyze | violet | `analyzing_morphosyntax`, `segmenting_utterances`, `translating`, `resolving_coreference`, `segmenting`, `analyzing`, `comparing`, `benchmarking` |
+| Finalize | amber | `post_processing`, `building_chat`, `finalizing`, `writing` |
+
+When adding a new `FileProgressStage` variant in Rust, add it to the
+appropriate phase set in `PipelineStageBar.tsx` and to `PROGRESS_STAGE_LABELS`
+in `frontend/src/utils.ts`.
+
+### Worker Key Parsing
+
+`WorkerProfilePanel` parses the `live_worker_keys` strings from the health
+endpoint. The format is:
+
+```
+profile:<gpu|stanza|io>:<lang>[:<engine_overrides>] (<N> total, <M> idle|shared)
+```
+
+Examples:
+- `profile:gpu:eng (1 total, shared)` — one shared GPU worker for English
+- `profile:stanza:eng (2 total, 1 idle)` — two Stanza workers, one currently checked out
+- `profile:io:fra:{"translate":"seamless"} (1 total, 1 idle)` — IO worker with engine override
+
+The regex parser in `parseWorkerKey()` handles these formats. If the server
+changes the key format, the parser must be updated to match.
+
+### Memory Panel Thresholds
+
+`MemoryPanel` uses three proximity levels relative to the gate threshold:
+
+- **safe** (green): `available > threshold × 4`
+- **warning** (amber): `threshold × 2 < available ≤ threshold × 4`
+- **danger** (red): `available ≤ threshold × 2`
+
+The gate threshold marker on the gauge bar is positioned at
+`(total - threshold) / total × 100%` — the point where available memory
+equals the threshold.
 
 ## Dashboard State Boundary
 

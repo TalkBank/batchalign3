@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-19
 
 This page documents the current public `batchalign3` CLI surface. For anything
 you are scripting against, confirm with `batchalign3 <command> --help`.
@@ -22,7 +22,7 @@ Global options go before the command name.
 | Option | Meaning |
 | --- | --- |
 | `-v`, `-vv`, `-vvv` | Increase verbosity |
-| `--workers N` | Maximum worker processes |
+| `--workers N` | Maximum concurrent files per job (default: auto-tune based on RAM and CPU; capped at 8 for GPU commands) |
 | `--force-cpu` | Disable MPS/CUDA and force CPU-only models |
 | `--server URL` | Explicit remote server URL |
 | `--override-cache` | Bypass the utterance analysis cache |
@@ -31,8 +31,9 @@ Global options go before the command name.
 | `--open-dashboard` / `--no-open-dashboard` | Toggle browser auto-open for submitted job pages |
 | `--engine-overrides JSON` | Select built-in alternative engines with a flat `{string:string}` JSON object; invalid JSON is rejected |
 
-Compatibility no-op flags such as `--use-cache` and `--no-force-cpu` are still
-accepted but should not be used in new docs or new scripts.
+BA2 compatibility flags (`--memlog`, `--mem-guard`, `--adaptive-workers`,
+`--pool`, `--shared-models`, etc.) have been removed. If your scripts use them,
+remove them.
 
 ## Common path-processing options
 
@@ -55,41 +56,73 @@ legacy input/output directory form. For new scripts, prefer `-o/--output`.
 ```bash
 batchalign3 align corpus/ -o aligned/
 batchalign3 align file.cha
+batchalign3 align transcripts/ -o out/ --media-dir /path/to/audio/
 ```
 
 Key options:
 
-| Option | Meaning |
-| --- | --- |
-| `--utr-engine {rev,whisper}` | UTR engine |
-| `--utr-engine-custom NAME` | Explicit custom UTR engine |
-| `--utr-strategy {auto,global,two-pass}` | Overlap strategy for `+<` utterances during UTR |
-| `--fa-engine {wav2vec,whisper}` | Forced-alignment engine |
-| `--fa-engine-custom NAME` | Explicit custom FA engine |
-| `--utr` / `--no-utr` | Enable or skip utterance timing recovery |
-| `--wor` / `--nowor` | Toggle `%wor` tier output |
-| `--pauses` | Group words into pause-separated chunks |
-| `--merge-abbrev` | Merge abbreviations in output |
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--media-dir PATH` | (alongside .cha) | Directory containing audio files |
+| `--utr-engine {rev,whisper}` | `rev` | UTR ASR engine |
+| `--utr-strategy {auto,global,two-pass}` | `auto` | Overlap strategy for UTR. `auto` is language-aware: non-English uses `global`, English uses overlap-marker detection |
+| `--utr-fuzzy THRESHOLD` | `0.85` | Fuzzy word matching (Jaro-Winkler). Set to `1.0` for exact only |
+| `--utr-ca-markers {enabled,disabled}` | `enabled` | Use CA overlap markers (⌈⌉⌊⌋) for windowing |
+| `--utr-density-threshold N` | `0.30` | Max overlap fraction before skipping pass-1 exclusion |
+| `--utr-tight-buffer MS` | `500` | Pass-2 tight window buffer (milliseconds) |
+| `--fa-engine {wav2vec,whisper}` | `wav2vec` | Forced-alignment engine |
+| `--utr` / `--no-utr` | enabled | Enable or skip utterance timing recovery |
+| `--wor` / `--nowor` | enabled | Toggle `%wor` tier output |
+| `--pauses` | off | Group words into pause-separated chunks |
+| `--merge-abbrev` | off | Merge abbreviations in output |
+
+**Fuzzy matching is enabled by default** (threshold 0.85). This uses
+Jaro-Winkler similarity to tolerate minor ASR substitutions like
+"gonna"/"gona" without sacrificing precision. Set `--utr-fuzzy 1.0` to
+disable fuzzy matching and require exact word matches.
+
+All UTR parameters were tuned empirically on SBCSAE (English CA),
+Jefferson NB (dense CA), TaiwanHakka (Hakka), and APROCSA (English
+aphasia, 22 files, 17K utterances). The defaults work well across all
+tested corpora. See [Dynamic Programming](../architecture/dynamic-programming.md)
+for detailed explanations with diagrams.
 
 ### `transcribe`
 
 ```bash
 batchalign3 transcribe recordings/ -o transcripts/ --lang eng
 batchalign3 transcribe interview.wav -o out/
+batchalign3 transcribe bilingual.wav -o out/ --lang auto  # auto-detect language
 ```
 
 Key options:
 
 | Option | Meaning |
 | --- | --- |
-| `--lang CODE` | 3-letter ISO language code (default: `eng`) |
+| `--lang CODE` | 3-letter ISO language code, or `auto` for auto-detection (default: `eng`) |
 | `-n`, `--num-speakers N` | Number of speakers (default: `2`) |
 | `--asr-engine {rev,whisper,whisperx,whisper-oai}` | ASR engine |
 | `--asr-engine-custom NAME` | Explicit custom ASR engine |
-| `--diarization {auto,enabled,disabled}` | Speaker diarization mode |
+| `--diarization {auto,enabled,disabled}` | Dedicated speaker diarization stage (default: `auto`=disabled) |
 | `--wor` / `--nowor` | Toggle `%wor` tier output |
 | `--batch-size N` | Whisper batch size |
 | `--merge-abbrev` | Merge abbreviations in output |
+
+**Speaker labels:** Speaker labels from the ASR engine (e.g., Rev.AI monologue
+speakers) are **always** used when present, even without `--diarization`. The
+`--diarization` flag only controls whether a dedicated Pyannote/NeMo speaker
+model runs as a separate stage. `auto` and `disabled` both skip the dedicated
+stage; `enabled` runs it only when ASR output lacks speaker labels.
+
+**Auto-detect language (`--lang auto`):** When `--lang auto` is specified with
+a local Whisper engine (`--asr-engine whisper`), the language parameter is
+omitted from Whisper's generation kwargs, letting the model auto-detect the
+spoken language from the audio. This is useful for bilingual or code-switched
+recordings where forcing a single language causes the model to skip or garble
+content in the other language. The multilingual `openai/whisper-large-v3`
+model is used (language-specific fine-tuned models like `talkbank/CHATWhisper-en`
+are bypassed since they are trained for a single language). Rev.AI handles
+auto-detection separately through its own API.
 
 Routing note: explicit remote `--server` is ignored for `transcribe` because
 the remote server cannot access client-local audio paths.
@@ -105,10 +138,17 @@ Key options:
 
 | Option | Meaning |
 | --- | --- |
+| `--lang CODE` | Language override (3-letter ISO). Overrides `@Languages` header when set |
 | `--retokenize` / `--keeptokens` | Retokenize main lines or preserve current tokenization |
 | `--skipmultilang` / `--multilang` | Skip or keep multilingual spans |
 | `--lexicon FILE` | Manual lexicon override file |
 | `--merge-abbrev` | Merge abbreviations in output |
+
+When `--lang` is omitted, the language is read from the CHAT file's
+`@Languages` header (first declared language). Per-utterance `[- lang]`
+precodes route individual utterances to language-specific Stanza models
+regardless of the file-level language. See
+[Per-Utterance Language Routing](../reference/per-utterance-language-routing.md).
 
 ## Operational commands
 
@@ -245,6 +285,7 @@ Key options:
 
 | Option | Meaning |
 | --- | --- |
+| `--lang CODE` | Language override (3-letter ISO). Overrides `@Languages` header |
 | `--merge-abbrev` | Merge abbreviations in output |
 
 ### `coref`
@@ -259,6 +300,7 @@ Key options:
 
 | Option | Meaning |
 | --- | --- |
+| `--lang CODE` | Language override (3-letter ISO). Overrides `@Languages` header |
 | `--merge-abbrev` | Merge abbreviations in output |
 
 ### `utseg`

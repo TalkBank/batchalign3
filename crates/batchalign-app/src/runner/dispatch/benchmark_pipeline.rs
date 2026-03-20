@@ -216,7 +216,10 @@ async fn process_one_benchmark_file(
         match process_benchmark(BenchmarkRequest {
             audio_path: &audio_path,
             gold_text: &gold_text,
-            lang: &job.dispatch.lang.resolve_or(&crate::api::LanguageCode3::from("eng")),
+            lang: &job
+                .dispatch
+                .lang
+                .resolve_or(&crate::api::LanguageCode3::from("eng")),
             services,
             transcribe_options: opts,
             cache_policy,
@@ -248,7 +251,10 @@ async fn process_one_benchmark_file(
                         &output_filename,
                     )
                 } else {
-                    job.filesystem.staging_dir.join("output").join(&output_filename)
+                    job.filesystem
+                        .staging_dir
+                        .join("output")
+                        .join(&output_filename)
                 };
 
                 if let Some(parent) = write_path.parent() {

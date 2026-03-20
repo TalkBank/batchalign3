@@ -11,10 +11,10 @@ use tracing::info;
 
 use crate::api::{DurationSeconds, LanguageCode3, LanguageSpec, NumSpeakers};
 use crate::error::ServerError;
-use crate::runner::debug_dumper::DebugDumper;
 use crate::params::{CachePolicy, MorphosyntaxParams};
 use crate::pipeline::PipelineServices;
 use crate::pipeline::plan::{PipelinePlan, StageFuture, StageId, StageSpec, run_plan};
+use crate::runner::debug_dumper::DebugDumper;
 use crate::runner::util::{FileStage, ProgressSender, ProgressUpdate};
 use crate::transcribe::{
     AsrInferParams, AsrResponse, SpeakerInferParams, TranscribeOptions, build_empty_chat_text,
@@ -601,7 +601,8 @@ mod tests {
         };
         let audio_path = tempdir.path().join("sample.wav");
         let opts = test_transcribe_options(Some(SpeakerBackendV2::Pyannote));
-        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+        let mut ctx =
+            TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![AsrToken {
                 text: "hello".into(),
@@ -638,7 +639,8 @@ mod tests {
         };
         let audio_path = tempdir.path().join("sample.wav");
         let opts = test_transcribe_options(None);
-        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+        let mut ctx =
+            TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![AsrToken {
                 text: "hello".into(),
@@ -687,7 +689,8 @@ mod tests {
         opts.lang = LanguageSpec::Auto;
         opts.diarize = false;
 
-        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+        let mut ctx =
+            TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
 
         // ASR response with detected language "spa"
         ctx.asr_response = Some(AsrResponse {
@@ -744,7 +747,8 @@ mod tests {
         let mut opts = test_transcribe_options(None);
         opts.lang = LanguageSpec::Auto;
 
-        let mut ctx = TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+        let mut ctx =
+            TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![],
             lang: LanguageCode3::new("fra").into(),

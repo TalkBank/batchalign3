@@ -10,7 +10,9 @@
 //! **N-gram retrace detection:** Detects repeated n-grams within each utterance
 //! and wraps them in CHAT retrace notation (`<word word> [/] word word`).
 
-use super::{AsrNormalizedText, AsrWord, SpeakerIndex, Utterance, WordKind, ENDING_PUNCT, MOR_PUNCT};
+use super::{
+    AsrNormalizedText, AsrWord, ENDING_PUNCT, MOR_PUNCT, SpeakerIndex, Utterance, WordKind,
+};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -32,11 +34,7 @@ struct Replacement {
 ///
 /// Format: (original, main_line).
 /// In CHAT, filled pauses appear as `&-{text}` on the main line.
-const FILLED_PAUSES_ENG: &[(&str, &str)] = &[
-    ("um", "&-um"),
-    ("ur", "&-ur"),
-    ("uh", "&-uh"),
-];
+const FILLED_PAUSES_ENG: &[(&str, &str)] = &[("um", "&-um"), ("ur", "&-ur"), ("uh", "&-uh")];
 
 /// Orthographic replacements for English. From BA2's `support/replacements.eng`.
 ///
@@ -162,9 +160,8 @@ pub fn apply_retrace_detection(utterances: &mut [Utterance], lang: &str) {
                 let mut root = begin;
 
                 while root + 2 * n <= content_indices.len() {
-                    let next_matches = (0..n).all(|i| {
-                        utt.words[content_indices[root + n + i]].text == gram[i]
-                    });
+                    let next_matches =
+                        (0..n).all(|i| utt.words[content_indices[root + n + i]].text == gram[i]);
                     if next_matches {
                         for i in 0..n {
                             is_retrace[begin + i] = true;
@@ -182,7 +179,8 @@ pub fn apply_retrace_detection(utterances: &mut [Utterance], lang: &str) {
         for (content_pos, &orig_idx) in content_indices.iter().enumerate() {
             if is_retrace[content_pos] {
                 utt.words[orig_idx].kind = WordKind::Retrace;
-                utt.words[orig_idx].text = AsrNormalizedText::new(strip_punct(utt.words[orig_idx].text.as_str()));
+                utt.words[orig_idx].text =
+                    AsrNormalizedText::new(strip_punct(utt.words[orig_idx].text.as_str()));
             }
         }
     }
@@ -190,7 +188,10 @@ pub fn apply_retrace_detection(utterances: &mut [Utterance], lang: &str) {
 
 /// Count non-punctuation words in an utterance.
 fn content_word_count(words: &[AsrWord]) -> usize {
-    words.iter().filter(|w| !is_punct_or_terminator(w.text.as_str())).count()
+    words
+        .iter()
+        .filter(|w| !is_punct_or_terminator(w.text.as_str()))
+        .count()
 }
 
 /// Check if a word is punctuation or a sentence terminator.

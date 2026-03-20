@@ -215,7 +215,10 @@ mod tests {
         // Under MIN_CHARS_FOR_DETECTION — should not attempt detection
         let text = "hello world";
         let lang = detect_utterance_language(text);
-        assert!(lang.is_none(), "Short text should not be confidently detected");
+        assert!(
+            lang.is_none(),
+            "Short text should not be confidently detected"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -262,7 +265,10 @@ mod tests {
     fn primary_language_returns_none_when_all_short() {
         let texts = vec!["hello", "sí", "okay", "no"];
         let lang = detect_primary_language(&texts);
-        assert!(lang.is_none(), "All short utterances — no reliable detection");
+        assert!(
+            lang.is_none(),
+            "All short utterances — no reliable detection"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -325,7 +331,11 @@ mod tests {
             "Hello my name is John and I live in the city of New York with my family",
         ];
         let langs = collect_detected_languages(&texts, "spa");
-        assert_eq!(langs, vec!["spa"], "Single English utterance should be excluded from @Languages");
+        assert_eq!(
+            langs,
+            vec!["spa"],
+            "Single English utterance should be excluded from @Languages"
+        );
     }
 
     // -----------------------------------------------------------------------

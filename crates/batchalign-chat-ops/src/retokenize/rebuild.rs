@@ -3,9 +3,7 @@
 
 use std::collections::HashSet;
 
-use talkbank_model::alignment::helpers::{
-    TierDomain, is_tag_marker_separator, counts_for_tier,
-};
+use talkbank_model::alignment::helpers::{TierDomain, counts_for_tier, is_tag_marker_separator};
 use talkbank_model::model::content::BracketedItems;
 use talkbank_model::model::{BracketedItem, Mor, UtteranceContent, Word};
 

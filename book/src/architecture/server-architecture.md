@@ -1,7 +1,7 @@
 # Server Dispatch Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-18
 
 This page describes the implemented `batchalign3` runtime:
 
@@ -291,9 +291,9 @@ core processing surface.
 
 | Legacy Python implementation | Rust rewrite equivalent |
 |---|---|
-| `ProcessPoolExecutor` for CPU-heavy commands | Persistent Python subprocesses managed by `WorkerPool` |
-| `ThreadPoolExecutor` for GPU/ASR paths | Per-command worker subprocess plus worker-side internal concurrency |
-| Global pool size logic in Python server | Job-level semaphore (`max_concurrent_jobs`) in Rust server |
+| `ProcessPoolExecutor` for CPU-heavy commands | Stanza/IO profile: persistent Python subprocesses, exclusive checkout |
+| `ThreadPoolExecutor` for GPU/ASR paths | GPU profile: `SharedGpuWorker` with Python `ThreadPoolExecutor` inside one process |
+| Global pool size logic in Python server | Job-level semaphore (`max_concurrent_jobs`) + per-profile pool limits in Rust server |
 
 Additional safeguards:
 - Memory gate before job start (skipped when idle workers for the job's `(command, lang)` already exist in the pool).
@@ -373,6 +373,33 @@ purpose: malformed request payloads and unreadable prepared artifacts stay in
 `invalid_payload` / attachment error buckets, while malformed model-host output
 is reported as `runtime_failure`. That keeps bad Python/SDK result shapes from
 masquerading as caller input mistakes.
+
+### Concurrent dispatch for GPU workers
+
+GPU profile workers support concurrent V2 requests via request_id multiplexing:
+
+- Rust sends multiple `execute_v2` requests to one GPU worker without waiting for responses
+- Python's `_serve_stdio_concurrent()` dispatches to a `ThreadPoolExecutor` (4 threads)
+- Responses carry `request_id` fields — Rust's background reader routes them to pending oneshot channels
+- Non-V2 ops (health, capabilities, shutdown) use a separate sequential control channel
+
+```mermaid
+sequenceDiagram
+    participant R1 as Rust task 1
+    participant R2 as Rust task 2
+    participant W as GPU Worker
+    participant T1 as Python thread 1
+    participant T2 as Python thread 2
+
+    R1->>W: execute_v2(id=1, FA)
+    R2->>W: execute_v2(id=2, FA)
+    W->>T1: dispatch(id=1)
+    W->>T2: dispatch(id=2)
+    T2-->>W: response(id=2)
+    W-->>R2: response(id=2)
+    T1-->>W: response(id=1)
+    W-->>R1: response(id=1)
+```
 
 `execute_v2` is the main path for live server-owned inference:
 

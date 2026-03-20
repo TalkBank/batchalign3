@@ -117,10 +117,7 @@ impl Alignable for String {
                     return true;
                 }
                 // Fuzzy: Jaro-Winkler on lowercased strings
-                let sim = strsim::jaro_winkler(
-                    &self.to_lowercase(),
-                    &other.to_lowercase(),
-                );
+                let sim = strsim::jaro_winkler(&self.to_lowercase(), &other.to_lowercase());
                 sim >= threshold
             }
         }

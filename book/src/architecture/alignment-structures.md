@@ -1,5 +1,8 @@
 # Alignment Structures and Algorithms
 
+**Status:** Current
+**Last updated:** 2026-03-18
+
 This document inventories all alignment data structures, algorithms, and
 abstractions used in batchalign3 and its upstream dependency `talkbank-tools`.
 
@@ -30,10 +33,10 @@ same utterance content.
 
 ### Core Types
 
-#### `AlignmentDomain` (`helpers/domain.rs`)
+#### `TierDomain` (`helpers/domain.rs`)
 
 ```rust
-enum AlignmentDomain { Mor, Pho, Sin, Wor }
+enum TierDomain { Mor, Pho, Sin, Wor }
 ```
 
 Determines which main-tier elements participate in alignment counting.
@@ -78,7 +81,7 @@ All implement `TierAlignmentResult` (shared trait for generic inspection).
 | `IndexPair` | `source()/target()` on any pair type | `AlignmentPair`, `GraAlignmentPair` |
 | `TierAlignmentResult` | `pairs()/errors()/push_*()` accumulator | All 5 alignment result types |
 | `AlignableTier` | What a tier provides for generic alignment | `PhoTier`, `SinTier`, `WorTier` |
-| `AlignableContent` | `count_alignable()/extract_alignable()` methods | `[UtteranceContent]` |
+| `TierCountable` | `count_tier_positions()/collect_tier_items()` methods | `[UtteranceContent]` |
 
 The generic `positional_align()` function uses `AlignableTier` to eliminate
 duplication: `align_main_to_pho()`, `align_main_to_sin()`, and
@@ -86,10 +89,10 @@ duplication: `align_main_to_pho()`, `align_main_to_sin()`, and
 
 ### Counting Rules (`helpers/count.rs`)
 
-`count_alignable_content()` and `count_alignable_until()` traverse the
+`count_tier_positions()` and `count_tier_positions_until()` traverse the
 utterance content tree, applying domain-specific rules:
 
-- **Words**: filtered by `word_is_alignable(word, domain)` — Mor excludes
+- **Words**: filtered by `counts_for_tier(word, domain)` — Mor excludes
   fragments/untranscribed; Wor excludes nonwords, fragments, timing tokens;
   Pho/Sin include everything
 - **ReplacedWords**: Mor/Wor align to replacement words; Pho/Sin align to
@@ -103,15 +106,15 @@ handled with exhaustive match — no catch-all arms.
 
 ### Content Walker (`helpers/walk/`)
 
-`for_each_leaf()` / `for_each_leaf_mut()` centralize recursive traversal
+`walk_words()` / `walk_words_mut()` centralize recursive traversal
 so callers provide only leaf-handling closures:
 
 ```rust
-for_each_leaf(&utterance.content, Some(AlignmentDomain::Mor), |leaf| {
+walk_words(&utterance.content, Some(TierDomain::Mor), |leaf| {
     match leaf {
-        ContentLeaf::Word(word, annotations) => { /* handle */ }
-        ContentLeaf::ReplacedWord(replaced) => { /* handle */ }
-        ContentLeaf::Separator(sep) => { /* handle */ }
+        WordItem::Word(word) => { /* handle */ }
+        WordItem::ReplacedWord(replaced) => { /* handle */ }
+        WordItem::Separator(sep) => { /* handle */ }
     }
 });
 ```
@@ -211,7 +214,7 @@ Maps forced-alignment timing responses back to extracted words:
 ### FA Injection (`fa/injection.rs`)
 
 Injects word-level timings into the AST using the content walker. Walks
-utterance content with `for_each_leaf_mut()` in Wor domain, applying timing
+utterance content with `walk_words_mut()` in Wor domain, applying timing
 bullets to each word in traversal order.
 
 ### FA Postprocess (`fa/postprocess.rs`)
@@ -295,7 +298,7 @@ for the full inventory and necessity assessment.
 1. **No string hacking.** All alignment operates on typed AST structures
    (`Word`, `MorTier`, `AlignmentPair`), never on serialized CHAT text.
 
-2. **Domain-aware from the start.** `AlignmentDomain` gates traversal at the
+2. **Domain-aware from the start.** `TierDomain` gates traversal at the
    walker level, so downstream code never needs to re-implement retrace/group
    skipping logic.
 
@@ -311,7 +314,7 @@ for the full inventory and necessity assessment.
    or `BracketedItem` (22 variants) lists all variants explicitly — no
    catch-all `_ =>` arms that could silently drop new content types.
 
-6. **Content walker as shared primitive.** `for_each_leaf()` eliminates
+6. **Content walker as shared primitive.** `walk_words()` eliminates
    ~330 lines of duplicated traversal boilerplate across 7 call sites.
    Callers provide only leaf-handling closures.
 
@@ -323,10 +326,10 @@ for the full inventory and necessity assessment.
 |------|-------|---------|
 | `talkbank-model/src/alignment/mod.rs` | 104 | Module root, public API exports |
 | `talkbank-model/src/alignment/types.rs` | 53 | `AlignmentPair` |
-| `talkbank-model/src/alignment/helpers/domain.rs` | 41 | `AlignmentDomain` enum |
-| `talkbank-model/src/alignment/helpers/rules.rs` | 170 | `word_is_alignable()`, `should_skip_group()`, tag-marker predicates |
+| `talkbank-model/src/alignment/helpers/domain.rs` | 41 | `TierDomain` enum |
+| `talkbank-model/src/alignment/helpers/rules.rs` | 170 | `counts_for_tier()`, `should_skip_group()`, tag-marker predicates |
 | `talkbank-model/src/alignment/helpers/count.rs` | 572 | Domain-specific counting and extraction |
-| `talkbank-model/src/alignment/helpers/walk/mod.rs` | ~200 | `for_each_leaf()` / `for_each_leaf_mut()` |
+| `talkbank-model/src/alignment/helpers/walk/mod.rs` | ~200 | `walk_words()` / `walk_words_mut()` |
 | `talkbank-model/src/alignment/mor.rs` | — | `align_main_to_mor()` |
 | `talkbank-model/src/alignment/pho.rs` | — | `align_main_to_pho()` |
 | `talkbank-model/src/alignment/sin.rs` | — | `align_main_to_sin()` |

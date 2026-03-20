@@ -1,7 +1,7 @@
 # Forced Alignment Design
 
 **Status:** Current
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-18
 
 ## Overview
 
@@ -145,14 +145,18 @@ production CHAT files from CLAN).
    word list. If that match is unique, timing assignment is linear-time and no
    DP is needed. If the match is missing or ambiguous, UTR falls back to a
    **single global Hirschberg DP alignment** of all document words (timed +
-   untimed) against all ASR tokens. Timed utterances participate in the
-   alignment to anchor their neighbors but their bullets are left unchanged.
-   For each untimed utterance, the min/max matched ASR token indices determine
-   the utterance bullet's time span. The global alignment avoids the
-   token-exhaustion problem that per-utterance windowed approaches suffer
-   from — earlier utterances cannot starve later ones of ASR tokens. It is
-   still a monotonic aligner, so dense overlap / text-audio reordering remains
-   a known limitation rather than something UTR can fully repair.
+   untimed) against all ASR tokens, using **fuzzy matching** (Jaro-Winkler
+   similarity at threshold 0.85 by default) to tolerate ASR substitutions
+   like "gonna"/"gona" and "mhm"/"mmhm". Timed utterances participate in
+   the alignment to anchor their neighbors but their bullets are left
+   unchanged. For each untimed utterance, the min/max matched ASR token
+   indices determine the utterance bullet's time span. The global alignment
+   avoids the token-exhaustion problem that per-utterance windowed approaches
+   suffer from. It is still a monotonic aligner, so dense overlap /
+   text-audio reordering remains a known limitation.
+
+   **Configurable via:** `--utr-fuzzy <threshold>` (default 0.85; set to 1.0
+   for exact-only matching).
 5. Re-serializes the CHAT with recovered bullets.
 
 ```mermaid

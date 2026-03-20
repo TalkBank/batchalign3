@@ -248,7 +248,11 @@ async fn process_one_transcribe_file(
                 }
 
                 lifecycle
-                    .complete_with_result(output_filename.clone().into(), ContentType::Chat, finished_at)
+                    .complete_with_result(
+                        output_filename.clone().into(),
+                        ContentType::Chat,
+                        finished_at,
+                    )
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }

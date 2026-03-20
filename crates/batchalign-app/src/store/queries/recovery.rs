@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::api::{ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp};
+use crate::api::{
+    ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -38,156 +40,157 @@ impl JobStore {
 
         let rows = db.load_all_jobs().await?;
         let ttl_cutoff = super::super::unix_now().0 - (self.config.job_ttl_days as f64 * 86400.0);
-        let (loaded, recovered_updates) =
-            self.registry
-                .mutate_all(move |jobs| {
-                    let mut loaded = 0;
-                    let mut recovered_updates = Vec::new();
+        let (loaded, recovered_updates) = self
+            .registry
+            .mutate_all(move |jobs| {
+                let mut loaded = 0;
+                let mut recovered_updates = Vec::new();
 
-                    for row in rows {
-                        if row.submitted_at < ttl_cutoff {
-                            continue;
-                        }
-
-                        let status: JobStatus = row.status.parse().unwrap_or(JobStatus::Failed);
-
-                        let mut file_statuses = HashMap::new();
-                        for fs_row in &row.file_statuses {
-                            let fs_status: FileStatusKind =
-                                fs_row.status.parse().unwrap_or(FileStatusKind::Error);
-                            file_statuses.insert(
-                                fs_row.filename.clone(),
-                                FileStatus {
-                                    filename: FileName::from(fs_row.filename.clone()),
-                                    status: fs_status,
-                                    error: fs_row.error.clone(),
-                                    error_category: fs_row
-                                        .error_category
-                                        .as_deref()
-                                        .and_then(|raw| raw.parse().ok()),
-                                    error_codes: None,
-                                    error_line: None,
-                                    bug_report_id: fs_row.bug_report_id.clone(),
-                                    started_at: fs_row.started_at.map(UnixTimestamp),
-                                    finished_at: fs_row.finished_at.map(UnixTimestamp),
-                                    next_eligible_at: fs_row.next_eligible_at.map(UnixTimestamp),
-                                    current_attempt_id: None,
-                                    progress_current: None,
-                                    progress_total: None,
-                                    progress_stage: None,
-                                },
-                            );
-                        }
-
-                        let completed_files = file_statuses
-                            .values()
-                            .filter(|file_status| file_status.status.is_terminal())
-                            .count() as i64;
-
-                        let mut results: Vec<FileResultEntry> = Vec::new();
-                        for fs_row in &row.file_statuses {
-                            let fs_status: FileStatusKind =
-                                fs_row.status.parse().unwrap_or(FileStatusKind::Error);
-                            if fs_status.is_terminal() {
-                                results.push(FileResultEntry {
-                                    filename: FileName::from(fs_row.filename.clone()),
-                                    content_type: match fs_row.content_type.as_str() {
-                                        "csv" => ContentType::Csv,
-                                        "text" => ContentType::Text,
-                                        _ => ContentType::Chat,
-                                    },
-                                    error: fs_row.error.clone(),
-                                });
-                            }
-                        }
-
-                        let job_id_newtype = JobId::from(row.job_id.clone());
-                        let mut job = Job {
-                            identity: JobIdentity {
-                                job_id: job_id_newtype.clone(),
-                                correlation_id: if row.correlation_id.is_empty() {
-                                    row.job_id.clone().into()
-                                } else {
-                                    row.correlation_id.into()
-                                },
-                            },
-                            dispatch: JobDispatchConfig {
-                                command: row.command.clone().into(),
-                                lang: crate::api::LanguageSpec::parse_from_db(&row.lang),
-                                num_speakers: NumSpeakers(row.num_speakers),
-                                options: row.options,
-                                runtime_state: std::collections::BTreeMap::new(),
-                                debug_traces: false,
-                            },
-                            source: JobSourceContext {
-                                submitted_by: row.submitted_by,
-                                submitted_by_name: row.submitted_by_name,
-                                source_dir: row.source_dir.into(),
-                            },
-                            filesystem: JobFilesystemConfig {
-                                filenames: row.filenames.into_iter().map(FileName::from).collect(),
-                                has_chat: row.has_chat,
-                                staging_dir: row.staging_dir.into(),
-                                paths_mode: row.paths_mode,
-                                source_paths: row.source_paths.into_iter().map(Into::into).collect(),
-                                output_paths: row.output_paths.into_iter().map(Into::into).collect(),
-                                before_paths: Vec::new(),
-                                media_mapping: row.media_mapping,
-                                media_subdir: row.media_subdir,
-                            },
-                            execution: JobExecutionState {
-                                status,
-                                file_statuses,
-                                results,
-                                error: row.error,
-                                completed_files,
-                            },
-                            schedule: JobScheduleState {
-                                submitted_at: UnixTimestamp(row.submitted_at),
-                                completed_at: row.completed_at.map(UnixTimestamp),
-                                next_eligible_at: row.next_eligible_at.map(UnixTimestamp),
-                                num_workers: row.num_workers.map(|n| n as i64),
-                                lease: JobLeaseState {
-                                    leased_by_node: row.leased_by_node.map(|node| node.into()),
-                                    expires_at: row.lease_expires_at.map(UnixTimestamp),
-                                    heartbeat_at: row.lease_heartbeat_at.map(UnixTimestamp),
-                                },
-                            },
-                            runtime: JobRuntimeControl {
-                                cancel_token: CancellationToken::new(),
-                                runner_active: false,
-                            },
-                        };
-
-                        if matches!(status, JobStatus::Interrupted | JobStatus::Running) {
-                            let requeued_files = job
-                                .execution
-                                .file_statuses
-                                .iter()
-                                .filter(|(_, file_status)| file_status.status.is_resumable())
-                                .map(|(filename, _)| filename.clone())
-                                .collect();
-                            let disposition = job.reconcile_recovered_runtime_state();
-                            recovered_updates.push(RecoveredJobPersistence {
-                                job_id: job_id_newtype.clone(),
-                                status: job.execution.status,
-                                completed_at: job.schedule.completed_at,
-                                next_eligible_at: job.schedule.next_eligible_at,
-                                requeued_files: match disposition {
-                                    RecoveryDisposition::Requeued => requeued_files,
-                                    RecoveryDisposition::Failed
-                                    | RecoveryDisposition::Completed => Vec::new(),
-                                },
-                            });
-                        }
-
-                        jobs.insert(job_id_newtype, job);
-                        loaded += 1;
+                for row in rows {
+                    if row.submitted_at < ttl_cutoff {
+                        continue;
                     }
 
-                    (loaded, recovered_updates)
-                })
-                .await;
+                    let status: JobStatus = row.status.parse().unwrap_or(JobStatus::Failed);
+
+                    let mut file_statuses = HashMap::new();
+                    for fs_row in &row.file_statuses {
+                        let fs_status: FileStatusKind =
+                            fs_row.status.parse().unwrap_or(FileStatusKind::Error);
+                        file_statuses.insert(
+                            fs_row.filename.clone(),
+                            FileStatus {
+                                filename: FileName::from(fs_row.filename.clone()),
+                                status: fs_status,
+                                error: fs_row.error.clone(),
+                                error_category: fs_row
+                                    .error_category
+                                    .as_deref()
+                                    .and_then(|raw| raw.parse().ok()),
+                                error_codes: None,
+                                error_line: None,
+                                bug_report_id: fs_row.bug_report_id.clone(),
+                                started_at: fs_row.started_at.map(UnixTimestamp),
+                                finished_at: fs_row.finished_at.map(UnixTimestamp),
+                                next_eligible_at: fs_row.next_eligible_at.map(UnixTimestamp),
+                                current_attempt_id: None,
+                                progress_current: None,
+                                progress_total: None,
+                                progress_stage: None,
+                            },
+                        );
+                    }
+
+                    let completed_files = file_statuses
+                        .values()
+                        .filter(|file_status| file_status.status.is_terminal())
+                        .count() as i64;
+
+                    let mut results: Vec<FileResultEntry> = Vec::new();
+                    for fs_row in &row.file_statuses {
+                        let fs_status: FileStatusKind =
+                            fs_row.status.parse().unwrap_or(FileStatusKind::Error);
+                        if fs_status.is_terminal() {
+                            results.push(FileResultEntry {
+                                filename: FileName::from(fs_row.filename.clone()),
+                                content_type: match fs_row.content_type.as_str() {
+                                    "csv" => ContentType::Csv,
+                                    "text" => ContentType::Text,
+                                    _ => ContentType::Chat,
+                                },
+                                error: fs_row.error.clone(),
+                            });
+                        }
+                    }
+
+                    let job_id_newtype = JobId::from(row.job_id.clone());
+                    let mut job = Job {
+                        identity: JobIdentity {
+                            job_id: job_id_newtype.clone(),
+                            correlation_id: if row.correlation_id.is_empty() {
+                                row.job_id.clone().into()
+                            } else {
+                                row.correlation_id.into()
+                            },
+                        },
+                        dispatch: JobDispatchConfig {
+                            command: row.command.clone().into(),
+                            lang: crate::api::LanguageSpec::parse_from_db(&row.lang),
+                            num_speakers: NumSpeakers(row.num_speakers),
+                            options: row.options,
+                            runtime_state: std::collections::BTreeMap::new(),
+                            debug_traces: false,
+                        },
+                        source: JobSourceContext {
+                            submitted_by: row.submitted_by,
+                            submitted_by_name: row.submitted_by_name,
+                            source_dir: row.source_dir.into(),
+                        },
+                        filesystem: JobFilesystemConfig {
+                            filenames: row.filenames.into_iter().map(FileName::from).collect(),
+                            has_chat: row.has_chat,
+                            staging_dir: row.staging_dir.into(),
+                            paths_mode: row.paths_mode,
+                            source_paths: row.source_paths.into_iter().map(Into::into).collect(),
+                            output_paths: row.output_paths.into_iter().map(Into::into).collect(),
+                            before_paths: Vec::new(),
+                            media_mapping: row.media_mapping,
+                            media_subdir: row.media_subdir,
+                        },
+                        execution: JobExecutionState {
+                            status,
+                            file_statuses,
+                            results,
+                            error: row.error,
+                            completed_files,
+                        },
+                        schedule: JobScheduleState {
+                            submitted_at: UnixTimestamp(row.submitted_at),
+                            completed_at: row.completed_at.map(UnixTimestamp),
+                            next_eligible_at: row.next_eligible_at.map(UnixTimestamp),
+                            num_workers: row.num_workers.map(|n| n as i64),
+                            lease: JobLeaseState {
+                                leased_by_node: row.leased_by_node.map(|node| node.into()),
+                                expires_at: row.lease_expires_at.map(UnixTimestamp),
+                                heartbeat_at: row.lease_heartbeat_at.map(UnixTimestamp),
+                            },
+                        },
+                        runtime: JobRuntimeControl {
+                            cancel_token: CancellationToken::new(),
+                            runner_active: false,
+                        },
+                    };
+
+                    if matches!(status, JobStatus::Interrupted | JobStatus::Running) {
+                        let requeued_files = job
+                            .execution
+                            .file_statuses
+                            .iter()
+                            .filter(|(_, file_status)| file_status.status.is_resumable())
+                            .map(|(filename, _)| filename.clone())
+                            .collect();
+                        let disposition = job.reconcile_recovered_runtime_state();
+                        recovered_updates.push(RecoveredJobPersistence {
+                            job_id: job_id_newtype.clone(),
+                            status: job.execution.status,
+                            completed_at: job.schedule.completed_at,
+                            next_eligible_at: job.schedule.next_eligible_at,
+                            requeued_files: match disposition {
+                                RecoveryDisposition::Requeued => requeued_files,
+                                RecoveryDisposition::Failed | RecoveryDisposition::Completed => {
+                                    Vec::new()
+                                }
+                            },
+                        });
+                    }
+
+                    jobs.insert(job_id_newtype, job);
+                    loaded += 1;
+                }
+
+                (loaded, recovered_updates)
+            })
+            .await;
 
         for update in recovered_updates {
             db.update_job_status(

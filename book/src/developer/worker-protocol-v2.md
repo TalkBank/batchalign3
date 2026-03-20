@@ -1,7 +1,7 @@
 # Worker Protocol V2
 
 **Status:** Current
-**Last verified:** 2026-03-16
+**Last verified:** 2026-03-18
 
 This document is the implementation spec for the next major Python-boundary
 redesign in `batchalign3`.
@@ -650,3 +650,87 @@ The next concrete step after the live FA migration should be:
    add a batched or multiplexed V2 execute shape if profiling shows the
    per-group roundtrips matter
 3. remove the legacy FA transport once the V2 path has soaked
+
+## Concurrent dispatch (GPU profile)
+
+GPU profile workers support multiple in-flight V2 requests via request_id
+multiplexing. This restores the model-sharing throughput of batchalign-next's
+`ThreadPoolExecutor` while keeping the subprocess boundary.
+
+### Python side
+
+GPU workers run `_serve_stdio_concurrent(max_threads=4)` instead of the
+sequential `_serve_stdio()`. The main thread reads stdin and submits each
+request to a `ThreadPoolExecutor`. PyTorch releases the GIL during CUDA
+kernels, enabling real concurrent GPU inference across threads sharing the
+same loaded model weights.
+
+```python
+# Simplified concurrent serving loop
+pool = ThreadPoolExecutor(max_workers=4)
+stdout_lock = threading.Lock()
+
+for line in sys.stdin:
+    message = json.loads(line)
+    pool.submit(_handle_and_respond, message, stdout_lock)
+```
+
+Responses are written under a stdout lock so JSON lines never interleave.
+
+### Rust side
+
+The `SharedGpuWorker` type (in `pool/shared_gpu.rs`) replaces the exclusive
+`CheckedOutWorker` for GPU profile dispatch:
+
+```mermaid
+flowchart LR
+    subgraph Rust
+        t1["Task 1: FA file A"]
+        t2["Task 2: FA file B"]
+        t3["Task 3: FA file C"]
+        gpu["SharedGpuWorker"]
+        reader["Background reader"]
+        p1["pending: id=1 → oneshot"]
+        p2["pending: id=2 → oneshot"]
+        p3["pending: id=3 → oneshot"]
+    end
+    subgraph Python
+        stdin["stdin reader"]
+        pool["ThreadPool"]
+        th1["thread 1"]
+        th2["thread 2"]
+    end
+
+    t1 -->|"execute_v2(id=1)"| gpu
+    t2 -->|"execute_v2(id=2)"| gpu
+    t3 -->|"execute_v2(id=3)"| gpu
+    gpu -->|stdin mutex| stdin
+    stdin --> pool
+    pool --> th1
+    pool --> th2
+    th1 -->|"response(id=2)"| reader
+    th2 -->|"response(id=1)"| reader
+    reader --> p1
+    reader --> p2
+```
+
+Key components:
+- **`stdin: Mutex<ChildStdin>`** — serialized writes so JSON lines don't interleave
+- **`pending: Mutex<HashMap<String, oneshot::Sender>>`** — maps request_id to response channel
+- **Background reader task** — continuously reads stdout, parses responses, routes by request_id
+- **Control channel** — sequential non-V2 ops (health, capabilities, shutdown) via a separate oneshot
+
+### Request/response correlation
+
+`ExecuteRequestV2.request_id` and `ExecuteResponseV2.request_id` are the
+multiplexing key. The background reader extracts the request_id from each
+response and sends it to the matching pending oneshot channel. Orphaned
+responses (timed-out requests) are logged and dropped.
+
+### Profile routing
+
+`WorkerPool::dispatch_execute_v2()` checks `WorkerProfile::is_concurrent()`:
+- GPU profile → `dispatch_gpu_execute_v2()` → `SharedGpuWorker::execute_v2()`
+- Stanza/IO profile → `checkout()` → `CheckedOutWorker::execute_v2()`
+
+Stanza and IO profiles keep the existing sequential checkout model.

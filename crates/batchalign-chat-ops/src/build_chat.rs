@@ -222,15 +222,13 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
         }
 
         // Word-level utterance
-        if let Some(mut utt_line) =
-            build_word_utterance(&utt_desc.speaker, words, desc.write_wor)?
+        if let Some(mut utt_line) = build_word_utterance(&utt_desc.speaker, words, desc.write_wor)?
         {
             // Set [- lang] precode when utterance language differs from primary
             if let Some(ref utt_lang) = utt_desc.lang {
                 if utt_lang != primary_lang {
                     if let Line::Utterance(ref mut utt) = utt_line {
-                        utt.main.content.language_code =
-                            Some(LanguageCode::new(utt_lang.as_str()));
+                        utt.main.content.language_code = Some(LanguageCode::new(utt_lang.as_str()));
                     }
                 }
             }
@@ -736,10 +734,7 @@ mod tests {
             media_type: None,
             utterances: vec![UtteranceDesc {
                 speaker: "PAR".to_string(),
-                words: Some(vec![
-                    wd("how", None, None),
-                    wd("?", None, None),
-                ]),
+                words: Some(vec![wd("how", None, None), wd("?", None, None)]),
                 text: None,
                 start_ms: None,
                 end_ms: None,
@@ -954,10 +949,7 @@ mod tests {
             output.contains("\u{15}"),
             "retrace word should preserve timing bullets: {output}"
         );
-        assert!(
-            output.contains("[/]"),
-            "expected retrace marker: {output}"
-        );
+        assert!(output.contains("[/]"), "expected retrace marker: {output}");
     }
 
     #[test]
@@ -1039,8 +1031,14 @@ mod tests {
         let serialized = to_chat_string(&chat);
 
         // Should contain filled pause marker and retrace
-        assert!(serialized.contains("&-um"), "expected filled pause: {serialized}");
-        assert!(serialized.contains("[/]"), "expected retrace marker: {serialized}");
+        assert!(
+            serialized.contains("&-um"),
+            "expected filled pause: {serialized}"
+        );
+        assert!(
+            serialized.contains("[/]"),
+            "expected retrace marker: {serialized}"
+        );
 
         let (_parsed, errors) = parse_lenient(&serialized);
         assert!(

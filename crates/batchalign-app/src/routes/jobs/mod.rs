@@ -82,7 +82,11 @@ fn sanitize_correlation_id(raw: &str) -> Option<CorrelationId> {
             }
         }
     }
-    if out.is_empty() { None } else { Some(CorrelationId::from(out)) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(CorrelationId::from(out))
+    }
 }
 
 fn correlation_id_from_headers(headers: &HeaderMap, fallback: &str) -> CorrelationId {
@@ -268,7 +272,11 @@ pub(crate) async fn submit_job(
             source_paths: source_paths.into_iter().map(Into::into).collect(),
             output_paths: output_paths.into_iter().map(Into::into).collect(),
             before_paths: if submission.paths_mode {
-                submission.before_paths.iter().map(|p| p.clone().into()).collect()
+                submission
+                    .before_paths
+                    .iter()
+                    .map(|p| p.clone().into())
+                    .collect()
             } else {
                 Vec::new()
             },

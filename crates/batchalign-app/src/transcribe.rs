@@ -772,7 +772,11 @@ mod tests {
         // Previously this test asserted the opposite (1 monologue, speaker 0),
         // which enshrined the bug.
         let output = convert_asr_response(&response);
-        assert_eq!(output.monologues.len(), 2, "each speaker change must start a new monologue");
+        assert_eq!(
+            output.monologues.len(),
+            2,
+            "each speaker change must start a new monologue"
+        );
         assert_eq!(output.monologues[0].speaker, 0);
         assert_eq!(output.monologues[0].elements.len(), 1);
         assert_eq!(output.monologues[1].speaker, 1);
@@ -858,37 +862,205 @@ mod tests {
         AsrResponse {
             tokens: vec![
                 // Speaker 0 — first turn
-                AsrToken { text: "so".into(), start_s: Some(DurationSeconds(0.24)), end_s: Some(DurationSeconds(0.42)), speaker: Some("0".into()), confidence: Some(0.99) },
-                AsrToken { text: "tell".into(), start_s: Some(DurationSeconds(0.42)), end_s: Some(DurationSeconds(0.60)), speaker: Some("0".into()), confidence: Some(0.98) },
-                AsrToken { text: "me".into(), start_s: Some(DurationSeconds(0.60)), end_s: Some(DurationSeconds(0.72)), speaker: Some("0".into()), confidence: Some(0.99) },
-                AsrToken { text: "about".into(), start_s: Some(DurationSeconds(0.72)), end_s: Some(DurationSeconds(0.96)), speaker: Some("0".into()), confidence: Some(0.97) },
-                AsrToken { text: "your".into(), start_s: Some(DurationSeconds(0.96)), end_s: Some(DurationSeconds(1.14)), speaker: Some("0".into()), confidence: Some(0.98) },
-                AsrToken { text: "experience".into(), start_s: Some(DurationSeconds(1.14)), end_s: Some(DurationSeconds(1.68)), speaker: Some("0".into()), confidence: Some(0.96) },
-                AsrToken { text: "with".into(), start_s: Some(DurationSeconds(1.68)), end_s: Some(DurationSeconds(1.86)), speaker: Some("0".into()), confidence: Some(0.98) },
-                AsrToken { text: "the".into(), start_s: Some(DurationSeconds(1.86)), end_s: Some(DurationSeconds(1.98)), speaker: Some("0".into()), confidence: Some(0.99) },
-                AsrToken { text: "program.".into(), start_s: Some(DurationSeconds(1.98)), end_s: Some(DurationSeconds(2.52)), speaker: Some("0".into()), confidence: Some(0.95) },
+                AsrToken {
+                    text: "so".into(),
+                    start_s: Some(DurationSeconds(0.24)),
+                    end_s: Some(DurationSeconds(0.42)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.99),
+                },
+                AsrToken {
+                    text: "tell".into(),
+                    start_s: Some(DurationSeconds(0.42)),
+                    end_s: Some(DurationSeconds(0.60)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "me".into(),
+                    start_s: Some(DurationSeconds(0.60)),
+                    end_s: Some(DurationSeconds(0.72)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.99),
+                },
+                AsrToken {
+                    text: "about".into(),
+                    start_s: Some(DurationSeconds(0.72)),
+                    end_s: Some(DurationSeconds(0.96)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "your".into(),
+                    start_s: Some(DurationSeconds(0.96)),
+                    end_s: Some(DurationSeconds(1.14)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "experience".into(),
+                    start_s: Some(DurationSeconds(1.14)),
+                    end_s: Some(DurationSeconds(1.68)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.96),
+                },
+                AsrToken {
+                    text: "with".into(),
+                    start_s: Some(DurationSeconds(1.68)),
+                    end_s: Some(DurationSeconds(1.86)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "the".into(),
+                    start_s: Some(DurationSeconds(1.86)),
+                    end_s: Some(DurationSeconds(1.98)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.99),
+                },
+                AsrToken {
+                    text: "program.".into(),
+                    start_s: Some(DurationSeconds(1.98)),
+                    end_s: Some(DurationSeconds(2.52)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.95),
+                },
                 // Speaker 1 — response
-                AsrToken { text: "well".into(), start_s: Some(DurationSeconds(3.00)), end_s: Some(DurationSeconds(3.24)), speaker: Some("1".into()), confidence: Some(0.97) },
-                AsrToken { text: "I".into(), start_s: Some(DurationSeconds(3.24)), end_s: Some(DurationSeconds(3.36)), speaker: Some("1".into()), confidence: Some(0.99) },
-                AsrToken { text: "started".into(), start_s: Some(DurationSeconds(3.36)), end_s: Some(DurationSeconds(3.72)), speaker: Some("1".into()), confidence: Some(0.98) },
-                AsrToken { text: "about".into(), start_s: Some(DurationSeconds(3.72)), end_s: Some(DurationSeconds(3.96)), speaker: Some("1".into()), confidence: Some(0.97) },
-                AsrToken { text: "3".into(), start_s: Some(DurationSeconds(3.96)), end_s: Some(DurationSeconds(4.14)), speaker: Some("1".into()), confidence: Some(0.96) },
-                AsrToken { text: "years".into(), start_s: Some(DurationSeconds(4.14)), end_s: Some(DurationSeconds(4.38)), speaker: Some("1".into()), confidence: Some(0.98) },
-                AsrToken { text: "ago.".into(), start_s: Some(DurationSeconds(4.38)), end_s: Some(DurationSeconds(4.68)), speaker: Some("1".into()), confidence: Some(0.95) },
-                AsrToken { text: "it".into(), start_s: Some(DurationSeconds(4.80)), end_s: Some(DurationSeconds(4.92)), speaker: Some("1".into()), confidence: Some(0.99) },
-                AsrToken { text: "was".into(), start_s: Some(DurationSeconds(4.92)), end_s: Some(DurationSeconds(5.10)), speaker: Some("1".into()), confidence: Some(0.98) },
-                AsrToken { text: "really".into(), start_s: Some(DurationSeconds(5.10)), end_s: Some(DurationSeconds(5.40)), speaker: Some("1".into()), confidence: Some(0.97) },
-                AsrToken { text: "helpful".into(), start_s: Some(DurationSeconds(5.40)), end_s: Some(DurationSeconds(5.82)), speaker: Some("1".into()), confidence: Some(0.96) },
+                AsrToken {
+                    text: "well".into(),
+                    start_s: Some(DurationSeconds(3.00)),
+                    end_s: Some(DurationSeconds(3.24)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "I".into(),
+                    start_s: Some(DurationSeconds(3.24)),
+                    end_s: Some(DurationSeconds(3.36)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.99),
+                },
+                AsrToken {
+                    text: "started".into(),
+                    start_s: Some(DurationSeconds(3.36)),
+                    end_s: Some(DurationSeconds(3.72)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "about".into(),
+                    start_s: Some(DurationSeconds(3.72)),
+                    end_s: Some(DurationSeconds(3.96)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "3".into(),
+                    start_s: Some(DurationSeconds(3.96)),
+                    end_s: Some(DurationSeconds(4.14)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.96),
+                },
+                AsrToken {
+                    text: "years".into(),
+                    start_s: Some(DurationSeconds(4.14)),
+                    end_s: Some(DurationSeconds(4.38)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "ago.".into(),
+                    start_s: Some(DurationSeconds(4.38)),
+                    end_s: Some(DurationSeconds(4.68)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.95),
+                },
+                AsrToken {
+                    text: "it".into(),
+                    start_s: Some(DurationSeconds(4.80)),
+                    end_s: Some(DurationSeconds(4.92)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.99),
+                },
+                AsrToken {
+                    text: "was".into(),
+                    start_s: Some(DurationSeconds(4.92)),
+                    end_s: Some(DurationSeconds(5.10)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "really".into(),
+                    start_s: Some(DurationSeconds(5.10)),
+                    end_s: Some(DurationSeconds(5.40)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "helpful".into(),
+                    start_s: Some(DurationSeconds(5.40)),
+                    end_s: Some(DurationSeconds(5.82)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.96),
+                },
                 // Speaker 0 — follow-up
-                AsrToken { text: "that".into(), start_s: Some(DurationSeconds(6.00)), end_s: Some(DurationSeconds(6.18)), speaker: Some("0".into()), confidence: Some(0.98) },
-                AsrToken { text: "sounds".into(), start_s: Some(DurationSeconds(6.18)), end_s: Some(DurationSeconds(6.48)), speaker: Some("0".into()), confidence: Some(0.97) },
-                AsrToken { text: "great".into(), start_s: Some(DurationSeconds(6.48)), end_s: Some(DurationSeconds(6.78)), speaker: Some("0".into()), confidence: Some(0.99) },
+                AsrToken {
+                    text: "that".into(),
+                    start_s: Some(DurationSeconds(6.00)),
+                    end_s: Some(DurationSeconds(6.18)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "sounds".into(),
+                    start_s: Some(DurationSeconds(6.18)),
+                    end_s: Some(DurationSeconds(6.48)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "great".into(),
+                    start_s: Some(DurationSeconds(6.48)),
+                    end_s: Some(DurationSeconds(6.78)),
+                    speaker: Some("0".into()),
+                    confidence: Some(0.99),
+                },
                 // Speaker 1 — closing
-                AsrToken { text: "yeah".into(), start_s: Some(DurationSeconds(7.00)), end_s: Some(DurationSeconds(7.24)), speaker: Some("1".into()), confidence: Some(0.98) },
-                AsrToken { text: "I".into(), start_s: Some(DurationSeconds(7.24)), end_s: Some(DurationSeconds(7.36)), speaker: Some("1".into()), confidence: Some(0.99) },
-                AsrToken { text: "would".into(), start_s: Some(DurationSeconds(7.36)), end_s: Some(DurationSeconds(7.56)), speaker: Some("1".into()), confidence: Some(0.97) },
-                AsrToken { text: "recommend".into(), start_s: Some(DurationSeconds(7.56)), end_s: Some(DurationSeconds(8.04)), speaker: Some("1".into()), confidence: Some(0.96) },
-                AsrToken { text: "it".into(), start_s: Some(DurationSeconds(8.04)), end_s: Some(DurationSeconds(8.16)), speaker: Some("1".into()), confidence: Some(0.99) },
+                AsrToken {
+                    text: "yeah".into(),
+                    start_s: Some(DurationSeconds(7.00)),
+                    end_s: Some(DurationSeconds(7.24)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "I".into(),
+                    start_s: Some(DurationSeconds(7.24)),
+                    end_s: Some(DurationSeconds(7.36)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.99),
+                },
+                AsrToken {
+                    text: "would".into(),
+                    start_s: Some(DurationSeconds(7.36)),
+                    end_s: Some(DurationSeconds(7.56)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "recommend".into(),
+                    start_s: Some(DurationSeconds(7.56)),
+                    end_s: Some(DurationSeconds(8.04)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.96),
+                },
+                AsrToken {
+                    text: "it".into(),
+                    start_s: Some(DurationSeconds(8.04)),
+                    end_s: Some(DurationSeconds(8.16)),
+                    speaker: Some("1".into()),
+                    confidence: Some(0.99),
+                },
             ],
             lang: LanguageCode3::new("eng"),
         }
@@ -899,19 +1071,97 @@ mod tests {
     fn canned_whisper_no_speaker_response() -> AsrResponse {
         AsrResponse {
             tokens: vec![
-                AsrToken { text: "the".into(), start_s: Some(DurationSeconds(0.0)), end_s: Some(DurationSeconds(0.18)), speaker: None, confidence: Some(0.95) },
-                AsrToken { text: "quick".into(), start_s: Some(DurationSeconds(0.18)), end_s: Some(DurationSeconds(0.42)), speaker: None, confidence: Some(0.93) },
-                AsrToken { text: "brown".into(), start_s: Some(DurationSeconds(0.42)), end_s: Some(DurationSeconds(0.66)), speaker: None, confidence: Some(0.94) },
-                AsrToken { text: "fox".into(), start_s: Some(DurationSeconds(0.66)), end_s: Some(DurationSeconds(0.90)), speaker: None, confidence: Some(0.96) },
-                AsrToken { text: "jumps".into(), start_s: Some(DurationSeconds(0.90)), end_s: Some(DurationSeconds(1.20)), speaker: None, confidence: Some(0.95) },
-                AsrToken { text: "over".into(), start_s: Some(DurationSeconds(1.20)), end_s: Some(DurationSeconds(1.44)), speaker: None, confidence: Some(0.97) },
-                AsrToken { text: "the".into(), start_s: Some(DurationSeconds(1.44)), end_s: Some(DurationSeconds(1.56)), speaker: None, confidence: Some(0.98) },
-                AsrToken { text: "lazy".into(), start_s: Some(DurationSeconds(1.56)), end_s: Some(DurationSeconds(1.86)), speaker: None, confidence: Some(0.94) },
-                AsrToken { text: "dog.".into(), start_s: Some(DurationSeconds(1.86)), end_s: Some(DurationSeconds(2.22)), speaker: None, confidence: Some(0.96) },
-                AsrToken { text: "then".into(), start_s: Some(DurationSeconds(2.40)), end_s: Some(DurationSeconds(2.58)), speaker: None, confidence: Some(0.93) },
-                AsrToken { text: "it".into(), start_s: Some(DurationSeconds(2.58)), end_s: Some(DurationSeconds(2.70)), speaker: None, confidence: Some(0.97) },
-                AsrToken { text: "sat".into(), start_s: Some(DurationSeconds(2.70)), end_s: Some(DurationSeconds(2.94)), speaker: None, confidence: Some(0.95) },
-                AsrToken { text: "down".into(), start_s: Some(DurationSeconds(2.94)), end_s: Some(DurationSeconds(3.18)), speaker: None, confidence: Some(0.96) },
+                AsrToken {
+                    text: "the".into(),
+                    start_s: Some(DurationSeconds(0.0)),
+                    end_s: Some(DurationSeconds(0.18)),
+                    speaker: None,
+                    confidence: Some(0.95),
+                },
+                AsrToken {
+                    text: "quick".into(),
+                    start_s: Some(DurationSeconds(0.18)),
+                    end_s: Some(DurationSeconds(0.42)),
+                    speaker: None,
+                    confidence: Some(0.93),
+                },
+                AsrToken {
+                    text: "brown".into(),
+                    start_s: Some(DurationSeconds(0.42)),
+                    end_s: Some(DurationSeconds(0.66)),
+                    speaker: None,
+                    confidence: Some(0.94),
+                },
+                AsrToken {
+                    text: "fox".into(),
+                    start_s: Some(DurationSeconds(0.66)),
+                    end_s: Some(DurationSeconds(0.90)),
+                    speaker: None,
+                    confidence: Some(0.96),
+                },
+                AsrToken {
+                    text: "jumps".into(),
+                    start_s: Some(DurationSeconds(0.90)),
+                    end_s: Some(DurationSeconds(1.20)),
+                    speaker: None,
+                    confidence: Some(0.95),
+                },
+                AsrToken {
+                    text: "over".into(),
+                    start_s: Some(DurationSeconds(1.20)),
+                    end_s: Some(DurationSeconds(1.44)),
+                    speaker: None,
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "the".into(),
+                    start_s: Some(DurationSeconds(1.44)),
+                    end_s: Some(DurationSeconds(1.56)),
+                    speaker: None,
+                    confidence: Some(0.98),
+                },
+                AsrToken {
+                    text: "lazy".into(),
+                    start_s: Some(DurationSeconds(1.56)),
+                    end_s: Some(DurationSeconds(1.86)),
+                    speaker: None,
+                    confidence: Some(0.94),
+                },
+                AsrToken {
+                    text: "dog.".into(),
+                    start_s: Some(DurationSeconds(1.86)),
+                    end_s: Some(DurationSeconds(2.22)),
+                    speaker: None,
+                    confidence: Some(0.96),
+                },
+                AsrToken {
+                    text: "then".into(),
+                    start_s: Some(DurationSeconds(2.40)),
+                    end_s: Some(DurationSeconds(2.58)),
+                    speaker: None,
+                    confidence: Some(0.93),
+                },
+                AsrToken {
+                    text: "it".into(),
+                    start_s: Some(DurationSeconds(2.58)),
+                    end_s: Some(DurationSeconds(2.70)),
+                    speaker: None,
+                    confidence: Some(0.97),
+                },
+                AsrToken {
+                    text: "sat".into(),
+                    start_s: Some(DurationSeconds(2.70)),
+                    end_s: Some(DurationSeconds(2.94)),
+                    speaker: None,
+                    confidence: Some(0.95),
+                },
+                AsrToken {
+                    text: "down".into(),
+                    start_s: Some(DurationSeconds(2.94)),
+                    end_s: Some(DurationSeconds(3.18)),
+                    speaker: None,
+                    confidence: Some(0.96),
+                },
             ],
             lang: LanguageCode3::new("eng"),
         }
@@ -965,8 +1215,14 @@ mod tests {
         // Must have utterances from both speakers
         let par_count = chat.lines().filter(|l| l.starts_with("*PAR:")).count();
         let inv_count = chat.lines().filter(|l| l.starts_with("*INV:")).count();
-        assert!(par_count >= 1, "expected at least 1 *PAR utterance, got {par_count}");
-        assert!(inv_count >= 1, "expected at least 1 *INV utterance, got {inv_count}");
+        assert!(
+            par_count >= 1,
+            "expected at least 1 *PAR utterance, got {par_count}"
+        );
+        assert!(
+            inv_count >= 1,
+            "expected at least 1 *INV utterance, got {inv_count}"
+        );
 
         // Timing bullets must be present (the \x15 delimiters)
         assert!(
@@ -997,7 +1253,10 @@ mod tests {
 
         // Must have exactly 1 participant
         let id_count = chat.lines().filter(|l| l.starts_with("@ID:")).count();
-        assert_eq!(id_count, 1, "expected 1 @ID line for single-speaker, got {id_count}");
+        assert_eq!(
+            id_count, 1,
+            "expected 1 @ID line for single-speaker, got {id_count}"
+        );
 
         // All utterances must be from PAR (speaker 0)
         let non_par_utts: Vec<&str> = chat
@@ -1011,7 +1270,10 @@ mod tests {
 
         // Must have at least 1 utterance
         let par_count = chat.lines().filter(|l| l.starts_with("*PAR:")).count();
-        assert!(par_count >= 1, "expected at least 1 *PAR utterance, got {par_count}");
+        assert!(
+            par_count >= 1,
+            "expected at least 1 *PAR utterance, got {par_count}"
+        );
 
         // Timing bullets must be present
         assert!(
@@ -1079,10 +1341,7 @@ mod tests {
             1,
             "Whisper response without speaker labels should produce exactly 1 speaker, got: {speaker_codes:?}"
         );
-        assert!(
-            speaker_codes.contains("PAR"),
-            "sole speaker should be PAR"
-        );
+        assert!(speaker_codes.contains("PAR"), "sole speaker should be PAR");
     }
 
     /// Verify that number expansion works end-to-end in the canned Rev.AI
@@ -1097,9 +1356,9 @@ mod tests {
             "number '3' in canned response should be expanded to 'three' in CHAT output"
         );
         // The raw digit should not appear as a standalone word
-        let has_raw_digit = chat.lines().any(|l| {
-            l.starts_with('*') && l.split_whitespace().any(|w| w == "3")
-        });
+        let has_raw_digit = chat
+            .lines()
+            .any(|l| l.starts_with('*') && l.split_whitespace().any(|w| w == "3"));
         assert!(
             !has_raw_digit,
             "raw digit '3' should not appear as a standalone word in utterance lines"

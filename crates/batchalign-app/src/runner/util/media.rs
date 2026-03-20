@@ -247,7 +247,10 @@ pub(in crate::runner) async fn get_audio_duration_ms(audio_path: &str) -> Option
 }
 
 /// Replace the filename in `output_path` with `result_filename`.
-pub(in crate::runner) fn apply_result_filename(output_path: &Path, result_filename: &str) -> PathBuf {
+pub(in crate::runner) fn apply_result_filename(
+    output_path: &Path,
+    result_filename: &str,
+) -> PathBuf {
     let result_name = Path::new(result_filename).file_name().unwrap_or_default();
     output_path
         .parent()

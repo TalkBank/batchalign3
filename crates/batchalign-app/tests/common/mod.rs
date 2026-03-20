@@ -608,7 +608,8 @@ pub fn prepare_audio_fixtures(session_dir: &Path) -> Option<AudioFixtures> {
     let dest_stripped = align_dir.join("test.cha");
 
     std::fs::copy(&source_mp3, &dest_mp3).expect("copy test.mp3");
-    let stripped = strip_dependent_tiers(&std::fs::read_to_string(&source_cha).expect("read test.cha"));
+    let stripped =
+        strip_dependent_tiers(&std::fs::read_to_string(&source_cha).expect("read test.cha"));
     std::fs::write(&dest_stripped, &stripped).expect("write stripped test.cha");
 
     // Also copy audio to session root for transcribe tests (no CHAT needed).
@@ -633,10 +634,7 @@ pub fn prepare_audio_fixtures(session_dir: &Path) -> Option<AudioFixtures> {
 pub fn strip_dependent_tiers(chat: &str) -> String {
     let mut result = String::new();
     for line in chat.lines() {
-        if line.starts_with("%mor:")
-            || line.starts_with("%gra:")
-            || line.starts_with("%wor:")
-        {
+        if line.starts_with("%mor:") || line.starts_with("%gra:") || line.starts_with("%wor:") {
             continue;
         }
         result.push_str(line);
@@ -703,7 +701,11 @@ pub async fn submit_paths_and_complete(
         .send()
         .await
         .expect("POST /jobs");
-    assert_eq!(resp.status(), 200, "Paths-mode job submission should succeed");
+    assert_eq!(
+        resp.status(),
+        200,
+        "Paths-mode job submission should succeed"
+    );
     let info: JobInfo = resp.json().await.expect("parse initial JobInfo");
 
     let final_info = poll_job_done(client, base_url, &info.job_id).await;
@@ -739,17 +741,15 @@ pub async fn submit_paths_and_complete(
                     return content;
                 }
                 // Fallback: scan the output directory for any .cha file.
-                let dir = std::path::Path::new(p).parent().unwrap_or(std::path::Path::new("."));
+                let dir = std::path::Path::new(p)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.extension().map_or(false, |e| e == "cha" || e == "csv") {
                             if let Ok(content) = std::fs::read_to_string(&path) {
-                                eprintln!(
-                                    "NOTE: output found at {} (not {})",
-                                    path.display(),
-                                    p
-                                );
+                                eprintln!("NOTE: output found at {} (not {})", path.display(), p);
                                 return content;
                             }
                         }
@@ -790,9 +790,10 @@ pub fn load_parity_fixture(name: &str) -> Option<String> {
         eprintln!("SKIP: parity fixture not found: {}", path.display());
         return None;
     }
-    Some(std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("Failed to read parity fixture {}: {e}", path.display())
-    }))
+    Some(
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read parity fixture {}: {e}", path.display())),
+    )
 }
 
 /// Load a BA2 Jan 9 golden reference output.
@@ -812,9 +813,10 @@ pub fn load_ba2_golden(command: &str, name: &str) -> Option<String> {
         );
         return None;
     }
-    Some(std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("Failed to read BA2 golden {}: {e}", path.display())
-    }))
+    Some(
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read BA2 golden {}: {e}", path.display())),
+    )
 }
 
 /// Compare BA3 output to BA2 golden reference, ignoring metadata differences.

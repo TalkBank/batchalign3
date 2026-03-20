@@ -9,15 +9,15 @@
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 //! Generate golden files: `bash scripts/generate_ba2_golden.sh`
 
+use crate::common::{
+    assert_ba2_parity, assert_completed_without_errors, load_ba2_golden, load_parity_fixture,
+    require_live_server, submit_and_complete,
+};
 use batchalign_app::api::{FilePayload, JobStatus};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CorefOptions, MorphotagOptions, TranslateOptions, UtsegOptions,
 };
 use batchalign_app::worker::InferTask;
-use crate::common::{
-    assert_ba2_parity, assert_completed_without_errors, load_ba2_golden, load_parity_fixture,
-    require_live_server, submit_and_complete,
-};
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -31,11 +31,8 @@ async fn run_parity_test(
     lang: &str,
     options: CommandOptions,
 ) {
-    let Some(server) = require_live_server(
-        task,
-        &format!("Server does not support {task:?} infer"),
-    )
-    .await
+    let Some(server) =
+        require_live_server(task, &format!("Server does not support {task:?} infer")).await
     else {
         return;
     };
@@ -61,28 +58,18 @@ async fn run_parity_test(
 
     // Some non-English models may not be downloaded — treat as skip.
     if info.status == JobStatus::Failed {
-        eprintln!(
-            "SKIP: {command} {fixture_name} ({lang}) failed (model likely not downloaded)"
-        );
+        eprintln!("SKIP: {command} {fixture_name} ({lang}) failed (model likely not downloaded)");
         return;
     }
 
-    assert_completed_without_errors(
-        &format!("{command}_{fixture_name}"),
-        &info,
-        &results,
-    );
+    assert_completed_without_errors(&format!("{command}_{fixture_name}"), &info, &results);
     assert_eq!(results.len(), 1);
 
     let output = &results[0].content;
 
     // Compare against BA2 golden if available.
     if let Some(golden) = load_ba2_golden(command, fixture_name) {
-        assert_ba2_parity(
-            &format!("{command}_{fixture_name}"),
-            output,
-            &golden,
-        );
+        assert_ba2_parity(&format!("{command}_{fixture_name}"), output, &golden);
     }
 }
 
@@ -258,14 +245,7 @@ async fn parity_utseg_eng_multi() {
 
 #[tokio::test]
 async fn parity_utseg_spa() {
-    run_parity_test(
-        "utseg",
-        InferTask::Utseg,
-        "spa_simple",
-        "spa",
-        utseg_opts(),
-    )
-    .await;
+    run_parity_test("utseg", InferTask::Utseg, "spa_simple", "spa", utseg_opts()).await;
 }
 
 #[tokio::test]

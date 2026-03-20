@@ -1,5 +1,8 @@
 # Type-Driven Design
 
+**Status:** Current
+**Last updated:** 2026-03-19
+
 Batchalign uses Rust's type system to encode domain invariants at compile time. This document catalogs the patterns in use, explains when to reach for each one, and records the serde techniques that keep the wire format stable while the internal types evolve.
 
 ## Patterns
@@ -35,7 +38,8 @@ All generated types use `#[serde(transparent)]` — the wire format stays as bar
 |------|-------|------------|--------|
 | `JobId` | `String` | `types/api.rs` | Job identity |
 | `CommandName` | `String` | `types/api.rs` | Batchalign command (`"morphotag"`, `"align"`) |
-| `LanguageCode3` | `String` | `types/api.rs` | ISO 639-3 language code |
+| `LanguageCode3` | `String` | `types/domain.rs` | Validated ISO 639-3 code (3 ASCII alpha, lowercased) |
+| `LanguageSpec` | enum | `types/domain.rs` | `Auto` or `Resolved(LanguageCode3)` — language at job boundary |
 | `FileName` | `String` | `types/api.rs` | File basename (`"sample.cha"`) |
 | `NodeId` | `String` | `types/api.rs` | Server/fleet node identity |
 | `EngineVersion` | `String` | `types/api.rs` | ML engine version for cache keying |
@@ -46,10 +50,58 @@ All generated types use `#[serde(transparent)]` — the wire format stays as bar
 | `DurationMs` | `u64` | `types/scheduling.rs` | Duration in milliseconds |
 | `MemoryMb` | `u64` | `types/config.rs` | Memory amount in megabytes |
 | `WorkerPid` | `u32` | `types/worker.rs` | OS process ID |
+| `AsrTimestampSecs` | `f64` | `asr_postprocess/asr_types.rs` | Raw ASR provider timestamp (seconds) |
+| `SpeakerIndex` | `usize` | `asr_postprocess/asr_types.rs` | Zero-based speaker index in a recording |
 
 **When to use:** Any `String` or number that identifies a domain concept. If a parameter name is needed to understand what the type represents, it should be a newtype.
 
-### 2. Provenance Newtypes
+### 2. Validated Newtypes and Sentinel Enums
+
+**Problem:** `LanguageCode3` was a `string_id!` newtype that accepted any string — including `"auto"`, `""`, `"lol"`. When the CLI passed `--lang auto`, the sentinel leaked through the entire pipeline and produced `@Languages: auto` in the CHAT header (job `696870c7-02b`).
+
+**Solution:** Two complementary types that make the sentinel impossible to confuse with a real value.
+
+**`LanguageCode3`** — a validated newtype (not `string_id!`). Construction rejects anything that isn't exactly 3 ASCII letters:
+
+```rust
+impl LanguageCode3 {
+    pub fn try_new(s: &str) -> Result<Self, InvalidLanguageCode> {
+        if s.len() == 3 && s.bytes().all(|b| b.is_ascii_alphabetic()) {
+            Ok(Self(s.to_ascii_lowercase()))
+        } else {
+            Err(InvalidLanguageCode(s.to_string()))
+        }
+    }
+}
+```
+
+`From<&str>` keeps a `debug_assert!` for test-time safety. `Deserialize` validates and rejects bad codes.
+
+**`LanguageSpec`** — a sentinel enum at the CLI/job boundary:
+
+```rust
+pub enum LanguageSpec {
+    Auto,
+    Resolved(LanguageCode3),
+}
+```
+
+Serde: `"auto"` → `Auto` (case-insensitive), any valid 3-letter code → `Resolved`. Invalid strings are rejected at deserialization.
+
+**Where each type lives:**
+
+| Type | Used by | Not used by |
+|------|---------|-------------|
+| `LanguageSpec` | `JobSubmission.lang`, `JobDispatchConfig.lang`, `RunnerDispatchConfig.lang`, `JobInfo.lang`, `JobListItem.lang` | Worker IPC, cache keys, `MorphosyntaxParams`, `TranscribeOptions` |
+| `LanguageCode3` | Worker IPC, cache keys, `MorphosyntaxParams`, FA params, all domain-internal language references | — |
+
+**Resolution:** `LanguageSpec::Auto` is resolved to a concrete `LanguageCode3` at two points:
+1. **Dispatch layer** — `resolve_or(&fallback)` for commands that need a known language (FA, morphotag, compare).
+2. **Transcribe pipeline** — `stage_build_chat` uses `AsrResponse.lang` (the ASR engine's detected language) when `opts.lang == "auto"`.
+
+**When to use this pattern:** Any domain identifier that has a sentinel/wildcard value (`"auto"`, `"all"`, `"*"`) that must not leak into output. Split the sentinel into an enum variant and validate the concrete type on construction.
+
+### 3. Provenance Newtypes
 
 **Problem:** Bare `String` fields don't say where a value came from or what transformations it underwent. Swapping "cleaned text" for "raw text" compiles silently and corrupts output.
 
@@ -64,9 +116,12 @@ pub struct ChatCleanedText(String);
 
 | Type | Source | Lives in |
 |------|--------|----------|
-| `ChatRawText` | `Word::raw_text()` | batchalign-chat-ops |
-| `ChatCleanedText` | `Word::cleaned_text()` | batchalign-chat-ops |
-| `SpeakerCode` | `Utterance.speaker` | talkbank-model |
+| `ChatRawText` | `Word::raw_text()` | `text_types.rs` (CHAT direction) |
+| `ChatCleanedText` | `Word::cleaned_text()` | `text_types.rs` (CHAT direction) |
+| `SpeakerCode` | `Utterance.speaker` | `text_types.rs` (CHAT direction) |
+| `AsrRawText` | ASR provider output | `asr_postprocess/asr_types.rs` (ASR direction) |
+| `AsrNormalizedText` | After 8-stage pipeline | `asr_postprocess/asr_types.rs` (ASR direction) |
+| `ChatWordText` | ASR-to-CHAT boundary | `asr_postprocess/asr_types.rs` (ASR direction) |
 
 **Attributes:**
 - `#[repr(transparent)]` — zero runtime cost, identical layout to inner `String`.
@@ -75,7 +130,7 @@ pub struct ChatCleanedText(String);
 
 **When to use:** Any `String` field where two values of different provenance could be confused.
 
-### 3. Flattened Struct Composition
+### 4. Flattened Struct Composition
 
 **Problem:** Command option structs tend to accumulate duplicated common fields,
 which makes request types noisy and encourages copy/paste drift between command
@@ -107,7 +162,7 @@ is reused by multiple command-specific types.
 **When to use:** Shared wire fields that belong together semantically but should
 not introduce extra nesting in request/response JSON.
 
-### 4. State Machine Enums
+### 5. State Machine Enums
 
 **Problem:** Job and file status are strings with implicit transition rules. Typos like `"compelted"` or illegal transitions (cancelled → running) are only caught by downstream code.
 
@@ -147,7 +202,7 @@ impl JobStatus {
 
 **When to use:** Any status/phase field with a finite set of legal values and transition rules.
 
-### 5. Configuration Enums
+### 6. Configuration Enums
 
 **Problem:** Boolean flags like `warmup: bool` can't express "off / minimal / full".
 
@@ -269,6 +324,7 @@ the snapshot diff will catch it.
 | 2026-03 | `MorphosyntaxParams`, `FaParams`, `AudioContext`, `PipelineServices` | Parameter grouping | Reduced orchestrator signatures from 14–16 params to 3–6 |
 | 2026-03 | `&Path`/`PathBuf` for audio paths | Path types | Replaced `&str`/`String` for file paths; explicit conversion at IPC boundaries |
 | 2026-03 | Boundary conversion patterns | All | Codified convert-once-at-boundary: HTTP→`JobId`, DB→deref, IPC→`to_string_lossy`, CLI→`From<bool>` |
+| 2026-03 | `LanguageSpec` enum + validated `LanguageCode3` | Sentinel enum | `"auto"` sentinel leaked into `@Languages` header (job 696870c7); split into `Auto`/`Resolved` enum with validated construction |
 
 ## Guidelines
 

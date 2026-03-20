@@ -1,5 +1,8 @@
 # Tracing and Debugging
 
+**Status:** Current
+**Last updated:** 2026-03-19
+
 This document describes the tracing and debugging strategy across the
 batchalign3 stack: Rust (batchalign-core PyO3 bridge), Rust (CLI and server
 control plane), and Python (pipeline engines and worker process).
@@ -174,25 +177,185 @@ batchalign3 -vv serve start --foreground
 Worker stderr will show `DEBUG`-level messages from `batchalign.worker` and
 `batchalign.inference.morphosyntax`.
 
-## Debug Dumps (`--debug-dir`)
+## Debug Artifact Pipeline (`--debug-dir`)
 
-The `--debug-dir PATH` flag (or `BATCHALIGN_DEBUG_DIR` env var) writes structured
-CHAT/JSON artifacts at each pipeline stage:
+The `--debug-dir PATH` flag (or `BATCHALIGN_DEBUG_DIR` env var) writes
+structured CHAT/JSON artifacts at each pipeline stage. All commands support it.
+When `--debug-dir` is not set, all dump operations are zero-cost no-ops.
 
 ```bash
+# Alignment with debug artifacts
 batchalign3 align input/ output/ --lang eng --debug-dir /tmp/ba3-debug
+
+# Transcription with debug artifacts
+batchalign3 transcribe audio/ output/ --lang eng --debug-dir /tmp/ba3-debug
+
+# Via environment variable (useful for server-side debugging)
+BATCHALIGN_DEBUG_DIR=/tmp/ba3-debug batchalign3 transcribe audio/ output/
 ```
 
-This produces files like `{stem}_utr_input.cha`, `{stem}_utr_tokens.json`,
-`{stem}_fa_grouping.json`, `{stem}_fa_output.cha`, etc. These artifacts enable
-offline TDD — load the fixture data, call pipeline functions, and assert on
-output without running ML models.
+### Architecture
 
-When `--debug-dir` is set, `debug_traces` is also enabled on job submissions,
-populating the dashboard trace store for `GET /jobs/{id}/traces` visualization.
+The debug artifact pipeline is built around the `DebugDumper` struct in
+`crates/batchalign-app/src/runner/debug_dumper.rs`. It follows a zero-cost
+abstraction pattern: when constructed without a directory, every method is an
+immediate no-op. When constructed with a directory, methods write artifacts to
+disk at each pipeline stage.
 
-See [Debugging and Tracing Migration](../migration/debugging-and-tracing.md) for
-the full directory layout and workflow.
+```mermaid
+graph TD
+    CLI["CLI: --debug-dir PATH<br>(global_opts.rs)"]
+    ENV["ENV: BATCHALIGN_DEBUG_DIR"]
+    CLI --> CO["CommonOptions.debug_dir<br>(options.rs)"]
+    ENV --> CO
+    CO --> |"job submission"| JOB["Job.dispatch.options.common().debug_dir"]
+    JOB --> |"per-file task"| DD["DebugDumper::new(debug_dir)"]
+    DD --> |"Some(path)"| WRITE["Write artifacts to disk"]
+    DD --> |"None"| NOOP["Zero-cost no-op"]
+```
+
+### How DebugDumper threads through each pipeline
+
+Each pipeline creates its own `DebugDumper` at the per-file dispatch level,
+extracting `debug_dir` from the job options. The dumper is then threaded through
+the pipeline context and called at stage boundaries.
+
+```mermaid
+flowchart TB
+    subgraph "Align Pipeline (fa_pipeline.rs)"
+        FA_DISPATCH["dispatch_fa_infer()"] --> FA_CTX["FaFileContext { dumper }"]
+        FA_CTX --> FA1["dump_utr_input()"]
+        FA1 --> FA2["dump_utr_tokens()"]
+        FA2 --> FA3["dump_utr_output()"]
+        FA3 --> FA4["dump_fa_grouping()"]
+        FA4 --> FA5["dump_fa_group_result() x N"]
+        FA5 --> FA6["dump_fa_output()"]
+    end
+
+    subgraph "Transcribe Pipeline (pipeline/transcribe.rs)"
+        TX_DISPATCH["dispatch_transcribe_infer()"] --> TX_CTX["TranscribePipelineContext { dumper }"]
+        TX_CTX --> TX1["stage_asr_infer → dump_asr_response()"]
+        TX1 --> TX2["stage_build_chat → dump_post_asr_chat()"]
+        TX2 --> TX3["stage_run_utseg → dump_pre_utseg_chat()"]
+        TX3 --> TX4["stage_run_utseg → dump_post_utseg_chat()"]
+        TX4 --> TX5["stage_run_morphosyntax → dump_pre_morphosyntax_chat()"]
+    end
+```
+
+### Artifact directory layout
+
+For a transcribe job on `sample.wav` with `--debug-dir /tmp/debug`:
+
+```
+/tmp/debug/
+  # Transcribe pipeline artifacts
+  sample_asr_response.json       # Raw ASR tokens + timestamps from Whisper/Rev.AI
+  sample_post_asr.cha            # CHAT after assembly (before utseg)
+  sample_pre_utseg.cha           # CHAT entering utterance segmentation
+  sample_post_utseg.cha          # CHAT after utterance segmentation
+  sample_pre_morphosyntax.cha    # CHAT entering morphosyntax
+
+  # Align pipeline artifacts (for a file sample.cha)
+  sample_utr_input.cha           # CHAT before UTR injection
+  sample_utr_tokens.json         # ASR timing tokens fed to UTR
+  sample_utr_output.cha          # CHAT after UTR injection
+  sample_utr_result.json         # UTR injection statistics
+  sample_fa_input.cha            # CHAT before FA (after UTR)
+  sample_fa_grouping.json        # FA group plan (time windows, words)
+  sample_fa_group_0.json         # Per-group words + timings
+  sample_fa_group_1.json
+  sample_fa_output.cha           # Final aligned CHAT
+```
+
+### Always-on error logging (no `--debug-dir` needed)
+
+Even without `--debug-dir`, certain failure modes automatically log diagnostic
+data at `WARN` level. These are zero-cost in the happy path and fire only when
+something goes wrong:
+
+| Failure | What is logged | Where |
+|---------|---------------|-------|
+| Utseg pre-validation fails (parse error in CHAT) | Full CHAT text + error details | `utseg.rs` |
+| Whisper returns inverted timestamps | Warning with start/end values | `inference/asr.py` |
+| MOR item count mismatch | Word count + MOR count + utterance text | `inject.rs` |
+| Stanza sentence count mismatch | Expected vs actual sentence counts | `morphosyntax.py` |
+
+The utseg CHAT dump is particularly important for transcribe pipelines: if ASR
+post-processing produces CHAT that doesn't parse cleanly, the full CHAT text is
+logged so you can see exactly which token caused the parse error — without
+needing to reproduce the run.
+
+### Example: Diagnosing a transcribe-to-utseg failure
+
+This workflow illustrates the debugging path for a job where transcription
+succeeds but utseg rejects the CHAT output (like job `696870c7-02b`,
+maria18.wav).
+
+```mermaid
+sequenceDiagram
+    participant ASR as ASR Inference
+    participant PP as Rust Post-Processing
+    participant BC as Build CHAT
+    participant DD as DebugDumper
+    participant UT as Utseg
+    participant LOG as Server Logs
+
+    ASR->>PP: raw tokens + timestamps
+    PP->>BC: utterances
+    BC->>DD: dump_post_asr_chat(chat_text)
+    DD-->>DD: write sample_post_asr.cha
+    BC->>UT: chat_text
+    UT->>DD: dump_pre_utseg_chat(chat_text)
+    DD-->>DD: write sample_pre_utseg.cha
+    UT->>UT: parse_lenient(chat_text)
+    Note over UT: parse error detected!
+    UT->>LOG: warn!(chat_text, errors)
+    UT-->>BC: Err("utseg pre-validation failed")
+```
+
+**Without `--debug-dir`:** check server logs for the `warn!` containing the
+full CHAT text and error details.
+
+**With `--debug-dir`:** inspect `sample_post_asr.cha` to see the exact CHAT
+that was produced by the transcribe stage. Feed it to the parser locally:
+
+```bash
+# Reproduce the parse error offline
+cargo run -p talkbank-cli -- validate /tmp/debug/sample_post_asr.cha
+```
+
+### Example: Diagnosing an FA grouping issue
+
+```bash
+# 1. Run alignment with debug artifacts
+batchalign3 align input/ output/ --lang eng --debug-dir /tmp/ba3-debug
+
+# 2. Inspect the UTR input and tokens
+cat /tmp/ba3-debug/sample_utr_input.cha
+jq . /tmp/ba3-debug/sample_utr_tokens.json
+
+# 3. Write a test that loads the fixtures and calls inject_utr_timing directly
+# (no ML model needed — the tokens are already captured)
+```
+
+### Implementation details
+
+**`DebugDumper` struct** (`runner/debug_dumper.rs`):
+
+- `new(dir: Option<&Path>)` — enabled dumper or zero-cost no-op
+- `disabled()` — test helper, always no-op
+- `ensure_dir()` — lazily creates the directory on first write
+- `stem(filename)` — extracts file stem for artifact naming
+- Each dump method follows the pattern: check `ensure_dir()` → serialize →
+  `fs::write()` → log on failure (never panics)
+
+**Threading pattern:**
+
+1. Job options carry `debug_dir: Option<String>` in `CommonOptions`
+2. Per-file dispatch extracts it: `job.dispatch.options.common().debug_dir`
+3. Creates `DebugDumper::new(debug_dir.as_deref().map(Path::new))`
+4. Passes the dumper into the pipeline context struct
+5. Stage functions call dump methods at transition points
 
 ## Fine-Grained Cache Overrides (`--override-cache-tasks`)
 

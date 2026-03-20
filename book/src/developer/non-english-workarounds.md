@@ -361,5 +361,5 @@ fn verify_italian_lei_split_still_needed() {
 }
 ```
 
-These tests should be added to `crates/batchalign-app/tests/golden.rs` as they
-require real Stanza inference.
+These tests should be added to `crates/batchalign-app/tests/ml_golden/golden.rs`
+as they require real Stanza inference (part of the `ml_golden` test binary).

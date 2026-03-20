@@ -76,7 +76,9 @@ pub trait UtrStrategy: Send + Sync {
 /// backchannels whose words appear at the wrong position in the global sequence.
 pub struct GlobalUtr;
 
-pub use two_pass::{CaMarkerPolicy, GroupingContext, TwoPassConfig, TwoPassOverlapUtr, UtrMatchMode};
+pub use two_pass::{
+    CaMarkerPolicy, GroupingContext, TwoPassConfig, TwoPassOverlapUtr, UtrMatchMode,
+};
 
 /// Select the best UTR strategy for a given CHAT file.
 ///
@@ -103,8 +105,7 @@ pub fn select_strategy(
                 return true;
             }
             // Check for ⌊ CA overlap markers (bottom overlap = overlapping speaker)
-            let info =
-                overlap_markers::extract_overlap_info(&utt.main.content.content.0);
+            let info = overlap_markers::extract_overlap_info(&utt.main.content.content.0);
             info.has_bottom_overlap()
         } else {
             false
@@ -237,7 +238,13 @@ pub(super) fn run_global_utr(
     }
 
     let asr_texts: Vec<String> = asr_tokens.iter().map(|t| t.text.clone()).collect();
-    let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, utt_infos.len(), dp_match_mode);
+    let plan = plan_utr_alignment(
+        &all_words,
+        &asr_texts,
+        &word_to_utt,
+        utt_infos.len(),
+        dp_match_mode,
+    );
 
     // Convert ranges to bullets for untimed utterances only.
     let mut bullets_to_set: Vec<Option<(u64, u64)>> = vec![None; utt_infos.len()];
@@ -289,8 +296,7 @@ pub(super) fn collect_utr_utterance_info(chat_file: &ChatFile) -> Vec<UtrUtteran
                 .linkers
                 .0
                 .contains(&Linker::LazyOverlapPrecedes);
-            let overlap_info =
-                overlap_markers::extract_overlap_info(&utt.main.content.content.0);
+            let overlap_info = overlap_markers::extract_overlap_info(&utt.main.content.content.0);
 
             // Collect bottom region indices for index-aware matching.
             let bottom_indices: Vec<_> = overlap_info
@@ -757,7 +763,13 @@ mod tests {
         ];
         let word_to_utt = vec![0, 0, 1, 1];
 
-        let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, 2, MatchMode::CaseInsensitive);
+        let plan = plan_utr_alignment(
+            &all_words,
+            &asr_texts,
+            &word_to_utt,
+            2,
+            MatchMode::CaseInsensitive,
+        );
 
         assert_eq!(plan.strategy, UtrAlignmentStrategy::UniqueExactSubsequence);
         assert_eq!(plan.utt_ranges, vec![Some((1, 2)), Some((3, 4))]);
@@ -774,7 +786,13 @@ mod tests {
         ];
         let word_to_utt = vec![0, 0];
 
-        let plan = plan_utr_alignment(&all_words, &asr_texts, &word_to_utt, 1, MatchMode::CaseInsensitive);
+        let plan = plan_utr_alignment(
+            &all_words,
+            &asr_texts,
+            &word_to_utt,
+            1,
+            MatchMode::CaseInsensitive,
+        );
 
         assert_eq!(plan.strategy, UtrAlignmentStrategy::GlobalDp);
         let range = plan.utt_ranges[0].expect("DP fallback should still time the utterance");

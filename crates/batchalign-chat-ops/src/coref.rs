@@ -184,11 +184,7 @@ pub fn collect_coref_payloads(chat_file: &ChatFile) -> (CorefBatchItem, Vec<usiz
         };
 
         let mut words = Vec::new();
-        extract::collect_utterance_content(
-            &utt.main.content.content,
-            TierDomain::Mor,
-            &mut words,
-        );
+        extract::collect_utterance_content(&utt.main.content.content, TierDomain::Mor, &mut words);
 
         if !words.is_empty() {
             let word_texts: Vec<String> = words.iter().map(|w| w.text.to_string()).collect();

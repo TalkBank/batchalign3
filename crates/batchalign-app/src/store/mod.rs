@@ -433,8 +433,7 @@ pub(crate) async fn memory_gate(
         "Memory critically low, waiting for recovery"
     );
 
-    let deadline =
-        tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_s);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_s);
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(poll_s)).await;

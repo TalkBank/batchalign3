@@ -1,7 +1,7 @@
 # Multilingual Support
 
 **Status:** Current behavior reference  
-**Last verified:** 2026-03-05
+**Last verified:** 2026-03-19
 
 ## Current multilingual boundary
 

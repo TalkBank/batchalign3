@@ -123,9 +123,9 @@ fn serialize_special_forms<S: serde::Serializer>(
             ft.write_chat(&mut buf);
             buf
         });
-        let lang_str: Option<String> = lang_res.as_ref().and_then(|lr| {
-            lr.languages().first().map(|lc| lc.to_string())
-        });
+        let lang_str: Option<String> = lang_res
+            .as_ref()
+            .and_then(|lr| lr.languages().first().map(|lc| lc.to_string()));
         seq.serialize_element(&(ft_str, lang_str))?;
     }
     seq.end()

@@ -33,8 +33,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 /// 5. Trace — structured request/response logging with latency
 /// 6. Compression — gzip/brotli response compression (innermost)
 pub fn router(state: Arc<AppState>) -> Router {
-    let max_body_bytes =
-        state.environment.config.max_body_bytes_mb.0 as usize * 1024 * 1024;
+    let max_body_bytes = state.environment.config.max_body_bytes_mb.0 as usize * 1024 * 1024;
 
     Router::new()
         .merge(health::router())

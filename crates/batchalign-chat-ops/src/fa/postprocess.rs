@@ -1,8 +1,6 @@
 //! Post-processing: fix end times, bound by utterance, update bullets.
 
-use talkbank_model::alignment::helpers::{
-    WordItem, WordItemMut, walk_words, walk_words_mut,
-};
+use talkbank_model::alignment::helpers::{WordItem, WordItemMut, walk_words, walk_words_mut};
 use talkbank_model::model::{Bullet, Utterance, UtteranceContent, Word};
 
 use super::get_word_timing;

@@ -50,8 +50,9 @@ impl JobStore {
         finished_at: UnixTimestamp,
         result: Option<CompletedFileOutput>,
     ) {
-        let persisted_content_type: Option<String> =
-            result.as_ref().map(|output| output.content_type.to_string());
+        let persisted_content_type: Option<String> = result
+            .as_ref()
+            .map(|output| output.content_type.to_string());
 
         let Some(update) = self
             .registry

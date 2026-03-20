@@ -1,7 +1,7 @@
 # Morphosyntax Pipeline
 
 **Status:** Current
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-18
 
 ## 1. Overview
 
@@ -378,7 +378,7 @@ Key morphosyntax functions exported to Python via `#[pymodule]`:
 
 ### `extract.rs` — Word Extraction
 
-Walks the CHAT AST using `for_each_leaf()` (from `talkbank-model`) and collects words appropriate for a given alignment domain. The walker centralizes traversal of all 24 `UtteranceContent` variants and 22 `BracketedItem` variants; `extract.rs` provides only the leaf-handling closures for `word_is_alignable()` filtering and `ReplacedWord` branch logic.
+Walks the CHAT AST using `walk_words()` (from `talkbank-model`) and collects words appropriate for a given tier domain. The walker centralizes traversal of all 24 `UtteranceContent` variants and 22 `BracketedItem` variants; `extract.rs` provides only the word-handling closures for `counts_for_tier()` filtering and `ReplacedWord` branch logic.
 
 ```rust
 pub struct ExtractedWord {
@@ -388,7 +388,7 @@ pub struct ExtractedWord {
 }
 ```
 
-**Domain-aware traversal** via `AlignmentDomain`:
+**Domain-aware traversal** via `TierDomain`:
 
 | Domain | Retraces | Replacements | Untranscribed (xxx) |
 |--------|----------|-------------|---------------------|
@@ -514,7 +514,7 @@ characters), prefer `parse_token_as_word()` which runs the full parser.
 
 ### Traversal Order Must Match Between extract/inject/retokenize
 
-All three modules walk the AST using `for_each_leaf()` / `for_each_leaf_mut()` from
+All three modules walk the AST using `walk_words()` / `walk_words_mut()` from
 `talkbank-model`, ensuring identical traversal order. The walker handles group recursion
 and domain-aware gating centrally. If leaf-handling closures apply different filtering
 between extraction and injection, morphology is assigned to wrong words.

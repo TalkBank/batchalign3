@@ -21,9 +21,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
+use crate::api::LanguageCode3;
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::error::WorkerError;
-use crate::api::LanguageCode3;
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, WorkerCapabilities,
     WorkerHealthResponse, WorkerPid, WorkerProfile,
@@ -104,17 +104,14 @@ impl TcpWorkerHandle {
             "Connecting to TCP worker"
         );
 
-        let stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            TcpStream::connect(&addr),
-        )
-        .await
-        .map_err(|_| {
-            WorkerError::Protocol(format!("timeout connecting to TCP worker at {addr}"))
-        })?
-        .map_err(|e| {
-            WorkerError::Protocol(format!("failed to connect to TCP worker at {addr}: {e}"))
-        })?;
+        let stream = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr))
+            .await
+            .map_err(|_| {
+                WorkerError::Protocol(format!("timeout connecting to TCP worker at {addr}"))
+            })?
+            .map_err(|e| {
+                WorkerError::Protocol(format!("failed to connect to TCP worker at {addr}: {e}"))
+            })?;
 
         let (read_half, write_half) = tokio::io::split(stream);
 
@@ -131,19 +128,14 @@ impl TcpWorkerHandle {
         let addr = format!("{}:{}", self.info.host, self.info.port);
         debug!(addr = %addr, "Reconnecting to TCP worker");
 
-        let stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            TcpStream::connect(&addr),
-        )
-        .await
-        .map_err(|_| {
-            WorkerError::Protocol(format!("timeout reconnecting to TCP worker at {addr}"))
-        })?
-        .map_err(|e| {
-            WorkerError::Protocol(format!(
-                "failed to reconnect to TCP worker at {addr}: {e}"
-            ))
-        })?;
+        let stream = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr))
+            .await
+            .map_err(|_| {
+                WorkerError::Protocol(format!("timeout reconnecting to TCP worker at {addr}"))
+            })?
+            .map_err(|e| {
+                WorkerError::Protocol(format!("failed to reconnect to TCP worker at {addr}: {e}"))
+            })?;
 
         let (read_half, write_half) = tokio::io::split(stream);
         self.reader = BufReader::new(read_half);
@@ -243,12 +235,15 @@ impl TcpWorkerHandle {
     /// Send a single inference request.
     pub async fn infer(&mut self, request: &InferRequest) -> Result<InferResponse, WorkerError> {
         self.last_activity = tokio::time::Instant::now();
-        self.write_request(&WorkerRequest::Infer { request }).await?;
+        self.write_request(&WorkerRequest::Infer { request })
+            .await?;
 
         let timeout = Duration::from_secs(120);
         let response = tokio::time::timeout(timeout, self.read_response())
             .await
-            .map_err(|_| WorkerError::Protocol("timeout waiting for TCP infer response".into()))??;
+            .map_err(|_| {
+                WorkerError::Protocol("timeout waiting for TCP infer response".into())
+            })??;
 
         match response {
             WorkerResponse::Infer { response } => Ok(response),

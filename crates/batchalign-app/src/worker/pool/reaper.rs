@@ -249,7 +249,10 @@ fn kill_orphan(worker_pid: u32) {
     std::thread::sleep(Duration::from_secs(2));
 
     if process_alive(worker_pid) {
-        info!(worker_pid, "Orphan didn't exit after SIGTERM, sending SIGKILL");
+        info!(
+            worker_pid,
+            "Orphan didn't exit after SIGTERM, sending SIGKILL"
+        );
         unsafe {
             libc::killpg(pid, libc::SIGKILL);
             libc::kill(pid, libc::SIGKILL);

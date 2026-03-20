@@ -240,12 +240,11 @@ pub struct ValidationError(pub String);
 /// ISO 639-1 codes directly). We only check 3-letter codes here because
 /// batchalign uses ISO 639-3 everywhere.
 const STANZA_SUPPORTED_ISO3: &[&str] = &[
-    "ara", "ben", "bul", "cat", "ces", "cmn", "cym", "dan", "deu", "ell",
-    "eng", "est", "eus", "fas", "fin", "fra", "gla", "gle", "glg", "heb",
-    "hin", "hrv", "hun", "hye", "ind", "isl", "ita", "jpn", "kan", "kat",
-    "kor", "lav", "lit", "mal", "mlt", "msa", "nld", "nor", "pol", "por",
-    "ron", "slk", "slv", "spa", "swe", "tam", "tel", "tgl", "tha", "tur",
-    "ukr", "urd", "vie", "yue", "zho",
+    "ara", "ben", "bul", "cat", "ces", "cmn", "cym", "dan", "deu", "ell", "eng", "est", "eus",
+    "fas", "fin", "fra", "gla", "gle", "glg", "heb", "hin", "hrv", "hun", "hye", "ind", "isl",
+    "ita", "jpn", "kan", "kat", "kor", "lav", "lit", "mal", "mlt", "msa", "nld", "nor", "pol",
+    "por", "ron", "slk", "slv", "spa", "swe", "tam", "tel", "tgl", "tha", "tur", "ukr", "urd",
+    "vie", "yue", "zho",
 ];
 
 /// Check whether an ISO 639-3 language code is supported by Stanza.

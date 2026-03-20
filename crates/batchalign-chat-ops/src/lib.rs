@@ -158,5 +158,5 @@ pub use cache_key::{CacheKey, CacheTaskName};
 // (e.g. batchalign-server) that shouldn't depend on talkbank_model directly.
 pub use talkbank_model::alignment::helpers::TierDomain;
 pub use talkbank_model::model::{
-    ChatFile, DependentTier, LanguageCode, Line, Utterance, UserDefinedDependentTier,
+    ChatFile, DependentTier, LanguageCode, Line, UserDefinedDependentTier, Utterance,
 };

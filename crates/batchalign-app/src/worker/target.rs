@@ -181,20 +181,38 @@ mod tests {
     fn gpu_tasks_map_to_gpu_profile() {
         assert_eq!(WorkerProfile::for_task(InferTask::Asr), WorkerProfile::Gpu);
         assert_eq!(WorkerProfile::for_task(InferTask::Fa), WorkerProfile::Gpu);
-        assert_eq!(WorkerProfile::for_task(InferTask::Speaker), WorkerProfile::Gpu);
+        assert_eq!(
+            WorkerProfile::for_task(InferTask::Speaker),
+            WorkerProfile::Gpu
+        );
     }
 
     #[test]
     fn stanza_tasks_map_to_stanza_profile() {
-        assert_eq!(WorkerProfile::for_task(InferTask::Morphosyntax), WorkerProfile::Stanza);
-        assert_eq!(WorkerProfile::for_task(InferTask::Utseg), WorkerProfile::Stanza);
-        assert_eq!(WorkerProfile::for_task(InferTask::Coref), WorkerProfile::Stanza);
+        assert_eq!(
+            WorkerProfile::for_task(InferTask::Morphosyntax),
+            WorkerProfile::Stanza
+        );
+        assert_eq!(
+            WorkerProfile::for_task(InferTask::Utseg),
+            WorkerProfile::Stanza
+        );
+        assert_eq!(
+            WorkerProfile::for_task(InferTask::Coref),
+            WorkerProfile::Stanza
+        );
     }
 
     #[test]
     fn io_tasks_map_to_io_profile() {
-        assert_eq!(WorkerProfile::for_task(InferTask::Translate), WorkerProfile::Io);
-        assert_eq!(WorkerProfile::for_task(InferTask::Opensmile), WorkerProfile::Io);
+        assert_eq!(
+            WorkerProfile::for_task(InferTask::Translate),
+            WorkerProfile::Io
+        );
+        assert_eq!(
+            WorkerProfile::for_task(InferTask::Opensmile),
+            WorkerProfile::Io
+        );
         assert_eq!(WorkerProfile::for_task(InferTask::Avqi), WorkerProfile::Io);
     }
 
@@ -207,12 +225,18 @@ mod tests {
 
     #[test]
     fn profile_for_command_maps_align_to_gpu() {
-        assert_eq!(WorkerProfile::for_command(&"align".into()), Some(WorkerProfile::Gpu));
+        assert_eq!(
+            WorkerProfile::for_command(&"align".into()),
+            Some(WorkerProfile::Gpu)
+        );
     }
 
     #[test]
     fn profile_for_command_maps_morphotag_to_stanza() {
-        assert_eq!(WorkerProfile::for_command(&"morphotag".into()), Some(WorkerProfile::Stanza));
+        assert_eq!(
+            WorkerProfile::for_command(&"morphotag".into()),
+            Some(WorkerProfile::Stanza)
+        );
     }
 
     #[test]

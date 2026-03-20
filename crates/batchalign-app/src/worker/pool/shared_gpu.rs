@@ -80,10 +80,13 @@ impl SharedGpuWorker {
         let parts = handle.into_parts();
 
         let stdin = tokio::sync::Mutex::new(parts.stdin);
-        let pending =
-            Arc::new(std::sync::Mutex::new(HashMap::<String, oneshot::Sender<ExecuteResponseV2>>::new()));
-        let control =
-            Arc::new(tokio::sync::Mutex::new(None::<oneshot::Sender<WorkerControlResponse>>));
+        let pending = Arc::new(std::sync::Mutex::new(HashMap::<
+            String,
+            oneshot::Sender<ExecuteResponseV2>,
+        >::new()));
+        let control = Arc::new(tokio::sync::Mutex::new(
+            None::<oneshot::Sender<WorkerControlResponse>>,
+        ));
 
         let reader_pending = pending.clone();
         let reader_control = control.clone();
@@ -333,9 +336,8 @@ impl SharedGpuWorker {
                             {
                                 let mut ctrl = control.lock().await;
                                 if let Some(tx) = ctrl.take() {
-                                    let _ = tx.send(WorkerControlResponse::Health(
-                                        envelope.response,
-                                    ));
+                                    let _ =
+                                        tx.send(WorkerControlResponse::Health(envelope.response));
                                 }
                             }
                         }
@@ -444,9 +446,10 @@ impl SharedGpuTcpWorker {
 
         let (read_half, write_half) = tokio::io::split(stream);
         let writer = tokio::sync::Mutex::new(write_half);
-        let pending = Arc::new(std::sync::Mutex::new(
-            HashMap::<String, oneshot::Sender<ExecuteResponseV2>>::new(),
-        ));
+        let pending = Arc::new(std::sync::Mutex::new(HashMap::<
+            String,
+            oneshot::Sender<ExecuteResponseV2>,
+        >::new()));
         let control = Arc::new(tokio::sync::Mutex::new(
             None::<oneshot::Sender<WorkerControlResponse>>,
         ));
@@ -510,10 +513,8 @@ impl SharedGpuTcpWorker {
             }
         }
 
-        let timeout_s = request.timeout_seconds_with_config(
-            self.audio_task_timeout_s,
-            self.analysis_task_timeout_s,
-        );
+        let timeout_s = request
+            .timeout_seconds_with_config(self.audio_task_timeout_s, self.analysis_task_timeout_s);
         let timeout = Duration::from_secs(timeout_s);
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),

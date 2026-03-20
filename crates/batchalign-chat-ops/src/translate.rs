@@ -58,11 +58,7 @@ pub fn collect_translate_payloads(chat_file: &ChatFile) -> Vec<(usize, Translate
         };
 
         let mut words = Vec::new();
-        extract::collect_utterance_content(
-            &utt.main.content.content,
-            TierDomain::Mor,
-            &mut words,
-        );
+        extract::collect_utterance_content(&utt.main.content.content, TierDomain::Mor, &mut words);
 
         if !words.is_empty() {
             let text: String = words

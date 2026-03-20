@@ -7,15 +7,15 @@
 //!
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
+use crate::common::{
+    assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
+    submit_and_complete, submit_paths_and_complete,
+};
 use batchalign_app::api::FilePayload;
 use batchalign_app::options::{
     AlignOptions, CommandOptions, CommonOptions, FaEngineName, MorphotagOptions, WorTierPolicy,
 };
 use batchalign_app::worker::InferTask;
-use crate::common::{
-    assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
-    submit_and_complete, submit_paths_and_complete,
-};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -119,8 +119,7 @@ async fn option_morphotag_retokenize_changes_tokens() {
 /// %wor Include vs Omit should control tier presence in align output.
 #[tokio::test]
 async fn option_align_wor_controls_tier_presence() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };
@@ -186,17 +185,13 @@ async fn option_align_wor_controls_tier_presence() {
         wor_count_include > 0,
         "wor=Include should produce %wor tiers"
     );
-    assert_eq!(
-        wor_count_omit, 0,
-        "wor=Omit should produce no %wor tiers"
-    );
+    assert_eq!(wor_count_omit, 0, "wor=Omit should produce no %wor tiers");
 }
 
 /// Wave2Vec vs Whisper FA engines should produce different timing bullets.
 #[tokio::test]
 async fn option_align_fa_engine_produces_different_timing() {
-    let Some(server) =
-        require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
     else {
         return;
     };

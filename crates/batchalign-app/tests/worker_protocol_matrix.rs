@@ -22,8 +22,8 @@ use batchalign_app::types::worker_v2::{
     ProtocolErrorCodeV2, ProviderMediaInputV2, SpeakerBackendV2, TaskRequestV2, TaskResultV2,
     WorkerArtifactIdV2,
 };
-use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
 use batchalign_app::worker::WorkerProfile;
+use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
 use common::resolve_python;
 use serde::Deserialize;
 use serde_json::Value;

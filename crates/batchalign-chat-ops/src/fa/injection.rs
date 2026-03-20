@@ -1,7 +1,7 @@
 //! Timestamp injection into the CHAT AST.
 
 use talkbank_model::alignment::helpers::{
-    TierDomain, WordItemMut, walk_words_mut, counts_for_tier,
+    TierDomain, WordItemMut, counts_for_tier, walk_words_mut,
 };
 use talkbank_model::model::{Bullet, Utterance, Word};
 

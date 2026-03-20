@@ -22,9 +22,8 @@ use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 use super::super::util::{
     FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_server_error,
     compute_audio_identity, drain_supervised_file_tasks, get_audio_duration_ms,
-    is_retryable_worker_failure, resolve_audio_for_chat,
-    resolve_audio_for_chat_with_media_dir, spawn_progress_forwarder,
-    spawn_supervised_file_task, user_facing_error,
+    is_retryable_worker_failure, resolve_audio_for_chat, resolve_audio_for_chat_with_media_dir,
+    spawn_progress_forwarder, spawn_supervised_file_task, user_facing_error,
 };
 use super::FaDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -221,11 +220,12 @@ async fn process_one_fa_file(
         .await;
 
     // Read the CHAT file
-    let read_path: PathBuf = if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
-        job.filesystem.source_paths[file_index].clone()
-    } else {
-        job.filesystem.staging_dir.join("input").join(filename)
-    };
+    let read_path: PathBuf =
+        if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
+            job.filesystem.source_paths[file_index].clone()
+        } else {
+            job.filesystem.staging_dir.join("input").join(filename)
+        };
     let paths_mode = job.filesystem.paths_mode;
     let output_paths = job.filesystem.output_paths.clone();
     let staging_dir = job.filesystem.staging_dir.clone();
@@ -289,9 +289,9 @@ async fn process_one_fa_file(
         // Works when the server shares the same filesystem (e.g. fleet machines
         // with the same /Users/macw/ layout).
         if found.is_none() && !source_dir.as_os_str().is_empty() {
-            let source_path =
-                source_dir.join(Path::new(filename).file_name().unwrap_or_default());
-            let source_audio = resolve_audio_for_chat_with_media_dir(&source_path, media_dir.map(Path::new)).await;
+            let source_path = source_dir.join(Path::new(filename).file_name().unwrap_or_default());
+            let source_audio =
+                resolve_audio_for_chat_with_media_dir(&source_path, media_dir.map(Path::new)).await;
             if source_audio.is_some() {
                 info!(
                     filename,
@@ -321,7 +321,8 @@ async fn process_one_fa_file(
 
         // Strategy 4: Alongside staged file (last resort)
         if found.is_none() {
-            found = resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await;
+            found =
+                resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await;
         }
 
         found
@@ -350,17 +351,16 @@ async fn process_one_fa_file(
 
     // Convert non-WAV media (e.g. mp4) to WAV via ffmpeg if needed.
     // soundfile (Python) cannot read container formats like mp4 directly.
-    let audio_path =
-        match crate::ensure_wav::ensure_wav(&original_audio_path, None).await {
-            Ok(p) => p,
-            Err(e) => {
-                let err_msg = format!("Media conversion failed for {filename}: {e}");
-                lifecycle
-                    .fail(&err_msg, FailureCategory::Validation, unix_now())
-                    .await;
-                return FileTaskOutcome::TerminalStateRecorded;
-            }
-        };
+    let audio_path = match crate::ensure_wav::ensure_wav(&original_audio_path, None).await {
+        Ok(p) => p,
+        Err(e) => {
+            let err_msg = format!("Media conversion failed for {filename}: {e}");
+            lifecycle
+                .fail(&err_msg, FailureCategory::Validation, unix_now())
+                .await;
+            return FileTaskOutcome::TerminalStateRecorded;
+        }
+    };
 
     // Compute audio identity for cache keying: path|mtime|size
     let audio_path_str = audio_path.to_string_lossy();

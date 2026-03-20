@@ -197,7 +197,12 @@ impl UtrStrategy for TwoPassOverlapUtr {
 
         // Run global on a separate clone for comparison.
         let mut global_file = chat_file.clone();
-        let global_result = run_global_utr(&mut global_file, asr_tokens, false, self.config.match_mode.to_dp_match_mode());
+        let global_result = run_global_utr(
+            &mut global_file,
+            asr_tokens,
+            false,
+            self.config.match_mode.to_dp_match_mode(),
+        );
 
         let prefer_two_pass = if let Some(ctx) = &self.grouping_context {
             // Primary signal: FA group count. Fewer groups means wider FA
@@ -272,7 +277,12 @@ fn run_two_pass_inner(
     }
 
     // Pass 1: global alignment, optionally excluding overlap utterances.
-    let mut result = run_global_utr(chat_file, asr_tokens, skip_in_pass1, config.match_mode.to_dp_match_mode());
+    let mut result = run_global_utr(
+        chat_file,
+        asr_tokens,
+        skip_in_pass1,
+        config.match_mode.to_dp_match_mode(),
+    );
 
     if asr_tokens.is_empty() {
         return result;
@@ -435,7 +445,13 @@ fn recover_with_adaptive_window(
         let window_start = anchor_start.saturating_sub(buffer_ms);
         let window_end = pred_end + buffer_ms;
 
-        if let Some(timing) = recover_overlap_timing(words, asr_tokens, window_start, window_end, config.match_mode.to_dp_match_mode()) {
+        if let Some(timing) = recover_overlap_timing(
+            words,
+            asr_tokens,
+            window_start,
+            window_end,
+            config.match_mode.to_dp_match_mode(),
+        ) {
             return Some(timing);
         }
     }
@@ -450,10 +466,7 @@ fn recover_with_adaptive_window(
 /// speaker whose index matches one of the current utterance's bottom
 /// indices. This enables 1:N matching — multiple bottom utterances from
 /// different speakers all get the same onset fraction from the shared top.
-fn find_predecessor_onset_fraction(
-    utt_idx: usize,
-    utt_infos: &[UtrUtteranceInfo],
-) -> Option<f64> {
+fn find_predecessor_onset_fraction(utt_idx: usize, utt_infos: &[UtrUtteranceInfo]) -> Option<f64> {
     let current = &utt_infos[utt_idx];
     let current_speaker = &current.speaker;
 
@@ -614,7 +627,8 @@ mod tests {
         let words = vec!["mhm".to_string()];
         let tokens = make_asr_tokens(&[("mhm", 1800, 2200)]);
         // Window that doesn't overlap any tokens
-        let result = recover_overlap_timing(&words, &tokens, 5000, 6000, MatchMode::CaseInsensitive);
+        let result =
+            recover_overlap_timing(&words, &tokens, 5000, 6000, MatchMode::CaseInsensitive);
         assert_eq!(result, None);
     }
 
@@ -657,7 +671,14 @@ mod tests {
             None,               // +< utterance
         ];
         // "mhm" at 1800 is within narrow window (1000-500=500, 3000+500=3500)
-        let result = recover_with_adaptive_window(&words, &tokens, 1, &bullets, None, &TwoPassConfig::default());
+        let result = recover_with_adaptive_window(
+            &words,
+            &tokens,
+            1,
+            &bullets,
+            None,
+            &TwoPassConfig::default(),
+        );
         assert_eq!(result, Some((1800, 2200)));
     }
 
@@ -671,7 +692,14 @@ mod tests {
             Some((1000, 3000)), // predecessor: 2s duration
             None,               // +< utterance
         ];
-        let result = recover_with_adaptive_window(&words, &tokens, 1, &bullets, None, &TwoPassConfig::default());
+        let result = recover_with_adaptive_window(
+            &words,
+            &tokens,
+            1,
+            &bullets,
+            None,
+            &TwoPassConfig::default(),
+        );
         assert_eq!(result, Some((6500, 6800)));
     }
 
@@ -680,7 +708,14 @@ mod tests {
         let words = vec!["mhm".to_string()];
         let tokens = make_asr_tokens(&[("mhm", 1800, 2200)]);
         let bullets = vec![None]; // no predecessor
-        let result = recover_with_adaptive_window(&words, &tokens, 0, &bullets, None, &TwoPassConfig::default());
+        let result = recover_with_adaptive_window(
+            &words,
+            &tokens,
+            0,
+            &bullets,
+            None,
+            &TwoPassConfig::default(),
+        );
         assert_eq!(result, None);
     }
 
@@ -698,8 +733,14 @@ mod tests {
             Some((10000, 15000)), // predecessor
             None,                 // overlap utterance
         ];
-        let result =
-            recover_with_adaptive_window(&words, &tokens, 1, &bullets, Some(0.6), &TwoPassConfig::default());
+        let result = recover_with_adaptive_window(
+            &words,
+            &tokens,
+            1,
+            &bullets,
+            Some(0.6),
+            &TwoPassConfig::default(),
+        );
         assert_eq!(result, Some((13200, 13500)));
     }
 
@@ -721,8 +762,22 @@ mod tests {
         ];
 
         // Both should find the token
-        let without = recover_with_adaptive_window(&words, &tokens, 1, &bullets, None, &TwoPassConfig::default());
-        let with = recover_with_adaptive_window(&words, &tokens, 1, &bullets, Some(0.8), &TwoPassConfig::default());
+        let without = recover_with_adaptive_window(
+            &words,
+            &tokens,
+            1,
+            &bullets,
+            None,
+            &TwoPassConfig::default(),
+        );
+        let with = recover_with_adaptive_window(
+            &words,
+            &tokens,
+            1,
+            &bullets,
+            Some(0.8),
+            &TwoPassConfig::default(),
+        );
         assert!(without.is_some(), "should find without onset fraction too");
         assert_eq!(with, Some((16000, 16300)));
     }

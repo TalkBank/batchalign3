@@ -1,7 +1,7 @@
 # Worker Memory Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-18
 
 Developer reference for the auto-tuning, memory gate, worker pool, and warmup
 internals. For user-facing configuration, see
@@ -50,25 +50,131 @@ needs no new memory.
 
 ## Worker pool
 
+### Worker profiles
+
+Each InferTask maps to one of three `WorkerProfile` variants via
+`WorkerProfile::for_task()`. The profile determines the concurrency model and
+max worker count:
+
+| Profile | InferTasks | Concurrency model | max_workers |
+|---------|------------|-------------------|-------------|
+| `Gpu` | ASR, FA, Speaker | ThreadPoolExecutor inside one process (PyTorch releases GIL) | 1 per (lang, overrides) |
+| `Stanza` | Morphosyntax, Utseg, Coref | Sequential per process, multiple processes for CPU parallelism | Auto-tuned |
+| `Io` | Translate, OpenSMILE, AVQI | Sequential per process | 1 |
+
+```mermaid
+flowchart TD
+    request["Execute V2 request"]
+    profile{"WorkerProfile::for_task()"}
+    gpu["SharedGpuWorker\n(concurrent, Arc-shared)"]
+    stanza["CheckedOutWorker\n(exclusive checkout)"]
+    io["CheckedOutWorker\n(exclusive checkout)"]
+
+    request --> profile
+    profile -->|Gpu| gpu
+    profile -->|Stanza| stanza
+    profile -->|Io| io
+```
+
+### End-to-end request flow
+
+The full lifecycle of a GPU-profile request (e.g., forced alignment):
+
+```mermaid
+sequenceDiagram
+    participant CLI as Rust CLI
+    participant Server as Rust Server
+    participant Pool as WorkerPool
+    participant GPU as SharedGpuWorker
+    participant Py as Python GPU Worker
+    participant TPE as ThreadPoolExecutor
+
+    CLI->>Server: POST /jobs (align, 3 files)
+    Server->>Server: Parse CHAT, extract words, check cache
+
+    par File A
+        Server->>Pool: dispatch_execute_v2(FA, file_A)
+        Pool->>GPU: execute_v2(id=1)
+        GPU->>Py: {"op":"execute_v2","request":{"request_id":"1",...}}
+        Py->>TPE: submit(handle, id=1)
+        TPE->>TPE: thread 1: Wave2Vec inference (GIL released)
+    and File B
+        Server->>Pool: dispatch_execute_v2(FA, file_B)
+        Pool->>GPU: execute_v2(id=2)
+        GPU->>Py: {"op":"execute_v2","request":{"request_id":"2",...}}
+        Py->>TPE: submit(handle, id=2)
+        TPE->>TPE: thread 2: Wave2Vec inference (GIL released)
+    end
+
+    TPE-->>Py: response(id=2)
+    Py-->>GPU: {"op":"execute_v2","response":{"request_id":"2",...}}
+    GPU-->>Pool: route by request_id
+    Pool-->>Server: ExecuteResponseV2 (file B)
+    Server->>Server: Inject FA results into CHAT AST
+
+    TPE-->>Py: response(id=1)
+    Py-->>GPU: {"op":"execute_v2","response":{"request_id":"1",...}}
+    GPU-->>Pool: route by request_id
+    Pool-->>Server: ExecuteResponseV2 (file A)
+    Server->>Server: Inject FA results, serialize, write .cha
+```
+
+For a Stanza-profile request (e.g., morphotag), the flow uses exclusive
+checkout instead:
+
+```mermaid
+sequenceDiagram
+    participant Server as Rust Server
+    participant Pool as WorkerPool
+    participant W as Stanza Worker
+
+    Server->>Pool: dispatch_batch_infer(morphosyntax, all_utterances)
+    Pool->>Pool: checkout(Stanza, eng)
+    Pool->>W: batch_infer(words, lang)
+    W-->>Pool: BatchInferResponse(POS, lemma, depparse)
+    Pool->>Pool: return worker to idle queue
+    Pool-->>Server: results
+    Server->>Server: Inject into CHAT AST, serialize
+```
+
+The GPU profile is the key memory optimization: ASR, FA, and Speaker models
+load in a single process instead of three separate processes. For a mixed
+workload this means ~1.5 GB instead of ~4.5 GB, because the models share a
+single Python interpreter, CUDA context, and ThreadPoolExecutor.
+
 ### Structure
 
 ```
 WorkerPool
 ├── config: PoolConfig
-├── groups: Arc<Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>
+├── groups: Arc<Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>  (Stanza, IO profiles)
+├── gpu_workers: Arc<tokio::sync::Mutex<HashMap<GpuWorkerKey, Arc<SharedGpuWorker>>>>
 ├── cancel: CancellationToken
 └── warmup_status: AtomicU8 (WarmupStatus enum)
 
-WorkerGroup (per (target, lang, engine_overrides) key)
+WorkerKey = (WorkerProfile, LanguageCode3, String)  // (profile, lang, engine_overrides)
+GpuWorkerKey = (LanguageCode3, String)              // (lang, engine_overrides)
+
+WorkerGroup (per (profile, lang, engine_overrides) key — Stanza and IO profiles)
 ├── idle: std::sync::Mutex<VecDeque<WorkerHandle>>
 ├── available: Semaphore (permits = idle count)
 ├── total: AtomicUsize (idle + checked-out)
 └── bootstrap: AsyncMutex<()> (serializes spawns per key)
+
+SharedGpuWorker (per (lang, engine_overrides) — GPU profile, concurrent dispatch)
+├── stdin: tokio::sync::Mutex<ChildStdin>   (serialized writes)
+├── pending: Mutex<HashMap<String, oneshot::Sender<ExecuteResponseV2>>>  (request_id routing)
+├── control: tokio::sync::Mutex<Option<oneshot::Sender>>  (sequential ops)
+├── reader_task: JoinHandle<()>  (background stdout reader)
+├── pid: WorkerPid
+└── config: WorkerConfig
 ```
 
 ### Checkout flow
 
-`checkout()` is the core worker acquisition path:
+`checkout()` is the core worker acquisition path for Stanza and IO profiles.
+GPU profile workers use `SharedGpuWorker` with concurrent `execute_v2()` calls
+instead — there is no exclusive checkout for GPU tasks.
 
 1. Try `semaphore.try_acquire()` — if a permit exists, pop from idle queue
 2. If no permits, try `try_spawn_into_group()` — atomically claim a slot via
@@ -143,8 +249,8 @@ Within `pool.warmup()`, each command spawns as a separate `JoinSet` task. This
 means `morphotag`, `align`, and `transcribe` warmup workers load their models
 in parallel rather than sequentially. Each task:
 
-1. Resolves the `WorkerTarget` for the command
-2. Gets or creates the `WorkerGroup`
+1. Resolves the `WorkerProfile` for the command via `WorkerProfile::for_command()`
+2. Gets or creates the `WorkerGroup` (Stanza/IO) or `SharedGpuWorker` (GPU)
 3. Claims a slot via atomic `compare_exchange`
 4. Acquires the bootstrap lock (serializes per-key, but different keys proceed
    in parallel)

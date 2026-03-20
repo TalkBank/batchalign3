@@ -1,7 +1,7 @@
 # Overlap Encoding: `&*` and `+<` Internals
 
 **Status:** Current
-**Last updated:** 2026-03-17 (grouping-aware fallback added)
+**Last updated:** 2026-03-17
 
 ## AST Representation
 
@@ -63,89 +63,19 @@ This means `&*` content:
 
 ## Two-Pass UTR Strategy
 
-**Code (batchalign3):** `crates/batchalign-chat-ops/src/fa/utr.rs` and
+When `+<` or CA overlap markers (`⌊`) are present, the alignment pipeline uses a
+two-pass UTR strategy. See [Forced Alignment — UTR](../reference/forced-alignment.md)
+for the algorithm details and [Content Traversal — Overlap Iterator](content-traversal.md#for_each_overlap_point--overlap-marker-iterator)
+for the `for_each_overlap_point` API.
+
+Key points:
+- Pass 1 excludes overlap utterances from the global DP alignment
+- Pass 2 recovers their timing from the predecessor's audio window
+- CA overlap markers (position) narrow the pass-2 search window via proportional onset estimation
+- Best-of-both fallback compares FA group counts to avoid regression on non-English
+
+**Code:** `crates/batchalign-chat-ops/src/fa/utr.rs` and
 `crates/batchalign-chat-ops/src/fa/utr/two_pass.rs`
-
-### Trait architecture
-
-```rust
-pub trait UtrStrategy: Send + Sync {
-    fn inject(&self, chat_file: &mut ChatFile, asr_tokens: &[AsrTimingToken]) -> UtrResult;
-}
-
-pub struct GlobalUtr;           // Original single-pass algorithm
-pub struct TwoPassOverlapUtr {  // +<-aware two-pass with grouping-aware fallback
-    pub grouping_context: Option<GroupingContext>,
-}
-
-pub struct GroupingContext {
-    pub total_audio_ms: u64,
-    pub max_group_ms: u64,
-}
-```
-
-`select_strategy(chat_file, grouping_context)` inspects the file for
-`Linker::LazyOverlapPrecedes` and returns the appropriate strategy. The
-`--utr-strategy` CLI flag overrides this with `Global`, `TwoPass`, or
-`Auto` (default). When called from the dispatch layer, `GroupingContext`
-is populated from `FaParams` and `UtrPassContext`.
-
-### Grouping-aware best-of-both fallback
-
-`TwoPassOverlapUtr` runs both approaches and uses FA group counts as
-the primary comparison signal:
-
-1. **Two-pass candidate:** Run pass 1 (global DP excluding `+<`) then pass 2
-   (adaptive windowed recovery for each `+<` utterance).
-2. **Global candidate:** Run the standard global DP including all utterances.
-3. **Compare FA grouping** (when `GroupingContext` is available):
-   - Call `group_utterances()` on both outputs (cheap — microseconds).
-   - If two-pass creates **fewer groups**, fall back to global. Fewer groups
-     means wider FA windows, which causes worse word-level alignment.
-   - If groups are equal, use timed utterance count as tiebreaker.
-   - When equal, prefer two-pass (better backchannel placement).
-4. **Without grouping context:** Fall back to timed utterance count only.
-
-This makes two-pass **never worse** than global for the observed failure
-mode (FA group merging). On English where pass 2 succeeds, backchannels
-get better timing placement. On German where two-pass creates fewer FA
-groups (152 vs 162), the fallback detects this and uses global results.
-
-**Motivation:** Experiments showed two-pass lost 27 percentage points of
-overall coverage on German files. Stage decomposition revealed the cause:
-two-pass changes UTR bullet distribution, which changes
-`estimate_untimed_boundaries` anchor points, which changes FA group
-boundaries. On German, two-pass created 10 fewer FA groups — wider
-windows led to worse word-level alignment. The grouping-level comparison
-catches this specific failure mode without re-running FA.
-
-**Known limitation:** The Welsh regression (1502→1308) has a different
-root cause — two-pass creates *more* groups (313 vs 284) but with
-different boundaries that still lead to worse FA. The group-count
-heuristic cannot detect this case. A full-pipeline comparison (run FA
-with both strategies, keep the better output) would be the complete fix
-but is expensive (2x alignment per file).
-
-### Pass 1: Global alignment excluding `+<`
-
-`run_global_utr(chat_file, asr_tokens, skip_lazy_overlap=true)` — same as the
-original algorithm but the flatten loop skips utterances where
-`has_lazy_overlap == true`. The DP reference contains only main-speaker words
-in their correct temporal order. `+<` utterances are counted as unmatched.
-
-### Pass 2: Adaptive windowed recovery for `+<` utterances
-
-For each `+<` utterance at index `i`:
-1. Find the nearest preceding utterance with a bullet (set in pass 1).
-2. Try increasingly wide windows around the predecessor:
-   - Narrow: ±500ms (sufficient for English)
-   - Medium: ±predecessor duration (min 2s)
-   - Wide: ±2x predecessor duration (min 5s)
-3. At each width, filter ASR tokens to the window, run a small Hirschberg DP.
-4. Accept the first match (prefers tight placement).
-
-**When no `+<` utterances exist:** The strategy detects this via
-`select_strategy()` and uses `GlobalUtr` directly (no cloning overhead).
 
 ## `&*` → `+<` Conversion
 
