@@ -202,8 +202,8 @@ export function ProcessingProgress({
 
   return (
     <div className="space-y-4">
-      {/* Summary bar */}
-      <div className="flex items-center justify-between">
+      {/* Summary bar — announced to screen readers on progress changes */}
+      <div className="flex items-center justify-between" role="status" aria-live="polite" aria-atomic="true">
         <div className="flex items-center gap-3">
           <span className="inline-block text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600">
             {command}
@@ -220,6 +220,12 @@ export function ProcessingProgress({
           {isTerminal && elapsed > 0 && (
             <span className="text-xs text-gray-400 tabular-nums">
               {formatDuration(elapsed)}
+            </span>
+          )}
+          {/* ETA based on throughput */}
+          {isRunning && completedFiles > 0 && completedFiles < totalFiles && elapsed > 0 && (
+            <span className="text-xs text-gray-400 tabular-nums">
+              ~{formatDuration(Math.round(((totalFiles - completedFiles) / completedFiles) * elapsed))} remaining
             </span>
           )}
         </div>

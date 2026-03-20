@@ -5,7 +5,7 @@
  * state in web mode with a message directing users to the desktop app.
  */
 
-import { useState } from "react";
+import { useState, type DragEvent } from "react";
 import {
   useDesktopEnvironment,
   useDesktopFiles,
@@ -37,6 +37,46 @@ export function FolderPicker({
   const environment = useDesktopEnvironment();
   const files = useDesktopFiles();
   const [isLoading, setIsLoading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }
+
+  function handleDragLeave(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }
+
+  async function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    if (!environment.isDesktop) return;
+
+    // Tauri webview provides paths via dataTransfer
+    const items = e.dataTransfer?.files;
+    if (!items || items.length === 0) return;
+
+    // Use the first dropped item's path (webkitRelativePath or name)
+    // In Tauri, the file path comes through the File API
+    const firstFile = items[0];
+    const path = (firstFile as File & { path?: string }).path;
+    if (!path) return;
+
+    setIsLoading(true);
+    try {
+      const discovered = await files.discoverFiles(path, extensions);
+      onSelect(path, discovered);
+    } catch (err) {
+      console.error("Drop discovery failed:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   async function handleClick() {
     if (!environment.isDesktop) return;
@@ -68,10 +108,17 @@ export function FolderPicker({
       <button
         type="button"
         onClick={handleClick}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         disabled={!environment.isDesktop || isLoading}
-        className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center
-          hover:border-indigo-400 hover:bg-indigo-50/50 transition-colors cursor-pointer
-          disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`w-full border-2 border-dashed rounded-lg p-6 text-center
+          transition-colors cursor-pointer
+          disabled:opacity-50 disabled:cursor-not-allowed ${
+            isDragOver
+              ? "border-indigo-500 bg-indigo-50"
+              : "border-gray-300 hover:border-indigo-400 hover:bg-indigo-50/50"
+          }`}
       >
         {isLoading ? (
           <span className="text-sm text-gray-500">Scanning files...</span>
@@ -91,7 +138,7 @@ export function FolderPicker({
           <div>
             <div className="text-sm text-gray-600">
               {environment.isDesktop
-                ? "Click to choose a folder"
+                ? "Click to choose a folder, or drag one here"
                 : "Folder selection requires the desktop app"}
             </div>
             {extensions.length > 0 && (

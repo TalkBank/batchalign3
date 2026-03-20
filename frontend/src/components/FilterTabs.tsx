@@ -24,7 +24,7 @@ export function FilterTabs({
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {/* Tabs */}
-      <div className="flex items-center gap-0.5 bg-zinc-100 rounded-lg p-0.5">
+      <div className="flex items-center gap-0.5 bg-zinc-100 rounded-lg p-0.5" role="tablist" aria-label="Filter files by status">
         {TABS.map(({ key, label }) => {
           const count = counts[key];
           const isActive = activeTab === key;
@@ -33,6 +33,8 @@ export function FilterTabs({
             <button
               key={key}
               type="button"
+              role="tab"
+              aria-selected={isActive}
               disabled={isEmpty}
               className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
                 isActive
@@ -56,7 +58,9 @@ export function FilterTabs({
       <div className="flex-1" />
 
       {/* Search */}
+      <label className="sr-only" htmlFor="file-search">Search files</label>
       <input
+        id="file-search"
         type="text"
         placeholder="Search files..."
         value={searchQuery}

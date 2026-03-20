@@ -4,6 +4,7 @@
  * and section layout. It deliberately does not fetch data or discover which
  * server owns the job; those concerns live in `useJobPageController`.
  */
+import { useState } from "react";
 import { Layout } from "./Layout";
 import { ProgressBar } from "./ProgressBar";
 import { ActionButtons } from "./ActionButtons";
@@ -13,6 +14,40 @@ import { FilterTabs } from "./FilterTabs";
 import { PaginatedFileList } from "./PaginatedFileList";
 import { useFileFilters } from "../hooks/useFileFilters";
 import type { JobInfo, JobListItem } from "../types";
+
+/** Tiny copy-to-clipboard button that shows a brief "Copied" tooltip. */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard API may be blocked in some contexts
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex items-center text-zinc-300 hover:text-zinc-500 transition-colors ml-1.5"
+      aria-label={`Copy ${label}`}
+      title={copied ? "Copied!" : `Copy ${label}`}
+    >
+      {copied ? (
+        <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+        </svg>
+      ) : (
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      )}
+    </button>
+  );
+}
 import {
   commandStyle,
   formatJsonDisplay,
@@ -22,6 +57,8 @@ import {
   shortPath,
   statusDotColor,
   submitterName,
+  displayLang,
+  isDefaultLang,
 } from "../utils";
 
 /** Inputs required to render a fully resolved job detail page. */
@@ -108,7 +145,10 @@ export function JobDetailPageView({
                 )}
               </div>
 
-              <span className="font-mono text-xs text-zinc-400">{detail.job_id}</span>
+              <span className="font-mono text-xs text-zinc-400">
+                {detail.job_id}
+                <CopyButton text={detail.job_id} label="job ID" />
+              </span>
             </div>
 
             <ActionButtons
@@ -167,7 +207,7 @@ export function JobDetailPageView({
             </div>
           )}
 
-          {(host || (detail.lang && detail.lang !== "eng")) && (
+          {(host || (detail.lang && !isDefaultLang(detail.lang))) && (
             <div className="flex items-center gap-3 mt-3 text-xs text-zinc-400">
               {host && (
                 <span>
@@ -175,8 +215,8 @@ export function JobDetailPageView({
                   <span className="font-mono">{host}</span>
                 </span>
               )}
-              {detail.lang && detail.lang !== "eng" && (
-                <span className="font-mono uppercase">{detail.lang}</span>
+              {detail.lang && !isDefaultLang(detail.lang) && (
+                <span className="font-mono uppercase">{displayLang(detail.lang)}</span>
               )}
             </div>
           )}
@@ -185,8 +225,9 @@ export function JobDetailPageView({
               understanding exactly which engine/flags produced the job. */}
           {commandArgsJson && (
             <div className="mt-4">
-              <div className="text-[11px] text-zinc-400 uppercase tracking-wider mb-1.5">
+              <div className="flex items-center gap-1 text-[11px] text-zinc-400 uppercase tracking-wider mb-1.5">
                 Command Args
+                <CopyButton text={commandArgsJson} label="command args" />
               </div>
               <pre className="overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px] leading-5 text-zinc-700">
                 {commandArgsJson}

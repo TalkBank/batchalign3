@@ -2,9 +2,11 @@
  *
  * Shows a colored dot (green/yellow/red) with a label describing the server
  * state. In desktop mode, includes a restart/start button when the server
- * is stopped or has crashed.
+ * is stopped or has crashed. Detects server crashes (running → stopped
+ * transition) and shows an alert banner.
  */
 
+import { useEffect, useRef, useState } from "react";
 import type { ServerLifecycleState } from "../../hooks/useServerLifecycle";
 
 interface ServerStatusBarProps {
@@ -45,53 +47,98 @@ function statusLabel(status: ServerLifecycleState["status"]): string {
 
 export function ServerStatusBar({ lifecycle }: ServerStatusBarProps) {
   const { status, start, stop, error } = lifecycle;
+  const prevStatus = useRef(status);
+  const [crashAlert, setCrashAlert] = useState(false);
+
+  // Detect crash: transition from running → stopped (not user-initiated stop)
+  useEffect(() => {
+    if (prevStatus.current === "running" && status === "stopped") {
+      setCrashAlert(true);
+    } else if (status === "running") {
+      setCrashAlert(false);
+    }
+    prevStatus.current = status;
+  }, [status]);
 
   return (
-    <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-2.5">
-      <div className="flex items-center gap-2.5">
-        <span
-          className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor(status)}`}
-        />
-        <span className="text-sm text-gray-700">{statusLabel(status)}</span>
-        {lifecycle.health.health?.version && status === "running" && (
-          <span className="text-xs text-gray-400">
-            v{lifecycle.health.health.version}
+    <div className="space-y-2">
+      {crashAlert && (
+        <div
+          className="flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-4 py-2.5"
+          role="alert"
+        >
+          <span className="text-sm text-red-700">
+            Server stopped unexpectedly. In-flight jobs may have been lost.
           </span>
-        )}
-      </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setCrashAlert(false);
+                start();
+              }}
+              className="text-xs font-medium text-red-700 hover:text-red-900 transition-colors"
+            >
+              Restart
+            </button>
+            <button
+              type="button"
+              onClick={() => setCrashAlert(false)}
+              className="text-xs text-red-400 hover:text-red-600 transition-colors"
+              aria-label="Dismiss crash alert"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
-      <div className="flex items-center gap-2">
-        {error && (
-          <span className="text-xs text-red-600 max-w-xs truncate">
-            {error}
-          </span>
-        )}
+      <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-2.5">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={`inline-block w-2.5 h-2.5 rounded-full ${dotColor(status)}`}
+          />
+          <span className="text-sm text-gray-700">{statusLabel(status)}</span>
+          {lifecycle.health.health?.version && status === "running" && (
+            <span className="text-xs text-gray-400">
+              v{lifecycle.health.health.version}
+            </span>
+          )}
+        </div>
 
-        {status === "not-found" && (
-          <span className="text-xs text-gray-500">
-            Install with: uv tool install batchalign3
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {error && (
+            <span className="text-xs text-red-600 max-w-xs truncate">
+              {error}
+            </span>
+          )}
 
-        {status === "stopped" && (
-          <button
-            type="button"
-            onClick={start}
-            className="text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
-          >
-            Start Server
-          </button>
-        )}
+          {status === "not-found" && (
+            <span className="text-xs text-gray-500">
+              Install with: uv tool install batchalign3
+            </span>
+          )}
 
-        {status === "running" && (
-          <button
-            type="button"
-            onClick={stop}
-            className="text-xs font-medium text-gray-400 hover:text-red-600 transition-colors"
-          >
-            Stop
-          </button>
-        )}
+          {status === "stopped" && (
+            <button
+              type="button"
+              onClick={start}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+            >
+              Start Server
+            </button>
+          )}
+
+          {status === "running" && (
+            <button
+              type="button"
+              onClick={stop}
+              className="text-xs font-medium text-gray-400 hover:text-red-600 transition-colors"
+            >
+              Stop
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

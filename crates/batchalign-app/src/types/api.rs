@@ -55,7 +55,7 @@ mod tests {
         let json = r#"{"command": "morphotag", "options": {"command": "morphotag"}}"#;
         let sub: JobSubmission = serde_json::from_str(json).unwrap();
         assert_eq!(sub.command, "morphotag");
-        assert_eq!(sub.lang, "eng");
+        assert_eq!(sub.lang, LanguageSpec::Resolved(LanguageCode3::from("eng")));
         assert_eq!(sub.num_speakers, 1);
         assert!(sub.files.is_empty());
         assert!(!sub.paths_mode);

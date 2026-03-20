@@ -5,6 +5,7 @@
  * to common questions researchers have.
  */
 
+import { useEffect, useRef } from "react";
 import { COMMANDS, type CommandDef } from "./CommandPicker";
 import { commandStyle } from "../../utils";
 
@@ -80,6 +81,40 @@ function CommandDescription({ cmd }: { cmd: CommandDef }) {
 }
 
 export function HelpPanel({ open, onClose }: HelpPanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Close on Escape and trap focus inside panel
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      // Focus trap: Tab cycles within the panel
+      if (e.key === "Tab" && panelRef.current) {
+        const focusable = panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    // Auto-focus the close button on open
+    const closeBtn = panelRef.current?.querySelector<HTMLElement>("button");
+    closeBtn?.focus();
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   return (
@@ -88,10 +123,17 @@ export function HelpPanel({ open, onClose }: HelpPanelProps) {
       <div
         className="fixed inset-0 bg-black/20 z-40"
         onClick={onClose}
+        aria-hidden="true"
       />
 
       {/* Panel */}
-      <div className="fixed right-0 top-0 h-full w-96 max-w-[90vw] bg-white shadow-xl z-50 overflow-y-auto">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Help"
+        className="fixed right-0 top-0 h-full w-96 max-w-[90vw] bg-white shadow-xl z-50 overflow-y-auto"
+      >
         <div className="p-6 space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between">

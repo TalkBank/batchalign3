@@ -9,7 +9,8 @@
         "description": "MIME-like content discriminator for file results.",
         "enum": [
           "chat",
-          "csv"
+          "csv",
+          "text"
         ],
         "type": "string"
       },
@@ -355,6 +356,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "memory_gate_threshold_mb": {
+            "$ref": "#/components/schemas/MemoryMb",
+            "description": "Memory gate threshold in MB from server config.  0 means the gate\nis disabled.  The dashboard uses this to show how close available\nmemory is to the blocking threshold."
+          },
           "node_id": {
             "$ref": "#/components/schemas/NodeId",
             "description": "Identifier of the current server node."
@@ -370,6 +375,18 @@
           "status": {
             "$ref": "#/components/schemas/HealthStatus",
             "description": "Server health status.  Always `Ok` in the current implementation\n(the endpoint itself being reachable implies health), but future\nversions may report degraded states."
+          },
+          "system_memory_available_mb": {
+            "$ref": "#/components/schemas/MemoryMb",
+            "description": "Available memory in MB (free + reclaimable).  On macOS this is\n`free + purgeable` which can undercount; see `sysinfo` docs."
+          },
+          "system_memory_total_mb": {
+            "$ref": "#/components/schemas/MemoryMb",
+            "description": "Total physical memory in MB."
+          },
+          "system_memory_used_mb": {
+            "$ref": "#/components/schemas/MemoryMb",
+            "description": "Used memory in MB (`total - available`)."
           },
           "version": {
             "description": "Server software version (e.g. `\"0.6.0\"`).  Used by the CLI to\ndetect stale daemons and auto-restart them.",
@@ -470,8 +487,8 @@
             "description": "Server-assigned UUID (v4) for this job."
           },
           "lang": {
-            "$ref": "#/components/schemas/LanguageCode3",
-            "description": "3-letter ISO language code.  Defaults to `\"eng\"` when absent in JSON."
+            "$ref": "#/components/schemas/LanguageSpec",
+            "description": "Language specification: a resolved ISO 639-3 code or `\"auto\"`."
           },
           "next_eligible_at": {
             "oneOf": [
@@ -591,8 +608,8 @@
             "description": "Server-assigned UUID (v4) for this job."
           },
           "lang": {
-            "$ref": "#/components/schemas/LanguageCode3",
-            "description": "3-letter ISO language code.  Defaults to `\"eng\"` when absent in JSON."
+            "$ref": "#/components/schemas/LanguageSpec",
+            "description": "Language specification: a resolved ISO 639-3 code or `\"auto\"`."
           },
           "next_eligible_at": {
             "oneOf": [
@@ -727,8 +744,8 @@
             "type": "array"
           },
           "lang": {
-            "$ref": "#/components/schemas/LanguageCode3",
-            "description": "3-letter ISO language code."
+            "$ref": "#/components/schemas/LanguageSpec",
+            "description": "Language specification: a 3-letter ISO code or `\"auto\"` for\nASR-driven detection."
           },
           "media_files": {
             "description": "Media filenames for the server to resolve from media_roots (transcribe only).",
@@ -782,8 +799,33 @@
         "type": "object"
       },
       "LanguageCode3": {
-        "description": "3-letter ISO 639-3 language code (e.g. `\"eng\"`, `\"spa\"`).",
+        "description": "3-letter ISO 639-3 language code (e.g. `\"eng\"`, `\"spa\"`).\n\nConstruction validates that the value is exactly 3 ASCII alphabetic\ncharacters, lowercased. Sentinel values like `\"auto\"` are rejected — use\n[`LanguageSpec`] at boundaries where auto-detection is meaningful.",
         "type": "string"
+      },
+      "LanguageSpec": {
+        "description": "Language specification from the CLI or job submission.\n\n`Auto` means the ASR engine should detect the language. This variant must\nbe resolved to a concrete [`LanguageCode3`] before any CHAT construction\nor NLP dispatch that requires a known language.",
+        "oneOf": [
+          {
+            "description": "Let the ASR engine auto-detect the language.",
+            "enum": [
+              "Auto"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A concrete ISO 639-3 language code.",
+            "properties": {
+              "Resolved": {
+                "$ref": "#/components/schemas/LanguageCode3",
+                "description": "A concrete ISO 639-3 language code."
+              }
+            },
+            "required": [
+              "Resolved"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "LeaseRecord": {
         "description": "Lease metadata for a claimed schedulable unit.\n\nIn single-node mode this is coarse-grained and attached at the job level:\nthe local dispatcher claims a queued job for a node, records the lease, and\nlater clears it when the runner exits. Fleet mode will extend the same shape\nwith real cross-node renewal and expiry handling.",
@@ -807,6 +849,12 @@
           "expires_at"
         ],
         "type": "object"
+      },
+      "MemoryMb": {
+        "description": "Physical memory quantity in megabytes.\n\nUsed for memory gate thresholds and health-response memory readings.",
+        "format": "int64",
+        "minimum": 0,
+        "type": "integer"
       },
       "NodeId": {
         "description": "Identifier of a server/fleet node.",

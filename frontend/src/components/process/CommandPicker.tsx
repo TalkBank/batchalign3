@@ -4,6 +4,7 @@
  * description. Clicking a card navigates to the new-task form for that command.
  */
 
+import { useRef, type KeyboardEvent } from "react";
 import { commandStyle } from "../../utils";
 
 /** Command metadata for the picker grid. */
@@ -62,18 +63,46 @@ interface CommandPickerProps {
 }
 
 export function CommandPicker({ onSelect }: CommandPickerProps) {
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  /** Arrow-key navigation within the command grid. */
+  function handleKeyDown(e: KeyboardEvent, index: number) {
+    const cols = window.innerWidth >= 640 ? 3 : 2; // sm:grid-cols-3 vs grid-cols-2
+    let next = index;
+    switch (e.key) {
+      case "ArrowRight":
+        next = Math.min(index + 1, COMMANDS.length - 1);
+        break;
+      case "ArrowLeft":
+        next = Math.max(index - 1, 0);
+        break;
+      case "ArrowDown":
+        next = Math.min(index + cols, COMMANDS.length - 1);
+        break;
+      case "ArrowUp":
+        next = Math.max(index - cols, 0);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    const buttons = gridRef.current?.querySelectorAll<HTMLButtonElement>("button");
+    buttons?.[next]?.focus();
+  }
+
   return (
     <div>
       <h2 className="text-lg font-semibold text-gray-800 mb-4">
         What would you like to do?
       </h2>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {COMMANDS.map((cmd) => {
+      <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 gap-3" role="group" aria-label="Choose a command">
+        {COMMANDS.map((cmd, i) => {
           const [bg, text] = commandStyle(cmd.id);
           return (
             <button
               key={cmd.id}
               onClick={() => onSelect(cmd)}
+              onKeyDown={(e) => handleKeyDown(e, i)}
               className={`${bg} rounded-lg p-4 text-left transition-all hover:scale-[1.02] hover:shadow-md active:scale-[0.98] cursor-pointer`}
             >
               <div className={`text-sm font-semibold ${text}`}>

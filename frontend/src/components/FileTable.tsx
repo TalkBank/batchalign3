@@ -1,6 +1,39 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import type { FileStatusEntry } from "../types";
 import { displayProgressLabel, statusDotColor } from "../utils";
+import { PipelineStageBar } from "./PipelineStageBar";
+
+type SortCol = "file" | "status" | "duration";
+type SortDir = "asc" | "desc";
+
+const STATUS_RANK: Record<string, number> = {
+  processing: 0,
+  queued: 1,
+  error: 2,
+  done: 3,
+  interrupted: 4,
+};
+
+function fileDuration(f: FileStatusEntry): number {
+  if (f.started_at != null && f.finished_at != null) return f.finished_at - f.started_at;
+  return 0;
+}
+
+function compareFiles(a: FileStatusEntry, b: FileStatusEntry, col: SortCol, dir: SortDir): number {
+  let cmp = 0;
+  switch (col) {
+    case "file":
+      cmp = a.filename.localeCompare(b.filename);
+      break;
+    case "status":
+      cmp = (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9);
+      break;
+    case "duration":
+      cmp = fileDuration(a) - fileDuration(b);
+      break;
+  }
+  return dir === "desc" ? -cmp : cmp;
+}
 
 const CATEGORY_LABELS: Record<string, string> = {
   input: "Parse",
@@ -85,12 +118,27 @@ function DirStats({ files }: { files: FileStatusEntry[] }) {
 export function FileTable({ files }: { files: FileStatusEntry[] }) {
   const [expandedErr, setExpandedErr] = useState<string | null>(null);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
+  const [sortCol, setSortCol] = useState<SortCol>("file");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  const toggleSort = useCallback((col: SortCol) => {
+    setSortCol((prev) => {
+      if (prev === col) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return col;
+      }
+      setSortDir(col === "duration" ? "desc" : "asc");
+      return col;
+    });
+  }, []);
 
   if (files.length === 0) {
     return <p className="text-xs text-zinc-400">No files</p>;
   }
 
-  const groups = groupByDirectory(files);
+  // Sort files before grouping
+  const sortedFiles = [...files].sort((a, b) => compareFiles(a, b, sortCol, sortDir));
+  const groups = groupByDirectory(sortedFiles);
   const hasMultipleDirs = groups.length > 1 || (groups.length === 1 && groups[0].dir !== "");
 
   function toggleDir(dir: string) {
@@ -107,9 +155,20 @@ export function FileTable({ files }: { files: FileStatusEntry[] }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-[11px] text-zinc-400 uppercase tracking-wider border-b border-zinc-200">
-            <th className="py-2 pr-4 font-medium">File</th>
-            <th className="py-2 pr-4 font-medium">Status</th>
-            <th className="py-2 font-medium">Duration</th>
+            {(["file", "status", "duration"] as SortCol[]).map((col) => {
+              const labels: Record<SortCol, string> = { file: "File", status: "Status", duration: "Duration" };
+              const arrow = sortCol === col ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+              return (
+                <th
+                  key={col}
+                  className={`py-2 ${col !== "duration" ? "pr-4" : ""} font-medium cursor-pointer hover:text-zinc-600 select-none`}
+                  onClick={() => toggleSort(col)}
+                  aria-sort={sortCol === col ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+                >
+                  {labels[col]}{arrow}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -244,12 +303,17 @@ function FileRow({
               </span>
             )}
             {errorCodes.map((code) => (
-              <span
+              <a
                 key={code}
-                className="inline-flex items-center px-1 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-mono font-semibold"
+                href={`https://talkbank.org/errors/${code}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center px-1 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-mono font-semibold hover:bg-red-200 transition-colors no-underline"
+                title={`View documentation for ${code}`}
               >
                 {code}
-              </span>
+              </a>
             ))}
             {hasErr && f.error_line != null && (
               <span className="text-[10px] font-mono text-zinc-400">
@@ -260,6 +324,10 @@ function FileRow({
               <span className="text-[11px] text-red-500 truncate max-w-xs">
                 {errorSnippet(f.error)}
               </span>
+            )}
+            {/* Pipeline phase indicator */}
+            {isProcessing && f.progress_stage && (
+              <PipelineStageBar stage={f.progress_stage} />
             )}
             {/* Sub-file progress with counter (has current/total) */}
             {isProcessing &&

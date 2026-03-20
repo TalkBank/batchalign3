@@ -9,6 +9,8 @@ import {
   progressPercent,
   submitterName,
   shortPath,
+  displayLang,
+  isDefaultLang,
 } from "../utils";
 
 export function JobCard({ job }: { job: JobListItem }) {
@@ -70,10 +72,10 @@ export function JobCard({ job }: { job: JobListItem }) {
             <span>{host}</span>
           </>
         )}
-        {job.lang && job.lang !== "eng" && (
+        {job.lang && !isDefaultLang(job.lang) && (
           <>
             <span className="text-zinc-300">&middot;</span>
-            <span>{job.lang}</span>
+            <span>{displayLang(job.lang)}</span>
           </>
         )}
         {multiServer && job.server && (

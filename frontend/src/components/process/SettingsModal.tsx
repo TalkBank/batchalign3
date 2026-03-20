@@ -5,7 +5,7 @@
  * the header. Only shown in desktop mode.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useDesktopConfig,
   useDesktopEnvironment,
@@ -48,6 +48,38 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     return () => { cancelled = true; };
   }, [open, environment, config]);
 
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Close on Escape and trap focus inside modal
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key === "Tab" && modalRef.current) {
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    const closeBtn = modalRef.current?.querySelector<HTMLElement>("button");
+    closeBtn?.focus();
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   async function handleSave() {
@@ -75,11 +107,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   return (
     <>
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} aria-hidden="true" />
 
       {/* Modal */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-5">
+        <div ref={modalRef} role="dialog" aria-modal="true" aria-label="Settings" className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-5">
           {/* Header */}
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-900">Settings</h2>

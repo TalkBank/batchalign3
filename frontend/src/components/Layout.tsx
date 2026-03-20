@@ -6,6 +6,7 @@
  */
 
 import { useState, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { useAnyConnected, useServerStatuses, useStats } from "../state";
 import { useDesktopEnvironment } from "../desktop/DesktopContext";
 import { HelpPanel } from "./process/HelpPanel";
@@ -17,11 +18,24 @@ export function Layout({ children }: { children: ReactNode }) {
   const statuses = useServerStatuses();
   const multiServer = statuses.length > 1;
   const stats = useStats();
+  const [location] = useLocation();
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  /** Active link style: brighter text for the current route. */
+  function navClass(href: string): string {
+    const isActive =
+      href === "/" ? location === href : location.startsWith(href);
+    return `text-xs no-underline ${
+      isActive
+        ? "text-white/90 font-medium"
+        : "text-white/50 hover:text-white/80"
+    }`;
+  }
+
   return (
     <div className="min-h-screen">
+      <a className="skip-to-content" href="#main">Skip to main content</a>
       <header className="bg-[var(--bg-header)] text-white">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -38,24 +52,18 @@ export function Layout({ children }: { children: ReactNode }) {
             </a>
 
             {/* Navigation links */}
-            <nav className="flex items-center gap-3">
+            <nav className="flex items-center gap-3" aria-label="Main navigation">
               {environment.isDesktop && (
-                <a
-                  href="/process"
-                  className="text-xs text-white/50 hover:text-white/80 no-underline"
-                >
+                <a href="/process" className={navClass("/process")}>
                   Process
                 </a>
               )}
-              <a
-                href="/dashboard"
-                className="text-xs text-white/50 hover:text-white/80 no-underline"
-              >
+              <a href="/dashboard" className={navClass("/dashboard")}>
                 Dashboard
               </a>
               <a
                 href="/dashboard/visualizations"
-                className="text-xs text-white/50 hover:text-white/80 no-underline hidden sm:block"
+                className={`${navClass("/dashboard/visualizations")} hidden sm:block`}
               >
                 Visualizations
               </a>
@@ -138,7 +146,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="max-w-5xl mx-auto px-4 py-6">{children}</main>
+      <main id="main" className="max-w-5xl mx-auto px-4 py-6">{children}</main>
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>

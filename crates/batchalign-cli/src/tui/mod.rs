@@ -7,7 +7,7 @@ pub mod ui;
 use std::io;
 use std::time::{Duration, Instant};
 
-use batchalign_app::api::FileStatusEntry;
+use batchalign_app::api::{FileStatusEntry, HealthResponse};
 use crossterm::event::KeyCode;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -18,7 +18,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::progress::ProgressSink;
 
-use self::app::{AppState, TuiUpdate};
+use self::app::{AppState, ServerHealth, TuiUpdate};
 use self::event::TuiEvent;
 
 /// RAII guard for terminal raw mode + alternate screen.
@@ -120,6 +120,23 @@ impl ProgressSink for TuiProgress {
     fn finish(&self) {
         self.send_update(TuiUpdate::Finished);
     }
+
+    fn update_health(&self, health: &HealthResponse) {
+        let warmup_label = serde_json::to_value(health.warmup_status)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "unknown".into());
+
+        self.send_update(TuiUpdate::HealthSnapshot(ServerHealth {
+            live_workers: health.live_workers,
+            live_worker_keys: health.live_worker_keys.clone(),
+            system_memory_total_mb: health.system_memory_total_mb,
+            system_memory_available_mb: health.system_memory_available_mb,
+            system_memory_used_mb: health.system_memory_used_mb,
+            memory_gate_threshold_mb: health.memory_gate_threshold_mb,
+            warmup_status: warmup_label,
+        }));
+    }
 }
 
 /// Run the TUI rendering + input loop on a blocking thread.
@@ -145,10 +162,13 @@ pub fn run_tui_loop(
             ui::draw(f, &runtime.state);
         })?;
 
-        // Check if finished
+        // Check if finished — show summary and pause
         if runtime.state.is_finished() {
-            // Brief pause so user sees final state
-            std::thread::sleep(Duration::from_secs(1));
+            // Redraw one final time with summary overlay
+            terminal.draw(|f| {
+                ui::draw(f, &runtime.state);
+            })?;
+            std::thread::sleep(Duration::from_secs(2));
             break;
         }
 
@@ -178,6 +198,7 @@ pub fn run_tui_loop(
                 TuiEvent::Key(KeyCode::Down, _) => runtime.state.scroll_down(),
                 TuiEvent::Key(KeyCode::Tab, _) => runtime.state.cycle_group(),
                 TuiEvent::Key(KeyCode::Char('e'), _) => runtime.state.toggle_errors(),
+                TuiEvent::Key(KeyCode::Char('m'), _) => runtime.state.toggle_metrics(),
                 TuiEvent::Key(KeyCode::Esc, _) => {
                     if runtime.state.cancel_confirm_active() {
                         runtime.state.clear_cancel_confirmation();

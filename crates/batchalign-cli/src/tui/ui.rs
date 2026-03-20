@@ -1,17 +1,74 @@
 //! Ratatui rendering — layout, widgets, colors.
 
+use std::time::SystemTime;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph};
 
-use batchalign_app::api::FileStatusKind;
+use batchalign_app::api::{FileProgressStage, FileStatusKind};
 
 use super::app::AppState;
 
 /// Braille spinner characters.
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// 5-phase pipeline labels mirroring the React `PipelineStageBar`.
+const PHASE_LABELS: &[&str] = &["R", "T", "A", "An", "F"];
+
+/// Map a `FileProgressStage` to a 0-4 phase index, matching the React
+/// `PipelineStageBar` phase grouping. Returns `None` for `Processing`
+/// (generic fallback) and `RetryScheduled`.
+fn phase_index(stage: FileProgressStage) -> Option<usize> {
+    match stage {
+        // Phase 0: Read
+        FileProgressStage::Reading
+        | FileProgressStage::ResolvingAudio
+        | FileProgressStage::CheckingCache => Some(0),
+        // Phase 1: Transcribe
+        FileProgressStage::Transcribing
+        | FileProgressStage::RecoveringUtteranceTiming
+        | FileProgressStage::RecoveringTimingFallback => Some(1),
+        // Phase 2: Align
+        FileProgressStage::Aligning | FileProgressStage::ApplyingResults => Some(2),
+        // Phase 3: Analyze
+        FileProgressStage::AnalyzingMorphosyntax
+        | FileProgressStage::SegmentingUtterances
+        | FileProgressStage::Translating
+        | FileProgressStage::ResolvingCoreference
+        | FileProgressStage::Segmenting
+        | FileProgressStage::Analyzing
+        | FileProgressStage::Comparing
+        | FileProgressStage::Benchmarking => Some(3),
+        // Phase 4: Finalize
+        FileProgressStage::PostProcessing
+        | FileProgressStage::BuildingChat
+        | FileProgressStage::Finalizing
+        | FileProgressStage::Writing => Some(4),
+        // No phase mapping for generic/retry
+        FileProgressStage::Processing | FileProgressStage::RetryScheduled => None,
+    }
+}
+
+/// Render a compact 5-dot phase indicator: `●●◐○○` style.
+///
+/// Completed phases are filled (`●`), active phase is highlighted,
+/// future phases are hollow (`○`).
+fn render_phase_dots(stage: Option<FileProgressStage>) -> Vec<Span<'static>> {
+    let active = stage.and_then(phase_index);
+    let mut spans = Vec::with_capacity(PHASE_LABELS.len());
+    for i in 0..PHASE_LABELS.len() {
+        let (ch, color) = match active {
+            Some(idx) if i < idx => ('●', Color::Green),
+            Some(idx) if i == idx => ('●', Color::Cyan),
+            _ => ('○', Color::DarkGray),
+        };
+        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+    }
+    spans
+}
 
 /// Draw the full TUI frame.
 pub fn draw(f: &mut Frame, state: &AppState) {
@@ -26,37 +83,102 @@ pub fn draw(f: &mut Frame, state: &AppState) {
         1
     };
 
+    // Metrics rows: 2 lines (workers + memory) when visible and health data available
+    let metrics_height = if state.show_metrics && state.health.is_some() {
+        2
+    } else {
+        0
+    };
+
     let chunks = Layout::vertical([
-        Constraint::Length(3),            // header + gauge
-        Constraint::Min(4),               // directory groups
-        Constraint::Length(error_height), // error summary
-        Constraint::Length(1),            // keybind bar
+        Constraint::Length(3),              // header + gauge
+        Constraint::Length(metrics_height), // worker + memory lines
+        Constraint::Min(4),                 // directory groups
+        Constraint::Length(error_height),   // error summary
+        Constraint::Length(1),              // keybind bar
     ])
     .split(area);
 
     draw_header(f, state, chunks[0]);
-    draw_groups(f, state, chunks[1]);
-    if error_height > 0 {
-        draw_errors(f, state, chunks[2]);
+    if metrics_height > 0 {
+        draw_metrics(f, state, chunks[1]);
     }
-    draw_keybinds(f, state, chunks[3]);
+    draw_groups(f, state, chunks[2]);
+    if error_height > 0 {
+        draw_errors(f, state, chunks[3]);
+    }
+    draw_keybinds(f, state, chunks[4]);
 }
 
-/// Header: command badge + progress gauge + file count + elapsed.
+/// Header: command badge + progress gauge + status breakdown + elapsed + ETA.
 fn draw_header(f: &mut Frame, state: &AppState, area: Rect) {
     let elapsed = state.progress.start_time.elapsed();
     let mins = elapsed.as_secs() / 60;
     let secs = elapsed.as_secs() % 60;
 
-    let ratio = if state.progress.total_files > 0 {
-        (state.progress.completed as f64) / (state.progress.total_files as f64)
+    let completed = state.progress.completed;
+    let total = state.progress.total_files;
+
+    let ratio = if total > 0 {
+        (completed as f64) / (total as f64)
     } else {
         0.0
     };
 
+    // Status breakdown across all groups
+    let (done, active, errors, queued) = state.directories.groups.iter().fold(
+        (0usize, 0usize, 0usize, 0usize),
+        |(d, a, e, q), g| {
+            (
+                d + g.done_count,
+                a + g.active_count,
+                e + g.error_count,
+                q + g.queued_count,
+            )
+        },
+    );
+
+    let breakdown = if done + active + errors + queued > 0 {
+        let mut parts = Vec::new();
+        if done > 0 {
+            parts.push(format!("{done}✓"));
+        }
+        if active > 0 {
+            parts.push(format!("{active}⠋"));
+        }
+        if errors > 0 {
+            parts.push(format!("{errors}✗"));
+        }
+        if queued > 0 {
+            parts.push(format!("{queued}·"));
+        }
+        format!("  {}", parts.join(" "))
+    } else {
+        String::new()
+    };
+
+    // ETA or completion message
+    let suffix = if state.progress.finished {
+        let error_count = state.errors.entries.len();
+        if error_count > 0 {
+            format!("  Done — {error_count} failed")
+        } else {
+            "  Done!".to_string()
+        }
+    } else if completed > 0 && completed < total {
+        let elapsed_s = elapsed.as_secs_f64();
+        let rate = completed as f64 / elapsed_s;
+        let remaining = (total - completed) as f64 / rate;
+        let rem_mins = remaining as u64 / 60;
+        let rem_secs = remaining as u64 % 60;
+        format!("  ~{rem_mins:02}:{rem_secs:02}")
+    } else {
+        String::new()
+    };
+
     let label = format!(
-        " {} — {}/{} files  [{mins:02}:{secs:02}]",
-        state.progress.command, state.progress.completed, state.progress.total_files
+        " {} — {completed}/{total} files{breakdown}  [{mins:02}:{secs:02}]{suffix}",
+        state.progress.command,
     );
 
     let gauge = Gauge::default()
@@ -109,13 +231,24 @@ fn draw_groups(f: &mut Frame, state: &AppState, area: Rect) {
 
         let group = &state.directories.groups[group_idx];
         let is_focused = group_idx == state.directories.focused_group;
+        let all_terminal = group.active_count == 0 && group.queued_count == 0;
 
-        let title = format!(
-            " {} ({}/{}) ",
-            group.dir,
-            group.done_count + group.error_count,
-            group.files.len()
-        );
+        let title = if all_terminal && !is_focused {
+            // Collapsed summary for completed groups
+            let check = if group.error_count > 0 {
+                format!("{}✓ {}✗", group.done_count, group.error_count)
+            } else {
+                format!("{}✓", group.done_count)
+            };
+            format!(" {} ({check}) ", group.dir)
+        } else {
+            format!(
+                " {} ({}/{}) ",
+                group.dir,
+                group.done_count + group.error_count,
+                group.files.len()
+            )
+        };
 
         let border_style = if is_focused {
             Style::default().fg(Color::Cyan)
@@ -131,23 +264,46 @@ fn draw_groups(f: &mut Frame, state: &AppState, area: Rect) {
         let inner = block.inner(*group_area);
         f.render_widget(block, *group_area);
 
-        // File rows with scrolling
+        // File rows with scrolling and scroll indicators
         let visible_rows = inner.height as usize;
         let scroll = if is_focused {
             state.directories.scroll_offset
         } else {
             0
         };
-        let items: Vec<ListItem> = group
-            .files
-            .iter()
-            .skip(scroll)
-            .take(visible_rows)
-            .map(|file| {
-                let line = render_file_line(file, state.directories.spinner_tick, inner.width);
-                ListItem::new(line)
-            })
-            .collect();
+
+        let has_above = scroll > 0;
+        let has_below = group.files.len() > scroll + visible_rows;
+
+        // Reserve rows for scroll indicators if needed
+        let indicator_above = has_above && visible_rows > 2;
+        let indicator_below = has_below && visible_rows > 2;
+        let file_rows = visible_rows
+            - if indicator_above { 1 } else { 0 }
+            - if indicator_below { 1 } else { 0 };
+
+        let mut items: Vec<ListItem> = Vec::new();
+
+        if indicator_above {
+            let hidden = scroll;
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  ▲ {hidden} more above"),
+                Style::default().fg(Color::DarkGray),
+            ))));
+        }
+
+        for file in group.files.iter().skip(scroll).take(file_rows) {
+            let line = render_file_line(file, state.directories.spinner_tick, inner.width);
+            items.push(ListItem::new(line));
+        }
+
+        if indicator_below {
+            let hidden = group.files.len() - scroll - file_rows;
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  ▼ {hidden} more below"),
+                Style::default().fg(Color::DarkGray),
+            ))));
+        }
 
         let list = List::new(items);
         f.render_widget(list, inner);
@@ -177,11 +333,46 @@ fn render_file_line(
                 (Some(c), Some(t)) if t > 0 => format!("  {c}/{t}"),
                 _ => String::new(),
             };
-            let text = format!("  {spinner} {:<30} {label}{pct}", file.name);
-            Line::from(Span::styled(
-                pad_or_truncate(&text, w),
+
+            // Build line with pipeline phase dots when a typed stage exists
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            spans.push(Span::styled(
+                format!("  {spinner} "),
                 Style::default().fg(Color::Cyan),
-            ))
+            ));
+
+            let name_col = format!("{:<28}", file.name);
+            spans.push(Span::styled(name_col, Style::default().fg(Color::Cyan)));
+
+            if file.progress_stage.is_some() {
+                spans.push(Span::raw(" "));
+                spans.extend(render_phase_dots(file.progress_stage));
+                spans.push(Span::raw("  "));
+            } else {
+                spans.push(Span::raw("        "));
+            }
+
+            spans.push(Span::styled(
+                format!("{label}{pct}"),
+                Style::default().fg(Color::Cyan),
+            ));
+
+            // Per-file elapsed timer from started_at
+            if let Some(started) = file.started_at {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let elapsed = (now - started).max(0.0);
+                let e_mins = elapsed as u64 / 60;
+                let e_secs = elapsed as u64 % 60;
+                spans.push(Span::styled(
+                    format!("  {e_mins}:{e_secs:02}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            Line::from(spans)
         }
         FileStatusKind::Done => {
             let dur = file
@@ -219,6 +410,111 @@ fn render_file_line(
             ))
         }
     }
+}
+
+/// Worker status + memory gauge (2 rows).
+fn draw_metrics(f: &mut Frame, state: &AppState, area: Rect) {
+    let Some(health) = &state.health else {
+        return;
+    };
+
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
+
+    // ── Row 1: Workers ──
+    let mut worker_spans: Vec<Span<'static>> = vec![Span::styled(
+        "  Workers: ",
+        Style::default().fg(Color::DarkGray),
+    )];
+
+    if health.live_worker_keys.is_empty() {
+        worker_spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
+    } else {
+        for (i, key) in health.live_worker_keys.iter().enumerate() {
+            if i > 0 {
+                worker_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            }
+            worker_spans.push(Span::styled(key.clone(), Style::default().fg(Color::Cyan)));
+        }
+    }
+
+    worker_spans.push(Span::styled(
+        format!("    Warmup: {}", health.warmup_status),
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    f.render_widget(Paragraph::new(Line::from(worker_spans)), rows[0]);
+
+    // ── Row 2: Memory ──
+    let total = health.system_memory_total_mb.0;
+    let used = health.system_memory_used_mb.0;
+    let avail = health.system_memory_available_mb.0;
+    let gate = health.memory_gate_threshold_mb.0;
+
+    let (total_gb, used_gb) = (total as f64 / 1024.0, used as f64 / 1024.0);
+
+    // Bar rendering: 20-char gauge
+    let bar_width = 20usize;
+    let ratio = if total > 0 {
+        (used as f64 / total as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let filled = (ratio * bar_width as f64).round() as usize;
+    let bar_filled: String = "█".repeat(filled);
+    let bar_empty: String = "░".repeat(bar_width.saturating_sub(filled));
+
+    // Gate proximity color (same thresholds as React MemoryPanel)
+    let bar_color = if gate == 0 {
+        Color::Green
+    } else {
+        let headroom = avail as f64 / gate as f64;
+        if headroom > 4.0 {
+            Color::Green
+        } else if headroom > 2.0 {
+            Color::Yellow
+        } else {
+            Color::Red
+        }
+    };
+
+    let gate_label = if gate > 0 {
+        let gate_gb = gate as f64 / 1024.0;
+        if gate_gb >= 1.0 {
+            format!("Gate: {gate_gb:.0} GB")
+        } else {
+            format!("Gate: {gate} MB")
+        }
+    } else {
+        "Gate: off".into()
+    };
+
+    let safe_label = if gate == 0 {
+        ""
+    } else {
+        let headroom = avail as f64 / gate as f64;
+        if headroom > 4.0 {
+            " ● safe"
+        } else if headroom > 2.0 {
+            " ● warn"
+        } else if headroom > 1.0 {
+            " ● danger — gate may block new workers"
+        } else {
+            " ● BLOCKED — below gate threshold"
+        }
+    };
+
+    let mem_spans = vec![
+        Span::styled("  Memory: [", Style::default().fg(Color::DarkGray)),
+        Span::styled(bar_filled, Style::default().fg(bar_color)),
+        Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("] {used_gb:.0}/{total_gb:.0} GB   {gate_label}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(safe_label.to_string(), Style::default().fg(bar_color)),
+    ];
+
+    f.render_widget(Paragraph::new(Line::from(mem_spans)), rows[1]);
 }
 
 /// Error summary panel.
@@ -301,7 +597,9 @@ fn draw_keybinds(f: &mut Frame, state: &AppState, area: Rect) {
             Span::styled("tab", Style::default().fg(Color::Cyan)),
             Span::styled(" group  ", Style::default().fg(Color::DarkGray)),
             Span::styled("e", Style::default().fg(Color::Cyan)),
-            Span::styled(" errors", Style::default().fg(Color::DarkGray)),
+            Span::styled(" errors  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("m", Style::default().fg(Color::Cyan)),
+            Span::styled(" metrics", Style::default().fg(Color::DarkGray)),
         ])
     };
 
@@ -322,7 +620,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use batchalign_app::api::UnixTimestamp;
+    use batchalign_app::api::{MemoryMb, UnixTimestamp};
 
     use super::*;
     use crate::tui::app::AppState;
@@ -405,7 +703,7 @@ mod tests {
     #[test]
     fn render_error_expanded() {
         let mut state = AppState::new(2, "morphotag");
-        state.add_error("test.cha", "something broke");
+        state.add_error("test.cha", "something broke", None);
         state.errors.expanded = true;
 
         let backend = TestBackend::new(80, 24);
@@ -425,5 +723,138 @@ mod tests {
         terminal
             .draw(|f| draw(f, &state))
             .expect("draw should not panic");
+    }
+
+    #[test]
+    fn render_with_health_metrics() {
+        let mut state = AppState::new(2, "morphotag");
+        state.health = Some(crate::tui::app::ServerHealth {
+            live_workers: 2,
+            live_worker_keys: vec!["infer:morphosyntax:eng".into(), "infer:utseg:eng".into()],
+            system_memory_total_mb: MemoryMb(262144),
+            system_memory_available_mb: MemoryMb(100000),
+            system_memory_used_mb: MemoryMb(162144),
+            memory_gate_threshold_mb: MemoryMb(2048),
+            warmup_status: "complete".into(),
+        });
+        state.show_metrics = true;
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &state))
+            .expect("draw with metrics should not panic");
+    }
+
+    #[test]
+    fn render_metrics_hidden_when_toggled_off() {
+        let mut state = AppState::new(2, "morphotag");
+        state.health = Some(crate::tui::app::ServerHealth {
+            live_workers: 1,
+            live_worker_keys: vec!["infer:asr:eng".into()],
+            system_memory_total_mb: MemoryMb(65536),
+            system_memory_available_mb: MemoryMb(30000),
+            system_memory_used_mb: MemoryMb(35536),
+            memory_gate_threshold_mb: MemoryMb(2048),
+            warmup_status: "in_progress".into(),
+        });
+        state.show_metrics = false;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &state))
+            .expect("draw with hidden metrics should not panic");
+    }
+
+    #[test]
+    fn render_processing_with_pipeline_stage() {
+        let mut state = AppState::new(1, "align");
+        let mut entry = make_entry("eng/test.cha", FileStatusKind::Processing);
+        entry.progress_stage = Some(FileProgressStage::Aligning);
+        state.update_from_poll(0, &[entry]);
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &state))
+            .expect("draw with pipeline stage should not panic");
+    }
+
+    #[test]
+    fn phase_index_mapping_covers_all_phases() {
+        // Phase 0: Read
+        assert_eq!(phase_index(FileProgressStage::Reading), Some(0));
+        assert_eq!(phase_index(FileProgressStage::CheckingCache), Some(0));
+        // Phase 1: Transcribe
+        assert_eq!(phase_index(FileProgressStage::Transcribing), Some(1));
+        // Phase 2: Align
+        assert_eq!(phase_index(FileProgressStage::Aligning), Some(2));
+        // Phase 3: Analyze
+        assert_eq!(
+            phase_index(FileProgressStage::AnalyzingMorphosyntax),
+            Some(3)
+        );
+        assert_eq!(phase_index(FileProgressStage::Analyzing), Some(3));
+        // Phase 4: Finalize
+        assert_eq!(phase_index(FileProgressStage::Finalizing), Some(4));
+        assert_eq!(phase_index(FileProgressStage::Writing), Some(4));
+        // No phase
+        assert_eq!(phase_index(FileProgressStage::Processing), None);
+        assert_eq!(phase_index(FileProgressStage::RetryScheduled), None);
+    }
+
+    #[test]
+    fn render_finished_state_shows_summary() {
+        let mut state = AppState::new(3, "morphotag");
+        let entries = vec![
+            make_entry("eng/a.cha", FileStatusKind::Done),
+            make_entry("eng/b.cha", FileStatusKind::Done),
+            make_entry("eng/c.cha", FileStatusKind::Error),
+        ];
+        state.update_from_poll(2, &entries);
+        state.apply_update(crate::tui::app::TuiUpdate::Finished);
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &state))
+            .expect("draw finished state should not panic");
+    }
+
+    #[test]
+    fn render_with_scroll_indicators() {
+        // 20 files in one group on a small terminal — should show ▲/▼
+        let mut state = AppState::new(20, "morphotag");
+        let entries: Vec<_> = (0..20)
+            .map(|i| make_entry(&format!("eng/{i:02}.cha"), FileStatusKind::Queued))
+            .collect();
+        state.update_from_poll(0, &entries);
+        state.directories.scroll_offset = 5;
+
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &state))
+            .expect("draw with scroll should not panic");
+    }
+
+    #[test]
+    fn render_with_elapsed_timer() {
+        let mut state = AppState::new(1, "align");
+        let mut entry = make_entry("eng/test.cha", FileStatusKind::Processing);
+        // Set started_at to 60 seconds ago
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        entry.started_at = Some(UnixTimestamp(now - 60.0));
+        state.update_from_poll(0, &[entry]);
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &state))
+            .expect("draw with elapsed timer should not panic");
     }
 }

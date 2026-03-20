@@ -12,7 +12,7 @@
 //! reducer-message sender that implements the same trait while the render loop
 //! owns UI state locally.
 
-use batchalign_app::api::{FileStatusEntry, FileStatusKind};
+use batchalign_app::api::{FileStatusEntry, FileStatusKind, HealthResponse};
 use indicatif::{ProgressBar, ProgressStyle};
 
 /// Trait for receiving progress updates during job polling.
@@ -28,6 +28,8 @@ pub trait ProgressSink: Send + Sync {
     fn log_error(&self, filename: &str, msg: &str);
     /// Mark processing as complete.
     fn finish(&self);
+    /// Update server health snapshot. Default no-op for non-TUI sinks.
+    fn update_health(&self, _health: &HealthResponse) {}
 }
 
 /// Progress display for batch processing — overall bar + activity spinner.

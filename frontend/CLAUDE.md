@@ -1,7 +1,7 @@
 # batchalign3 Frontend — Dashboard + Desktop Processing UI
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-19
 
 ## Overview
 
@@ -98,6 +98,10 @@ frontend/
 │   │   ├── FileTable.tsx, FilterTabs.tsx, PaginatedFileList.tsx  # File-level views
 │   │   ├── ErrorPanel.tsx, ErrorCodeGroup.tsx  # Error display
 │   │   ├── StatusBadge.tsx, ProgressBar.tsx, StatsRow.tsx  # Shared UI
+│   │   ├── PipelineStageBar.tsx       # 5-phase progress indicator (Read→Transcribe→Align→Analyze→Finalize)
+│   │   ├── WorkerProfilePanel.tsx     # Worker profile status (GPU/Stanza/IO) from health
+│   │   ├── MemoryPanel.tsx            # System RAM gauge with gate threshold
+│   │   ├── VitalsRow.tsx              # Operational counter badges (crashes, retries, etc.)
 │   │   └── visualizations/  # Algorithm trace visualizations (4 pages)
 │   │
 │   ├── hooks/

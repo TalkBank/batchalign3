@@ -1,8 +1,30 @@
 import type { components } from "./generated/api";
 
 type FileProgressStage = components["schemas"]["FileProgressStage"];
+type LanguageSpec = components["schemas"]["LanguageSpec"];
 
 /** Formatting helpers. */
+
+/**
+ * Extract a display string from a LanguageSpec value.
+ *
+ * `LanguageSpec` is `"Auto" | { Resolved: string }` on the wire.
+ * Returns `"auto"` for auto-detection, or the resolved 3-letter code.
+ */
+export function displayLang(spec: LanguageSpec | undefined): string {
+  if (!spec) return "eng";
+  if (spec === "Auto") return "auto";
+  if (typeof spec === "object" && "Resolved" in spec) return spec.Resolved;
+  return String(spec);
+}
+
+/**
+ * Whether a LanguageSpec represents the default (eng) — used to hide
+ * the language badge when it would just say "eng".
+ */
+export function isDefaultLang(spec: LanguageSpec | undefined): boolean {
+  return displayLang(spec) === "eng";
+}
 
 /**
  * Canonical dashboard-side labels for typed file progress stages.

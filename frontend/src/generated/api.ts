@@ -282,7 +282,7 @@ export interface components {
          * @description MIME-like content discriminator for file results.
          * @enum {string}
          */
-        ContentType: "chat" | "csv";
+        ContentType: "chat" | "csv" | "text";
         /**
          * Format: double
          * @description Duration measured in fractional seconds.
@@ -505,6 +505,12 @@ export interface components {
              *     timed out (system RAM below `memory_gate_mb` for >120 s).
              */
             memory_gate_aborts?: number;
+            /**
+             * @description Memory gate threshold in MB from server config.  0 means the gate
+             *     is disabled.  The dashboard uses this to show how close available
+             *     memory is to the blocking threshold.
+             */
+            memory_gate_threshold_mb?: components["schemas"]["MemoryMb"];
             /** @description Identifier of the current server node. */
             node_id?: components["schemas"]["NodeId"];
             /** @description Whether the Redis connection is currently alive and responding to pings. */
@@ -520,6 +526,15 @@ export interface components {
              *     versions may report degraded states.
              */
             status?: components["schemas"]["HealthStatus"];
+            /**
+             * @description Available memory in MB (free + reclaimable).  On macOS this is
+             *     `free + purgeable` which can undercount; see `sysinfo` docs.
+             */
+            system_memory_available_mb?: components["schemas"]["MemoryMb"];
+            /** @description Total physical memory in MB. */
+            system_memory_total_mb?: components["schemas"]["MemoryMb"];
+            /** @description Used memory in MB (`total - available`). */
+            system_memory_used_mb?: components["schemas"]["MemoryMb"];
             /**
              * @description Server software version (e.g. `"0.6.0"`).  Used by the CLI to
              *     detect stale daemons and auto-restart them.
@@ -585,8 +600,8 @@ export interface components {
             file_statuses?: components["schemas"]["FileStatusEntry"][];
             /** @description Server-assigned UUID (v4) for this job. */
             job_id: components["schemas"]["JobId"];
-            /** @description 3-letter ISO language code.  Defaults to `"eng"` when absent in JSON. */
-            lang?: components["schemas"]["LanguageCode3"];
+            /** @description Language specification: a resolved ISO 639-3 code or `"auto"`. */
+            lang?: components["schemas"]["LanguageSpec"];
             next_eligible_at?: null | components["schemas"]["UnixTimestamp"];
             /**
              * Format: int64
@@ -655,8 +670,8 @@ export interface components {
             error_files?: number;
             /** @description Server-assigned UUID (v4) for this job. */
             job_id: components["schemas"]["JobId"];
-            /** @description 3-letter ISO language code.  Defaults to `"eng"` when absent in JSON. */
-            lang?: components["schemas"]["LanguageCode3"];
+            /** @description Language specification: a resolved ISO 639-3 code or `"auto"`. */
+            lang?: components["schemas"]["LanguageSpec"];
             next_eligible_at?: null | components["schemas"]["UnixTimestamp"];
             /**
              * Format: int64
@@ -722,8 +737,11 @@ export interface components {
             display_names?: string[];
             /** @description CHAT files to process. */
             files?: components["schemas"]["FilePayload"][];
-            /** @description 3-letter ISO language code. */
-            lang?: components["schemas"]["LanguageCode3"];
+            /**
+             * @description Language specification: a 3-letter ISO code or `"auto"` for
+             *     ASR-driven detection.
+             */
+            lang?: components["schemas"]["LanguageSpec"];
             /** @description Media filenames for the server to resolve from media_roots (transcribe only). */
             media_files?: string[];
             /** @description Key into server's media_mappings config (e.g. "childes-data"). */
@@ -743,8 +761,25 @@ export interface components {
             /** @description Absolute paths to read input files from (paths_mode only). */
             source_paths?: string[];
         };
-        /** @description 3-letter ISO 639-3 language code (e.g. `"eng"`, `"spa"`). */
+        /**
+         * @description 3-letter ISO 639-3 language code (e.g. `"eng"`, `"spa"`).
+         *
+         *     Construction validates that the value is exactly 3 ASCII alphabetic
+         *     characters, lowercased. Sentinel values like `"auto"` are rejected — use
+         *     [`LanguageSpec`] at boundaries where auto-detection is meaningful.
+         */
         LanguageCode3: string;
+        /**
+         * @description Language specification from the CLI or job submission.
+         *
+         *     `Auto` means the ASR engine should detect the language. This variant must
+         *     be resolved to a concrete [`LanguageCode3`] before any CHAT construction
+         *     or NLP dispatch that requires a known language.
+         */
+        LanguageSpec: "Auto" | {
+            /** @description A concrete ISO 639-3 language code. */
+            Resolved: components["schemas"]["LanguageCode3"];
+        };
         /**
          * @description Lease metadata for a claimed schedulable unit.
          *
@@ -761,6 +796,13 @@ export interface components {
             /** @description Identifier of the node that currently owns the lease. */
             leased_by_node: components["schemas"]["NodeId"];
         };
+        /**
+         * Format: int64
+         * @description Physical memory quantity in megabytes.
+         *
+         *     Used for memory gate thresholds and health-response memory readings.
+         */
+        MemoryMb: number;
         /** @description Identifier of a server/fleet node. */
         NodeId: string;
         /**

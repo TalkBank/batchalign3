@@ -15,10 +15,10 @@
 //! User input (arrow keys, tab, `e`, `c`) mutates navigation fields only;
 //! it never affects the job itself (cancellation is a separate server call).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use batchalign_app::api::{FileStatusEntry, FileStatusKind};
+use batchalign_app::api::{FileProgressStage, FileStatusEntry, FileStatusKind, MemoryMb};
 
 /// Reducer message sent from polling code into the TUI state owner.
 pub enum TuiUpdate {
@@ -30,14 +30,42 @@ pub enum TuiUpdate {
         file_statuses: Vec<FileStatusEntry>,
     },
     /// Append one error to the persistent error summary panel.
+    ///
+    /// Used as a fallback by the `ProgressSink` `log_error` path. The TUI
+    /// also extracts error codes directly from `PollSnapshot` entries, so
+    /// this variant carries no code. Prefer the poll-based path for codes.
     FileError {
         /// File that produced the error.
         filename: String,
         /// Human-readable error message.
         message: String,
     },
+    /// Update server health snapshot (polled less frequently than job status).
+    HealthSnapshot(ServerHealth),
     /// Mark the TUI as finished so the loop can exit after showing final state.
     Finished,
+}
+
+/// Snapshot of server health data for TUI rendering.
+///
+/// Populated from `HealthResponse` on a ~5-second cadence. Fields are
+/// chosen to match the web dashboard's `MemoryPanel` and `WorkerProfilePanel`.
+#[derive(Debug, Clone)]
+pub struct ServerHealth {
+    /// Number of live Python worker processes.
+    pub live_workers: i64,
+    /// Active worker keys (`profile:lang` or `infer:task:lang`).
+    pub live_worker_keys: Vec<String>,
+    /// Total physical memory in MB.
+    pub system_memory_total_mb: MemoryMb,
+    /// Available memory in MB (free + reclaimable).
+    pub system_memory_available_mb: MemoryMb,
+    /// Used memory in MB (`total - available`).
+    pub system_memory_used_mb: MemoryMb,
+    /// Memory gate threshold in MB from server config (0 = disabled).
+    pub memory_gate_threshold_mb: MemoryMb,
+    /// Background warmup lifecycle label.
+    pub warmup_status: String,
 }
 
 /// Overall TUI state, updated from poll results.
@@ -53,6 +81,11 @@ pub struct AppState {
     pub errors: ErrorPanelState,
     /// Confirmation and other interaction-only state.
     pub interaction: InteractionState,
+    /// Latest server health snapshot (polled ~every 5s). `None` before
+    /// the first health response arrives.
+    pub health: Option<ServerHealth>,
+    /// Whether the worker/memory metrics rows are visible.
+    pub show_metrics: bool,
 }
 
 /// Job-level progress summary shown in the header.
@@ -87,6 +120,9 @@ pub struct ErrorPanelState {
     pub entries: Vec<ErrorEntry>,
     /// Whether the error summary panel is expanded.
     pub expanded: bool,
+    /// Filenames for which error entries have already been created,
+    /// preventing duplicate entries across poll ticks.
+    seen_files: HashSet<String>,
 }
 
 /// Local interaction-only flags that do not affect the job itself.
@@ -118,6 +154,9 @@ pub struct DirGroup {
     /// Number of files with status `Error`. These files failed and will
     /// not be retried.
     pub error_count: usize,
+
+    /// Number of files with status `Queued` or `Interrupted`.
+    pub queued_count: usize,
 }
 
 /// Per-file processing status, extracted from the server's poll response.
@@ -141,6 +180,10 @@ pub struct FileState {
     /// is still queued or processing.
     pub duration_s: Option<f64>,
 
+    /// Unix timestamp when processing started. Used to compute elapsed
+    /// time for files that are still being processed.
+    pub started_at: Option<f64>,
+
     /// Current step in a multi-step file operation (e.g. Rev.AI polling).
     /// `None` if the server does not report sub-file progress.
     pub progress_current: Option<i64>,
@@ -151,6 +194,10 @@ pub struct FileState {
     /// Human-readable label for the current progress step
     /// (e.g. `"uploading"`, `"aligning"`). `None` if not reported.
     pub progress_label: Option<String>,
+
+    /// Typed pipeline stage for the current step. Used to render the
+    /// 5-segment phase indicator. `None` for queued/done/error files.
+    pub progress_stage: Option<FileProgressStage>,
 
     /// Error message if the file failed. `None` for successful or
     /// in-progress files.
@@ -198,10 +245,13 @@ impl AppState {
             errors: ErrorPanelState {
                 entries: Vec::new(),
                 expanded: false,
+                seen_files: HashSet::new(),
             },
             interaction: InteractionState {
                 cancel_confirm: false,
             },
+            health: None,
+            show_metrics: true,
         }
     }
 
@@ -226,9 +276,11 @@ impl AppState {
                 full_path: entry.filename.to_string(),
                 status,
                 duration_s,
+                started_at: entry.started_at.map(|t| t.0),
                 progress_current: entry.progress_current,
                 progress_total: entry.progress_total,
                 progress_label: entry.progress_label.clone(),
+                progress_stage: entry.progress_stage,
                 error_msg: entry.error.clone(),
                 error_codes: entry.error_codes.clone().unwrap_or_default(),
             };
@@ -253,18 +305,45 @@ impl AppState {
                     .iter()
                     .filter(|f| f.status == FileStatusKind::Error)
                     .count();
+                let queued_count = files
+                    .iter()
+                    .filter(|f| {
+                        f.status == FileStatusKind::Queued
+                            || f.status == FileStatusKind::Interrupted
+                    })
+                    .count();
                 DirGroup {
                     dir,
                     files,
                     done_count,
                     active_count,
                     error_count,
+                    queued_count,
                 }
             })
             .collect();
         groups.sort_by(|a, b| a.dir.cmp(&b.dir));
 
         self.directories.groups = groups;
+
+        // Extract error entries with proper codes from poll data
+        for entry in file_statuses {
+            if entry.status == FileStatusKind::Error
+                && !self.errors.seen_files.contains(&*entry.filename)
+            {
+                let code = entry.error_codes.as_ref().and_then(|c| c.first()).cloned();
+                let msg = entry
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "unknown error".into());
+                self.errors.seen_files.insert(entry.filename.to_string());
+                self.errors.entries.push(ErrorEntry {
+                    filename: split_dir_file(&entry.filename).1.to_string(),
+                    code,
+                    message: msg,
+                });
+            }
+        }
 
         // Clamp focus
         if !self.directories.groups.is_empty()
@@ -284,7 +363,10 @@ impl AppState {
                 self.update_from_poll(done, &file_statuses);
             }
             TuiUpdate::FileError { filename, message } => {
-                self.add_error(&filename, &message);
+                self.add_error(&filename, &message, None);
+            }
+            TuiUpdate::HealthSnapshot(h) => {
+                self.health = Some(h);
             }
             TuiUpdate::Finished => {
                 self.progress.finished = true;
@@ -292,11 +374,15 @@ impl AppState {
         }
     }
 
-    /// Add an error entry from a poll error callback.
-    pub fn add_error(&mut self, filename: &str, msg: &str) {
+    /// Add an error entry, deduplicating by filename.
+    pub fn add_error(&mut self, filename: &str, msg: &str, code: Option<&str>) {
+        if self.errors.seen_files.contains(filename) {
+            return;
+        }
+        self.errors.seen_files.insert(filename.to_string());
         self.errors.entries.push(ErrorEntry {
             filename: filename.to_string(),
-            code: None,
+            code: code.map(str::to_string),
             message: msg.to_string(),
         });
     }
@@ -328,6 +414,11 @@ impl AppState {
     /// Toggle the error panel expansion.
     pub fn toggle_errors(&mut self) {
         self.errors.expanded = !self.errors.expanded;
+    }
+
+    /// Toggle the worker/memory metrics rows.
+    pub fn toggle_metrics(&mut self) {
+        self.show_metrics = !self.show_metrics;
     }
 
     /// Return whether the job is locally marked as finished.
@@ -513,5 +604,96 @@ mod tests {
         assert_eq!(state.directories.focused_group, 1);
         state.cycle_group();
         assert_eq!(state.directories.focused_group, 0);
+    }
+
+    #[test]
+    fn progress_stage_propagated_from_poll() {
+        let mut state = AppState::new(1, "align");
+        let mut entry = make_entry("eng/a.cha", FileStatusKind::Processing);
+        entry.progress_stage = Some(FileProgressStage::Aligning);
+        state.update_from_poll(0, &[entry]);
+
+        let file = &state.directories.groups[0].files[0];
+        assert_eq!(file.progress_stage, Some(FileProgressStage::Aligning));
+    }
+
+    #[test]
+    fn health_snapshot_stored_via_reducer() {
+        let mut state = AppState::new(1, "morphotag");
+        assert!(state.health.is_none());
+
+        state.apply_update(TuiUpdate::HealthSnapshot(ServerHealth {
+            live_workers: 3,
+            live_worker_keys: vec!["infer:morphosyntax:eng".into()],
+            system_memory_total_mb: MemoryMb(262144),
+            system_memory_available_mb: MemoryMb(100000),
+            system_memory_used_mb: MemoryMb(162144),
+            memory_gate_threshold_mb: MemoryMb(2048),
+            warmup_status: "complete".into(),
+        }));
+
+        let h = state.health.as_ref().unwrap();
+        assert_eq!(h.live_workers, 3);
+        assert_eq!(h.system_memory_total_mb, MemoryMb(262144));
+    }
+
+    #[test]
+    fn toggle_metrics_flips_visibility() {
+        let mut state = AppState::new(1, "morphotag");
+        assert!(state.show_metrics); // default: shown
+        state.toggle_metrics();
+        assert!(!state.show_metrics);
+        state.toggle_metrics();
+        assert!(state.show_metrics);
+    }
+
+    #[test]
+    fn error_codes_extracted_from_poll_entries() {
+        let mut state = AppState::new(1, "morphotag");
+        let mut entry = make_entry("eng/a.cha", FileStatusKind::Error);
+        entry.error = Some("morph lookup failed".into());
+        entry.error_codes = Some(vec!["E4012".into()]);
+        state.update_from_poll(0, &[entry]);
+
+        assert_eq!(state.errors.entries.len(), 1);
+        assert_eq!(state.errors.entries[0].code.as_deref(), Some("E4012"));
+        assert_eq!(state.errors.entries[0].message, "morph lookup failed");
+    }
+
+    #[test]
+    fn error_entries_deduplicated_across_polls() {
+        let mut state = AppState::new(1, "morphotag");
+        let mut entry = make_entry("eng/a.cha", FileStatusKind::Error);
+        entry.error = Some("fail".into());
+
+        // Two poll ticks with the same error file
+        state.update_from_poll(0, &[entry.clone()]);
+        state.update_from_poll(0, &[entry]);
+
+        assert_eq!(state.errors.entries.len(), 1);
+    }
+
+    #[test]
+    fn queued_count_tracked_in_groups() {
+        let mut state = AppState::new(3, "morphotag");
+        let entries = vec![
+            make_entry("d/a.cha", FileStatusKind::Done),
+            make_entry("d/b.cha", FileStatusKind::Queued),
+            make_entry("d/c.cha", FileStatusKind::Queued),
+        ];
+        state.update_from_poll(1, &entries);
+
+        assert_eq!(state.directories.groups[0].queued_count, 2);
+    }
+
+    #[test]
+    fn started_at_propagated_from_poll() {
+        let mut state = AppState::new(1, "align");
+        let mut entry = make_entry("eng/a.cha", FileStatusKind::Processing);
+        entry.started_at = Some(batchalign_app::api::UnixTimestamp(1710000000.0));
+        state.update_from_poll(0, &[entry]);
+
+        let file = &state.directories.groups[0].files[0];
+        assert_eq!(file.started_at, Some(1710000000.0));
     }
 }
