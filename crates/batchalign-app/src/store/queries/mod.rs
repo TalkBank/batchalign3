@@ -13,8 +13,6 @@ pub(crate) use db_helpers::{
 };
 pub(crate) use dispatch::LeaseRenewalOutcome;
 
-use std::path::PathBuf;
-
 use crate::api::{JobId, JobInfo, JobListItem, JobStatus};
 use tracing::warn;
 
@@ -140,6 +138,7 @@ impl JobStore {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use crate::api::JobStatus;

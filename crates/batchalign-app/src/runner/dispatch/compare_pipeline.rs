@@ -1,6 +1,5 @@
 //! Compare dispatch: per-file morphosyntax + DP alignment against gold.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{ContentType, FileName, LanguageCode3};

@@ -21,10 +21,12 @@ pub(super) use file_status::{
     spawn_progress_forwarder, spawn_supervised_file_task,
 };
 
+#[cfg(test)]
+pub(super) use media::resolve_audio_for_chat;
 pub(super) use media::{
     apply_result_filename, collect_preflight_audio_paths, compute_audio_identity,
-    get_audio_duration_ms, preflight_validate_media, resolve_audio_for_chat,
-    resolve_audio_for_chat_with_media_dir, should_preflight,
+    get_audio_duration_ms, preflight_validate_media, resolve_audio_for_chat_with_media_dir,
+    should_preflight,
 };
 
 #[cfg(test)]

@@ -10,9 +10,7 @@
 //! **N-gram retrace detection:** Detects repeated n-grams within each utterance
 //! and wraps them in CHAT retrace notation (`<word word> [/] word word`).
 
-use super::{
-    AsrNormalizedText, AsrWord, ENDING_PUNCT, MOR_PUNCT, SpeakerIndex, Utterance, WordKind,
-};
+use super::{AsrNormalizedText, AsrWord, ENDING_PUNCT, MOR_PUNCT, Utterance, WordKind};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -215,6 +213,7 @@ fn strip_punct(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr_postprocess::SpeakerIndex;
 
     fn make_word(text: &str) -> AsrWord {
         AsrWord::new(text, Some(0), Some(100))

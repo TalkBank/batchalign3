@@ -1170,10 +1170,10 @@ impl WorkerPool {
         // GPU profile workers are always "available" (shared, concurrent).
         if profile.is_concurrent() {
             // Check TCP GPU workers first.
-            if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock() {
-                if tcp_gpu_workers.keys().any(|(l, _)| l == lang) {
-                    return true;
-                }
+            if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock()
+                && tcp_gpu_workers.keys().any(|(l, _)| l == lang)
+            {
+                return true;
             }
             let gpu_workers = self.gpu_workers.try_lock().ok();
             if let Some(gpu_workers) = gpu_workers {
@@ -1285,10 +1285,11 @@ impl WorkerPool {
         drop(groups);
 
         if let Ok(gpu_workers) = self.gpu_workers.try_lock() {
-            for ((lang, _engine_overrides), worker) in gpu_workers.iter() {
+            for ((_lang, _engine_overrides), worker) in gpu_workers.iter() {
                 summary.push(format!(
-                    "profile:gpu:{}:pid={}:transport=stdio:concurrent",
-                    lang,
+                    "{}:{}:pid={}:transport=stdio:concurrent",
+                    worker.profile_label(),
+                    worker.lang(),
                     worker.pid()
                 ));
             }

@@ -1,6 +1,6 @@
 //! File-level job-state mutations on [`JobStore`].
 
-use crate::api::{ContentType, FileName, FileStatusKind, JobId, UnixTimestamp};
+use crate::api::{FileName, FileStatusKind, JobId, UnixTimestamp};
 use crate::scheduling::{AttemptOutcome, RetryDisposition, WorkUnitKind};
 
 use super::super::{
@@ -252,7 +252,7 @@ impl JobStore {
 mod tests {
     use tokio::sync::broadcast;
 
-    use crate::api::{FileStatusKind, JobId, UnixTimestamp};
+    use crate::api::{ContentType, FileStatusKind, JobId, UnixTimestamp};
     use crate::scheduling::FailureCategory;
     use crate::store::queries::tests::{make_job, test_config};
     use crate::ws::BROADCAST_CAPACITY;

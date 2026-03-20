@@ -61,12 +61,6 @@ impl CaMarkerPolicy {
     }
 }
 
-/// Tunable parameters for the two-pass overlap-aware UTR strategy.
-///
-/// All fields have documented defaults that were tuned empirically on
-/// SBCSAE (English), Jefferson NB (dense CA), and TaiwanHakka (Hakka).
-/// Users can override individual parameters via CLI flags.
-
 /// Word matching strategy for UTR DP alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +86,11 @@ impl UtrMatchMode {
     }
 }
 
+/// Tunable parameters for the two-pass overlap-aware UTR strategy.
+///
+/// All fields have documented defaults that were tuned empirically on
+/// SBCSAE (English), Jefferson NB (dense CA), and TaiwanHakka (Hakka).
+/// Users can override individual parameters via CLI flags.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TwoPassConfig {
     /// Whether to use CA overlap markers (⌈⌉⌊⌋) for onset windowing.

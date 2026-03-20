@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::api::{
-    CommandName, ContentType, EngineVersion, FileName, JobId, LanguageCode3, NumWorkers,
-    RevAiJobId, UnixTimestamp,
+    CommandName, ContentType, EngineVersion, FileName, JobId, LanguageCode3, RevAiJobId,
+    UnixTimestamp,
 };
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;

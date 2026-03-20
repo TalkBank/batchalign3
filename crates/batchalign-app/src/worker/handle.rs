@@ -374,11 +374,11 @@ async fn read_tcp_ready_signal<R: tokio::io::AsyncBufRead + Unpin>(
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Ok(signal) = serde_json::from_str::<TcpReadySignal>(trimmed) {
-                    if signal.ready {
-                        let port = signal.port.unwrap_or(0);
-                        return Ok((signal.pid, port));
-                    }
+                if let Ok(signal) = serde_json::from_str::<TcpReadySignal>(trimmed)
+                    && signal.ready
+                {
+                    let port = signal.port.unwrap_or(0);
+                    return Ok((signal.pid, port));
                 }
                 // Not the ready line — might be a log line, skip it.
                 attempts += 1;
@@ -429,6 +429,7 @@ pub struct WorkerHandle {
 ///
 /// Used by [`SharedGpuWorker`](super::pool::shared_gpu::SharedGpuWorker) to
 /// take ownership of the child's stdio channels for concurrent dispatch.
+#[allow(dead_code)]
 pub(crate) struct WorkerHandleParts {
     /// Worker configuration.
     pub config: WorkerConfig,

@@ -4,7 +4,7 @@
 //! but the transcription pipeline still expects the established Rust
 //! `AsrResponse` domain. This module keeps that normalization in Rust.
 
-use crate::api::{DurationSeconds, LanguageCode3};
+use crate::api::LanguageCode3;
 use crate::transcribe::{AsrResponse, AsrToken};
 use crate::types::worker_v2::{
     AsrElementKindV2, ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2,

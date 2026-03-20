@@ -120,7 +120,8 @@ fn serialize_special_forms<S: serde::Serializer>(
     for (form_type, lang_res) in forms {
         let ft_str: Option<String> = form_type.as_ref().map(|ft| {
             let mut buf = String::new();
-            ft.write_chat(&mut buf);
+            ft.write_chat(&mut buf)
+                .expect("writing CHAT to a String should be infallible");
             buf
         });
         let lang_str: Option<String> = lang_res

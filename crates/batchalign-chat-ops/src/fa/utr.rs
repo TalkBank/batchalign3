@@ -356,15 +356,14 @@ fn plan_utr_alignment(
     dp_match_mode: MatchMode,
 ) -> UtrAlignmentPlan {
     // Exact-subsequence fast path only works with exact/case-insensitive matching.
-    if matches!(dp_match_mode, MatchMode::Exact | MatchMode::CaseInsensitive) {
-        if let Some(utt_ranges) =
+    if matches!(dp_match_mode, MatchMode::Exact | MatchMode::CaseInsensitive)
+        && let Some(utt_ranges) =
             try_unique_exact_subsequence_ranges(all_words, asr_texts, word_to_utt, utt_count)
-        {
-            return UtrAlignmentPlan {
-                strategy: UtrAlignmentStrategy::UniqueExactSubsequence,
-                utt_ranges,
-            };
-        }
+    {
+        return UtrAlignmentPlan {
+            strategy: UtrAlignmentStrategy::UniqueExactSubsequence,
+            utt_ranges,
+        };
     }
 
     let alignment = dp_align::align(all_words, asr_texts, dp_match_mode);

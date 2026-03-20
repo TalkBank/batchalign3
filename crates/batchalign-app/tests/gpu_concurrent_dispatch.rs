@@ -97,7 +97,6 @@ async fn gpu_concurrent_dispatch_all_responses_arrive() {
         let pool_ref = &pool;
         handles.push(tokio::spawn({
             let lang = LanguageCode3::from("eng");
-            let request = request;
             let pool_ptr = pool_ref as *const WorkerPool as usize;
             async move {
                 // SAFETY: pool lives for the duration of the test

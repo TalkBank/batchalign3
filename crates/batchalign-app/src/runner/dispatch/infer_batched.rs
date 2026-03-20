@@ -1,7 +1,6 @@
 //! Batched text NLP dispatch (morphotag, utseg, translate, coref, compare).
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::api::{ContentType, FileName, LanguageCode3};

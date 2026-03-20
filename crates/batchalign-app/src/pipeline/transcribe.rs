@@ -9,7 +9,7 @@ use std::path::Path;
 
 use tracing::info;
 
-use crate::api::{DurationSeconds, LanguageCode3, LanguageSpec, NumSpeakers};
+use crate::api::{LanguageCode3, LanguageSpec, NumSpeakers};
 use crate::error::ServerError;
 use crate::params::{CachePolicy, MorphosyntaxParams};
 use crate::pipeline::PipelineServices;
@@ -352,7 +352,7 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
                         .unwrap_or_else(|| "eng".to_string());
                     LanguageCode3::from(detected_iso3)
                 } else {
-                    LanguageCode3::from(detected)
+                    detected
                 }
             }
             LanguageSpec::Resolved(code) => code.clone(),
@@ -432,7 +432,7 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
             reassign_speakers(
                 &mut chat_file,
                 &diarization_segments,
-                &*resolved_lang,
+                &resolved_lang,
                 &participant_ids,
             );
         }
@@ -532,7 +532,7 @@ fn stage_serialize<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::EngineVersion;
+    use crate::api::{DurationSeconds, EngineVersion};
     use crate::cache::UtteranceCache;
     use crate::transcribe::{AsrBackend, AsrToken};
     use crate::types::worker_v2::SpeakerBackendV2;
@@ -611,7 +611,7 @@ mod tests {
                 speaker: Some("SPEAKER_1".into()),
                 confidence: None,
             }],
-            lang: LanguageCode3::new("eng").into(),
+            lang: LanguageCode3::new("eng"),
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -649,7 +649,7 @@ mod tests {
                 speaker: None,
                 confidence: None,
             }],
-            lang: LanguageCode3::new("eng").into(),
+            lang: LanguageCode3::new("eng"),
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -667,10 +667,6 @@ mod tests {
     /// 696870c7-02b where `@Languages: auto` leaked into output).
     #[tokio::test]
     async fn build_chat_stage_resolves_auto_to_detected_language() {
-        use batchalign_chat_ops::asr_postprocess;
-        use batchalign_chat_ops::build_chat;
-        use batchalign_chat_ops::serialize::to_chat_string;
-
         let tempdir = tempfile::tempdir().expect("tempdir");
         let cache = UtteranceCache::sqlite(Some(tempdir.path().join("cache")))
             .await
@@ -701,7 +697,7 @@ mod tests {
                 speaker: None,
                 confidence: None,
             }],
-            lang: LanguageCode3::new("spa").into(),
+            lang: LanguageCode3::new("spa"),
         });
 
         // Run post-processing to generate utterances
@@ -751,7 +747,7 @@ mod tests {
             TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![],
-            lang: LanguageCode3::new("fra").into(),
+            lang: LanguageCode3::new("fra"),
         });
 
         stage_build_chat(&mut ctx).await.expect("build_chat");

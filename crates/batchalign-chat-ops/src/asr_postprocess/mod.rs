@@ -399,7 +399,7 @@ fn normalize_cantonese_words(words: Vec<AsrWord>) -> Vec<AsrWord> {
     words
         .into_iter()
         .map(|w| AsrWord {
-            text: w.text.map(|t| cantonese::normalize_cantonese(t)),
+            text: w.text.map(cantonese::normalize_cantonese),
             ..w
         })
         .collect()

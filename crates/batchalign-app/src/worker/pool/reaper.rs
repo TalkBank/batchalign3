@@ -35,11 +35,11 @@ fn pid_dir() -> Option<PathBuf> {
 /// Ensure the PID file directory exists.
 fn ensure_pid_dir() -> Option<PathBuf> {
     let dir = pid_dir()?;
-    if !dir.exists() {
-        if let Err(e) = fs::create_dir_all(&dir) {
-            warn!(path = %dir.display(), error = %e, "Failed to create worker PID directory");
-            return None;
-        }
+    if !dir.exists()
+        && let Err(e) = fs::create_dir_all(&dir)
+    {
+        warn!(path = %dir.display(), error = %e, "Failed to create worker PID directory");
+        return None;
     }
     Some(dir)
 }

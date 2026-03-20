@@ -86,11 +86,7 @@ fn start(args: &WorkerStartArgs, verbose: u8) -> Result<(), CliError> {
 
         let error = cmd.exec();
         // exec() only returns on error.
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to exec worker process: {error}"),
-        )
-        .into());
+        Err(std::io::Error::other(format!("Failed to exec worker process: {error}")).into())
     }
 
     #[cfg(not(unix))]

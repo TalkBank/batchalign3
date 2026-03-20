@@ -6,7 +6,7 @@
 //! avoids widening the Python worker protocol with a generic HTTP sidecar API.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use batchalign_revai::{RevAiClient, SubmitOptions};

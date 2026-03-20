@@ -44,6 +44,7 @@ pub(super) struct SharedGpuWorker {
     /// Control channel for sequential non-V2 ops (health, capabilities, shutdown).
     /// Only one sequential op can be in-flight at a time.
     /// Shared with the background reader task via `Arc`.
+    #[allow(dead_code)]
     control: Arc<tokio::sync::Mutex<Option<oneshot::Sender<WorkerControlResponse>>>>,
 
     /// Background stdout reader task handle.
@@ -58,6 +59,7 @@ pub(super) struct SharedGpuWorker {
 
 /// Non-V2 responses routed via the control channel.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) enum WorkerControlResponse {
     Health(crate::worker::WorkerHealthResponse),
     Capabilities(crate::worker::WorkerCapabilities),
@@ -170,6 +172,7 @@ impl SharedGpuWorker {
     }
 
     /// Run a health check via the control channel.
+    #[allow(dead_code)]
     pub(super) async fn health_check(
         &self,
     ) -> Result<crate::worker::WorkerHealthResponse, WorkerError> {
@@ -405,6 +408,7 @@ pub(crate) struct SharedGpuTcpWorker {
     pending: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<ExecuteResponseV2>>>>,
 
     /// Control channel for sequential non-V2 ops.
+    #[allow(dead_code)]
     control: Arc<tokio::sync::Mutex<Option<oneshot::Sender<WorkerControlResponse>>>>,
 
     /// Background reader task handle.

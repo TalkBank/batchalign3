@@ -166,16 +166,16 @@ impl JobSubmission {
         };
 
         // Check Rev.AI language support
-        if let Some(AsrEngineName::RevAi) = &asr_engine {
-            if try_revai_language_hint(lang).is_none() {
-                return Err(ValidationError(format!(
-                    "Language '{}' is not supported by Rev.AI ASR. Alternatives:\n\
-                     - Use --asr-engine whisper for local Whisper ASR (supports most languages)\n\
-                     - Use --asr-engine-custom tencent for Chinese/Hakka via Tencent\n\
-                     - Check supported languages: book/src/reference/language-code-resolution.md",
-                    lang
-                )));
-            }
+        if let Some(AsrEngineName::RevAi) = &asr_engine
+            && try_revai_language_hint(lang).is_none()
+        {
+            return Err(ValidationError(format!(
+                "Language '{}' is not supported by Rev.AI ASR. Alternatives:\n\
+                 - Use --asr-engine whisper for local Whisper ASR (supports most languages)\n\
+                 - Use --asr-engine-custom tencent for Chinese/Hakka via Tencent\n\
+                 - Check supported languages: book/src/reference/language-code-resolution.md",
+                lang
+            )));
         }
 
         // Commands that use Stanza: morphotag, utseg, coref, compare

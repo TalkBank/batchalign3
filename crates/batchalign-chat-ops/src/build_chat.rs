@@ -225,12 +225,11 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
         if let Some(mut utt_line) = build_word_utterance(&utt_desc.speaker, words, desc.write_wor)?
         {
             // Set [- lang] precode when utterance language differs from primary
-            if let Some(ref utt_lang) = utt_desc.lang {
-                if utt_lang != primary_lang {
-                    if let Line::Utterance(ref mut utt) = utt_line {
-                        utt.main.content.language_code = Some(LanguageCode::new(utt_lang.as_str()));
-                    }
-                }
+            if let Some(ref utt_lang) = utt_desc.lang
+                && utt_lang != primary_lang
+                && let Line::Utterance(ref mut utt) = utt_line
+            {
+                utt.main.content.language_code = Some(LanguageCode::new(utt_lang.as_str()));
             }
             lines.push(utt_line);
         }

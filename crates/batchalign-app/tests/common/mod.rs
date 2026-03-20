@@ -720,10 +720,9 @@ pub async fn submit_paths_and_complete(
             .get(format!("{base_url}/jobs/{}/results", final_info.job_id))
             .send()
             .await
+            && let Ok(text) = resp.text().await
         {
-            if let Ok(text) = resp.text().await {
-                eprintln!("  Results response: {}", &text[..text.len().min(500)]);
-            }
+            eprintln!("  Results response: {}", &text[..text.len().min(500)]);
         }
     }
 
@@ -747,11 +746,11 @@ pub async fn submit_paths_and_complete(
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.extension().map_or(false, |e| e == "cha" || e == "csv") {
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                eprintln!("NOTE: output found at {} (not {})", path.display(), p);
-                                return content;
-                            }
+                        if path.extension().is_some_and(|e| e == "cha" || e == "csv")
+                            && let Ok(content) = std::fs::read_to_string(&path)
+                        {
+                            eprintln!("NOTE: output found at {} (not {})", path.display(), p);
+                            return content;
                         }
                     }
                 }

@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use super::{AsrElement, AsrElementKind, AsrRawText, AsrTimestampSecs};
+use super::{AsrElement, AsrElementKind, AsrRawText};
 
 /// Compound word pairs loaded from the JSON data file at compile time.
 ///
@@ -64,6 +64,7 @@ pub fn merge_compounds(elements: &[AsrElement]) -> Vec<AsrElement> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr_postprocess::AsrTimestampSecs;
 
     fn elem(value: &str, ts: f64, end_ts: f64) -> AsrElement {
         AsrElement {
