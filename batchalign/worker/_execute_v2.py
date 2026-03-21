@@ -106,6 +106,10 @@ def execute_request_v2(
 ) -> ExecuteResponseV2:
     """Execute one typed V2 worker request against the loaded runtime."""
 
+    invalid_request_response = _validate_request_boundary(request)
+    if invalid_request_response is not None:
+        return invalid_request_response
+
     # Test-echo mode: return a successful echo response without model dispatch.
     # This enables integration tests for the concurrent dispatch path
     # (SharedGpuWorker) without loading real ML models.
@@ -163,6 +167,40 @@ def _unsupported_task_response(request: ExecuteRequestV2) -> ExecuteResponseV2:
                 f"worker protocol V2 task {request.task.value} is not wired into "
                 "the live worker yet"
             ),
+        ),
+        result=None,
+        elapsed_s=0.0,
+    )
+
+
+def _validate_request_boundary(request: ExecuteRequestV2) -> ExecuteResponseV2 | None:
+    """Reject mismatched top-level task/payload combinations before dispatch."""
+
+    payload_kind = getattr(request.payload, "kind", None)
+    if payload_kind is None:
+        return _invalid_payload_response(
+            request,
+            "execute payload did not include a task kind discriminator",
+        )
+    if request.task.value != payload_kind:
+        return _invalid_payload_response(
+            request,
+            f"execute payload kind {payload_kind} does not match task {request.task.value}",
+        )
+    return None
+
+
+def _invalid_payload_response(
+    request: ExecuteRequestV2,
+    message: str,
+) -> ExecuteResponseV2:
+    """Return one typed invalid-payload protocol response."""
+
+    return ExecuteResponseV2(
+        request_id=request.request_id,
+        outcome=ExecuteErrorV2(
+            code=ProtocolErrorCodeV2.INVALID_PAYLOAD,
+            message=message,
         ),
         result=None,
         elapsed_s=0.0,

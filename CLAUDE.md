@@ -489,7 +489,7 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`
 
 ## Safety: Local ML Model Execution
 
-**Running batchalign3 with ML models (transcribe, align, morphotag) on a developer machine is dangerous.** Each Whisper model instance consumes 2–5 GB RAM on MPS/CUDA. The auto-tuner (`compute_job_workers()`) and `DEFAULT_MAX_WORKERS_PER_KEY = 8` can spawn multiple concurrent inference requests that exhaust GPU/system memory, causing **unrecoverable kernel-level OOM crashes**.
+**Running batchalign3 with ML models (transcribe, align, morphotag) on a developer machine is dangerous.** Each Whisper model instance consumes 2–15 GB RAM on MPS/CUDA. The memory guard uses per-profile budgets (GPU=6 GB, Stanza=12 GB with overhead) and `DEFAULT_MAX_WORKERS_PER_KEY = 4` to limit spawning, but large corpus runs can still exhaust system memory.
 
 **Rules for local runs:**
 
@@ -497,7 +497,7 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`
 - For large corpus runs (>5 files or >1 GB audio), use net (M3 Ultra, 256 GB) instead of a developer machine
 - Use `--workers 1` to limit concurrent files per job (wired to `max_workers_per_job` in `ServerConfig`)
 - Use `--timeout N` to increase the audio task timeout for very long recordings (default: 1800s = 30 minutes)
-- The actual per-key pool ceiling is `max_workers_per_key` in `ServerConfig` (default: 8, configurable in `server.yaml`)
+- The actual per-key pool ceiling is `max_workers_per_key` in `ServerConfig` (default: 4, configurable in `server.yaml`)
 
 **Known crash incidents:**
 - 2026-03-19: 47-file transcription (14 GB audio) with default settings caused kernel OOM on 64 GB machine

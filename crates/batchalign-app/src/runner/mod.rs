@@ -12,8 +12,10 @@ pub(crate) mod util;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::api::{ContentType, EngineVersion, FileName, JobId, RevAiJobId, UnixTimestamp};
+use crate::host_memory::{HostMemoryCoordinator, HostMemoryError};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
 use crate::revai::{RevAiPreflightPlan, preflight_submit_audio_paths};
@@ -25,7 +27,7 @@ use tracing::{error, info, warn};
 
 use crate::api::JobStatus;
 use crate::queue::QueueBackend;
-use crate::store::{JobStore, LeaseRenewalOutcome, RunnerJobSnapshot, memory_gate, unix_now};
+use crate::store::{JobStore, LeaseRenewalOutcome, RunnerJobSnapshot, unix_now};
 use crate::workflow::{RunnerDispatchKind, command_runner_dispatch_kind};
 
 use dispatch::{
@@ -128,12 +130,6 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         return Ok(());
     }
 
-    // Read command + lang for the memory gate check.
-    let gate_command = job.dispatch.command.clone();
-    let gate_lang = job.dispatch.lang.to_worker_language();
-
-    // Memory gate — if pressure persists, defer the queued job back into the
-    // local queue backend instead of sleeping inside the runner task.
     let context = format!("job {job_id} pre-start");
     let memory_gate_policy = RetryPolicy {
         max_attempts: 1,
@@ -141,45 +137,6 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         max_backoff_ms: DurationMs(120_000),
         backoff_multiplier: 2,
     };
-
-    match memory_gate(
-        &context,
-        Some(pool),
-        Some(&gate_command),
-        Some(gate_lang),
-        store.config().memory_gate_mb.0,
-        Some(store.config()),
-    )
-    .await
-    {
-        Ok(Some(avail)) => {
-            info!(
-                job_id = %job_id,
-                correlation_id = %correlation_id,
-                available_mb = avail,
-                "Job starting"
-            );
-        }
-        Ok(None) => {}
-        Err(e) => {
-            let retry_at = UnixTimestamp(
-                unix_now().0 + (memory_gate_policy.backoff_for_retry(1).0 as f64 / 1000.0),
-            );
-
-            store.requeue_job_after_memory_gate(job_id, retry_at).await;
-            store.bump_counter(|c| c.deferred_work_units += 1).await;
-            queue.notify();
-
-            warn!(
-                job_id = %job_id,
-                correlation_id = %correlation_id,
-                error = %e,
-                retry_at = %retry_at,
-                "Re-queueing job after memory gate rejection"
-            );
-            return Ok(());
-        }
-    }
 
     // Acquire semaphore (blocks if too many concurrent jobs)
     let _permit = store.acquire_job_slot().await.expect("semaphore closed");
@@ -189,15 +146,70 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         return Ok(());
     }
 
-    // Mark as running
-    store.mark_job_running(job_id).await;
-
     // Collect file list to process
     let mut file_list = job.pending_files.clone();
     let command = job.dispatch.command.clone();
 
-    // Compute per-job file parallelism
-    let num_workers = compute_job_workers(&command, file_list.len(), store.config());
+    // Compute the requested per-job file parallelism without host-memory math,
+    // then let the host-memory coordinator clamp it to what the machine can
+    // safely support right now.
+    let requested_workers = compute_job_workers(&command, file_list.len(), store.config());
+    let coordinator = HostMemoryCoordinator::from_server_config(store.config());
+    let job_label = format!(
+        "job-execution:{}:{}:{}",
+        job_id,
+        command,
+        job.dispatch.lang.to_worker_language()
+    );
+    let planner_command = command.clone();
+    let timeout = Duration::from_secs(store.config().memory_gate_timeout_s);
+    let poll_interval = Duration::from_secs(store.config().memory_gate_poll_s.max(1));
+    let execution_plan = tokio::task::spawn_blocking(move || {
+        coordinator.wait_for_job_execution_plan(
+            &planner_command,
+            requested_workers,
+            &job_label,
+            timeout,
+            poll_interval,
+        )
+    })
+    .await
+    .map_err(|error| {
+        crate::error::ServerError::Persistence(format!(
+            "host-memory planner task failed for job {job_id}: {error}"
+        ))
+    })?;
+    let execution_plan = match execution_plan {
+        Ok(plan) => plan,
+        Err(error @ (HostMemoryError::CapacityRejected { .. } | HostMemoryError::TimedOut { .. })) => {
+            let retry_at = UnixTimestamp(
+                unix_now().0 + (memory_gate_policy.backoff_for_retry(1).0 as f64 / 1000.0),
+            );
+            store.requeue_job_after_memory_gate(job_id, retry_at).await;
+            store.bump_counter(|c| c.deferred_work_units += 1).await;
+            queue.notify();
+            warn!(
+                job_id = %job_id,
+                correlation_id = %correlation_id,
+                requested_workers = requested_workers.0,
+                error = %error,
+                retry_at = %retry_at,
+                context = %context,
+                "Re-queueing job after host-memory capacity rejection"
+            );
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(crate::error::ServerError::Persistence(format!(
+                "host-memory coordinator failed for job {job_id}: {error}"
+            )));
+        }
+    };
+    let num_workers = execution_plan.granted_workers;
+    let _job_memory_lease = execution_plan.lease;
+
+    // Mark as running only after job execution memory has been reserved.
+    store.mark_job_running(job_id).await;
 
     // Record on job and DB
     store.record_job_worker_count(job_id, num_workers.0).await;
@@ -206,7 +218,9 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         job_id = %job_id,
         correlation_id = %correlation_id,
         num_files = file_list.len(),
+        requested_workers = requested_workers.0,
         num_workers = num_workers.0,
+        reserved_mb = execution_plan.reserved_mb.0,
         command = %command,
         "Processing files"
     );

@@ -50,7 +50,7 @@
         "type": "string"
       },
       "FileName": {
-        "description": "Basename of a file being processed (e.g. `\"sample.cha\"`).",
+        "description": "Basename of a file being processed (e.g. `\"sample.cha\"`).\nRejects empty strings and path separators.",
         "type": "string"
       },
       "FilePayload": {
@@ -313,6 +313,43 @@
             "description": "Whether the Python workers are running on free-threaded Python\n(3.14t+).  Affects memory budgets and concurrency strategy.",
             "type": "boolean"
           },
+          "host_memory_active_leases": {
+            "description": "Human-readable labels for active coordinator leases.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "host_memory_error": {
+            "description": "Snapshot error surfaced when the host-memory ledger cannot be read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host_memory_job_leases": {
+            "description": "Number of active job-execution leases in the host coordinator.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "host_memory_ml_test_locks": {
+            "description": "Number of active machine-wide ML test locks in the host coordinator.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "host_memory_pressure": {
+            "$ref": "#/components/schemas/HostMemoryPressureLevel",
+            "description": "Host-memory pressure classification derived from current OS memory plus\nactive cross-process reservations."
+          },
+          "host_memory_reserved_mb": {
+            "$ref": "#/components/schemas/MemoryMb",
+            "description": "Total memory currently reserved by the host-memory coordinator."
+          },
+          "host_memory_startup_leases": {
+            "description": "Number of active worker/model startup leases in the host coordinator.",
+            "format": "int64",
+            "type": "integer"
+          },
           "job_slots_available": {
             "description": "Number of additional jobs the server can accept right now, based on\nmemory and concurrency limits.",
             "format": "int64",
@@ -352,13 +389,13 @@
             "type": "array"
           },
           "memory_gate_aborts": {
-            "description": "Cumulative count of job submissions rejected because the memory gate\ntimed out (system RAM below `memory_gate_mb` for >120 s).",
+            "description": "Backward-compat counter for job deferrals caused by host-memory\nadmission pressure.",
             "format": "int64",
             "type": "integer"
           },
           "memory_gate_threshold_mb": {
             "$ref": "#/components/schemas/MemoryMb",
-            "description": "Memory gate threshold in MB from server config.  0 means the gate\nis disabled.  The dashboard uses this to show how close available\nmemory is to the blocking threshold."
+            "description": "Host-memory reserve threshold in MB from server config.  0 means the\ncoordinator will not keep explicit free-memory headroom."
           },
           "node_id": {
             "$ref": "#/components/schemas/NodeId",
@@ -416,8 +453,18 @@
         ],
         "type": "string"
       },
+      "HostMemoryPressureLevel": {
+        "description": "Host-wide memory pressure level derived from the current memory snapshot and\nreserved headroom.",
+        "enum": [
+          "healthy",
+          "guarded",
+          "constrained",
+          "critical"
+        ],
+        "type": "string"
+      },
       "JobId": {
-        "description": "Server-assigned UUID (v4) for a job.",
+        "description": "Server-assigned identifier for a job (non-empty).",
         "type": "string"
       },
       "JobInfo": {
@@ -857,7 +904,7 @@
         "type": "integer"
       },
       "NodeId": {
-        "description": "Identifier of a server/fleet node.",
+        "description": "Identifier of a server/fleet node.\nEmpty when the node does not report an identity (older server versions).",
         "type": "string"
       },
       "NumSpeakers": {
@@ -913,7 +960,7 @@
   "paths": {
     "/bug-reports": {
       "get": {
-        "description": "Bug reports are JSON files written to disk by the validation layer when\nit detects semantic errors (e.g., alignment mismatches, monotonicity\nviolations). This endpoint scans the reports directory by mtime so the\ndashboard can surface recent failures without requiring database queries.\nMissing or unreadable files are silently skipped.",
+        "description": "Bug reports are JSON files written to disk by the validation layer when\nit detects semantic errors (e.g., alignment mismatches, monotonicity\nviolations). This endpoint scans the reports directory by mtime so the\ndashboard can surface recent failures without requiring database queries.",
         "operationId": "list_bug_reports",
         "parameters": [
           {
@@ -930,6 +977,16 @@
         "responses": {
           "200": {
             "description": "Bug report documents (newest first)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bug report storage could not be read"
           }
         },
         "summary": "Return the most recent bug reports, sorted newest-first.",
@@ -966,6 +1023,16 @@
               }
             },
             "description": "Bug report not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bug report storage could not be read"
           }
         },
         "summary": "Return a single bug report by its ID (filename stem).",

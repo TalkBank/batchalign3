@@ -19,6 +19,7 @@ use batchalign_app::api::{
     JobSubmission, LanguageSpec, MemoryMb, NumSpeakers,
 };
 use batchalign_app::config::{RuntimeLayout, ServerConfig};
+use batchalign_app::host_memory::MachineMlTestLock;
 use batchalign_app::options::CommandOptions;
 use batchalign_app::worker::InferTask;
 use batchalign_app::worker::pool::PoolConfig;
@@ -29,6 +30,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Cached worker backend that survives across isolated server sessions.
 struct LiveFixtureBackend {
+    _machine_lock: MachineMlTestLock,
     prepared_workers: PreparedWorkers,
     session_config: ServerConfig,
 }
@@ -39,11 +41,14 @@ impl LiveFixtureBackend {
         let python_path = resolve_python()
             .ok_or_else(|| "Python 3 with batchalign is not available".to_string())?;
         let session_config = live_fixture_server_config();
+        let machine_lock = MachineMlTestLock::acquire("batchalign-app live fixture")
+            .map_err(|error| format!("machine-wide ML test lock unavailable: {error}"))?;
         let prepared_workers =
             prepare_workers(&session_config, live_fixture_pool_config(&python_path))
                 .await
                 .map_err(|error| format!("could not prepare live workers: {error}"))?;
         Ok(Self {
+            _machine_lock: machine_lock,
             prepared_workers,
             session_config,
         })

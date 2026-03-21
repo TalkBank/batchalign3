@@ -611,16 +611,13 @@ mod tests {
 
     #[test]
     fn auto_max_concurrent_caps_large_hosts() {
-        // 256 GB host (roughly 200 GB available at runtime) would be 16+ by memory.
-        // Hard cap keeps this at 8.
-        assert_eq!(auto_max_concurrent_from(200_000, 28), 8);
+        assert_eq!(auto_max_concurrent_from(28), 8);
     }
 
     #[test]
     fn auto_max_concurrent_fallback_and_floor() {
-        // No memory signal uses conservative fallback.
-        assert_eq!(auto_max_concurrent_from(0, 16), 4);
-        // Very low memory still floors at 2 slots.
-        assert_eq!(auto_max_concurrent_from(12_000, 16), 2);
+        assert_eq!(auto_max_concurrent_from(0), 2);
+        assert_eq!(auto_max_concurrent_from(1), 2);
+        assert_eq!(auto_max_concurrent_from(4), 4);
     }
 }

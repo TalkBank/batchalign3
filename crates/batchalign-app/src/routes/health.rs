@@ -13,6 +13,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 
 use crate::AppState;
+use crate::host_memory::{HostMemoryCoordinator, HostMemoryPressureLevel};
 
 /// Build the health-check router (`GET /health`).
 pub fn router() -> Router<Arc<AppState>> {
@@ -56,6 +57,14 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
     let available_mb = MemoryMb(sys.available_memory() / (1024 * 1024));
     let used_mb = MemoryMb(total_mb.0.saturating_sub(available_mb.0));
     let gate_mb = state.environment.config.memory_gate_mb;
+    let (host_memory, host_memory_error) =
+        match HostMemoryCoordinator::from_server_config(&state.environment.config).snapshot() {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to read host-memory snapshot");
+                (None, Some(error.to_string()))
+            }
+        };
 
     Json(HealthResponse {
         status: HealthStatus::Ok,
@@ -92,5 +101,30 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
         system_memory_available_mb: available_mb,
         system_memory_used_mb: used_mb,
         memory_gate_threshold_mb: gate_mb,
+        host_memory_pressure: host_memory
+            .as_ref()
+            .map(|snapshot| snapshot.pressure_level)
+            .unwrap_or(HostMemoryPressureLevel::Healthy),
+        host_memory_reserved_mb: host_memory
+            .as_ref()
+            .map(|snapshot| snapshot.active_reserved_mb)
+            .unwrap_or(MemoryMb(0)),
+        host_memory_startup_leases: host_memory
+            .as_ref()
+            .map(|snapshot| snapshot.startup_leases as i64)
+            .unwrap_or(0),
+        host_memory_job_leases: host_memory
+            .as_ref()
+            .map(|snapshot| snapshot.job_execution_leases as i64)
+            .unwrap_or(0),
+        host_memory_ml_test_locks: host_memory
+            .as_ref()
+            .map(|snapshot| snapshot.ml_test_locks as i64)
+            .unwrap_or(0),
+        host_memory_active_leases: host_memory
+            .as_ref()
+            .map(|snapshot| snapshot.active_lease_labels.clone())
+            .unwrap_or_default(),
+        host_memory_error,
     })
 }

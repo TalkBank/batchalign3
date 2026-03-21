@@ -7,6 +7,7 @@
 use batchalign_app::api::*;
 use batchalign_app::api::{LanguageCode3, LanguageSpec, WorkerLanguage};
 use batchalign_app::config::ServerConfig;
+use batchalign_app::host_memory::HostMemoryPressureLevel;
 use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 use std::collections::BTreeMap;
 
@@ -263,7 +264,17 @@ fn snapshot_health_response() {
         system_memory_total_mb: MemoryMb(65536),
         system_memory_available_mb: MemoryMb(32768),
         system_memory_used_mb: MemoryMb(32768),
-        memory_gate_threshold_mb: MemoryMb(2048),
+        memory_gate_threshold_mb: MemoryMb(8192),
+        host_memory_pressure: HostMemoryPressureLevel::Guarded,
+        host_memory_reserved_mb: MemoryMb(12000),
+        host_memory_startup_leases: 1,
+        host_memory_job_leases: 1,
+        host_memory_ml_test_locks: 0,
+        host_memory_active_leases: vec![
+            "WorkerStartup:worker-startup:profile:gpu:eng:{}:16000MB".into(),
+            "JobExecution:job-execution:job-1:align:eng:12000MB".into(),
+        ],
+        host_memory_error: None,
     };
     insta::assert_json_snapshot!("health_response", health);
 }

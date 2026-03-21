@@ -42,5 +42,14 @@ expression: health
   "system_memory_total_mb": 65536,
   "system_memory_available_mb": 32768,
   "system_memory_used_mb": 32768,
-  "memory_gate_threshold_mb": 2048
+  "memory_gate_threshold_mb": 8192,
+  "host_memory_pressure": "guarded",
+  "host_memory_reserved_mb": 12000,
+  "host_memory_startup_leases": 1,
+  "host_memory_job_leases": 1,
+  "host_memory_ml_test_locks": 0,
+  "host_memory_active_leases": [
+    "WorkerStartup:worker-startup:profile:gpu:eng:{}:16000MB",
+    "JobExecution:job-execution:job-1:align:eng:12000MB"
+  ]
 }

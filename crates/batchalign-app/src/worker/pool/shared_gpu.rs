@@ -534,9 +534,17 @@ impl Drop for SharedGpuWorker {
             #[cfg(unix)]
             {
                 if let Some(pid) = child.id() {
+                    let pgid = pid as libc::pid_t;
                     // SAFETY: the worker was spawned as its own process group.
                     unsafe {
-                        libc::killpg(pid as libc::pid_t, libc::SIGTERM);
+                        libc::killpg(pgid, libc::SIGTERM);
+                    }
+                    // Brief pause then SIGKILL to prevent zombies holding GPU/RAM.
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    if unsafe { libc::kill(pgid, 0) } == 0 {
+                        unsafe {
+                            libc::killpg(pgid, libc::SIGKILL);
+                        }
                     }
                 }
             }

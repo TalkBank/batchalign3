@@ -118,18 +118,27 @@ impl WarmupStatus {
 }
 
 /// Default maximum workers per `(profile, lang, engine_overrides)` key.
-const DEFAULT_MAX_WORKERS_PER_KEY: usize = 8;
+///
+/// Lowered from 8 to 4 to prevent OOM on 64 GB developer machines where
+/// GPU workers consume 13-15 GB each (8 × 15 GB = 120 GB → crash).
+/// Override via `max_workers_per_key` in `server.yaml` for production
+/// servers with more RAM (e.g., net with 256 GB).
+const DEFAULT_MAX_WORKERS_PER_KEY: usize = 4;
 
 /// Absolute ceiling on total workers. Even with unlimited RAM, never spawn
 /// more than this many concurrent Python processes.
 const ABSOLUTE_MAX_TOTAL_WORKERS: usize = 32;
 
-/// RAM budget per worker for the global cap heuristic (4 GB).
-const RAM_PER_WORKER_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// RAM budget per worker for the global cap heuristic (6 GB).
+///
+/// This is a conservative median across all profiles. GPU workers actually
+/// use 4-15 GB, Stanza workers 2-8 GB. Using 6 GB prevents the heuristic
+/// from allowing more workers than physical RAM can support.
+const RAM_PER_WORKER_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
 /// Compute a default global worker cap from available system memory.
 ///
-/// Uses `available_memory / 4GB`, clamped to `[2, 32]`. Falls back to 4
+/// Uses `available_memory / 6GB`, clamped to `[2, 32]`. Falls back to 4
 /// if sysinfo reports 0 (macOS undercounts).
 fn default_max_total_workers() -> usize {
     let mut sys = sysinfo::System::new();

@@ -24,6 +24,7 @@ use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
 
 use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
+use crate::host_memory::HostMemoryRuntimeConfig;
 use crate::revai::load_revai_api_key;
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::{
@@ -84,6 +85,10 @@ pub struct WorkerRuntimeConfig {
     pub force_cpu: bool,
     /// Optional Rev.AI key already resolved by the Rust control plane.
     pub revai_api_key: Option<String>,
+    /// Maximum concurrent requests served inside one GPU worker process.
+    pub gpu_thread_pool_size: u32,
+    /// Host-memory coordination settings shared with the worker spawn path.
+    pub host_memory: HostMemoryRuntimeConfig,
 }
 
 impl Default for WorkerRuntimeConfig {
@@ -93,18 +98,27 @@ impl Default for WorkerRuntimeConfig {
             load_revai_api_key()
                 .ok()
                 .map(|key| key.as_str().to_string()),
+            crate::config::ServerConfig::default().gpu_thread_pool_size,
+            HostMemoryRuntimeConfig::default(),
         )
     }
 }
 
 impl WorkerRuntimeConfig {
     /// Build worker runtime inputs from explicit sources.
-    pub fn from_sources(force_cpu: bool, revai_api_key: Option<String>) -> Self {
+    pub fn from_sources(
+        force_cpu: bool,
+        revai_api_key: Option<String>,
+        gpu_thread_pool_size: u32,
+        host_memory: HostMemoryRuntimeConfig,
+    ) -> Self {
         Self {
             force_cpu,
             revai_api_key: revai_api_key
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            gpu_thread_pool_size,
+            host_memory,
         }
     }
 }
@@ -195,6 +209,11 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
         cmd.arg("--verbose").arg(config.verbose.to_string());
     }
 
+    if config.profile == WorkerProfile::Gpu {
+        cmd.arg("--gpu-thread-pool-size")
+            .arg(config.runtime.gpu_thread_pool_size.to_string());
+    }
+
     if config.test_delay_ms > 0 {
         cmd.arg("--test-delay-ms")
             .arg(config.test_delay_ms.to_string());
@@ -241,7 +260,7 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
 /// Returns `(pid, port)` on success after waiting for the ready signal.
 pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, u16), WorkerError> {
     // Memory guard — same as WorkerHandle::spawn().
-    let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(0)
+    let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(config)
         .await
         .map_err(|e| WorkerError::SpawnFailed(format!("memory guard: {e}")))?;
 
@@ -277,6 +296,11 @@ pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, 
 
     if config.verbose > 0 {
         cmd.arg("--verbose").arg(config.verbose.to_string());
+    }
+
+    if config.profile == WorkerProfile::Gpu {
+        cmd.arg("--gpu-thread-pool-size")
+            .arg(config.runtime.gpu_thread_pool_size.to_string());
     }
 
     if config.test_delay_ms > 0 {
@@ -455,7 +479,8 @@ impl WorkerHandle {
         // This prevents the TOCTOU race where N concurrent spawns all see "enough"
         // memory before any model is loaded, then collectively exceed physical RAM.
         // See docs/memory-safety.md for the full crash history and design rationale.
-        let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(0)
+        let startup_reservation = config.profile.startup_reservation_mb();
+        let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(&config)
             .await
             .map_err(|e| WorkerError::SpawnFailed(format!("memory guard: {e}")))?;
 
@@ -467,6 +492,7 @@ impl WorkerHandle {
             test_echo = config.test_echo,
             force_cpu = config.runtime.force_cpu,
             python = %config.python_path,
+            startup_reservation_mb = startup_reservation.0,
             available_memory_mb = crate::worker::memory_guard::available_memory_mb(),
             "Spawning worker (memory guard passed)"
         );
@@ -1026,11 +1052,22 @@ impl Drop for WorkerHandle {
             #[cfg(unix)]
             {
                 if let Some(pid) = self.child.id() {
-                    // Kill the entire process group (worker + children).
-                    // SAFETY: sending SIGTERM then SIGKILL to the worker's
-                    // process group (PGID == PID via setpgid in spawn).
+                    let pgid = pid as libc::pid_t;
+                    // SAFETY: sending SIGTERM to the worker's process group
+                    // (PGID == PID via setpgid(0,0) in spawn).
                     unsafe {
-                        libc::killpg(pid as libc::pid_t, libc::SIGTERM);
+                        libc::killpg(pgid, libc::SIGTERM);
+                    }
+                    // Brief pause to let Python handle SIGTERM. If the worker
+                    // is stuck in a C extension (PyTorch, NumPy), SIGTERM may
+                    // be ignored — follow up with SIGKILL to prevent zombies
+                    // that hold 2-15 GB of RAM.
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    // SAFETY: kill(pid, 0) checks if process still exists.
+                    if unsafe { libc::kill(pgid, 0) } == 0 {
+                        unsafe {
+                            libc::killpg(pgid, libc::SIGKILL);
+                        }
                     }
                 }
             }
@@ -1045,6 +1082,7 @@ mod tests {
 
     use super::{WorkerConfig, WorkerRuntimeConfig, build_worker_command};
     use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
+    use crate::host_memory::HostMemoryRuntimeConfig;
     use crate::worker::WorkerProfile;
     use crate::worker::provider_credentials::HkAsrCredentialSources;
 
@@ -1080,11 +1118,35 @@ mod tests {
             test_echo: false,
             ready_timeout_s: 300,
             verbose: 0,
-            runtime: WorkerRuntimeConfig::from_sources(true, None),
+            runtime: WorkerRuntimeConfig::from_sources(
+                true,
+                None,
+                4,
+                HostMemoryRuntimeConfig::default(),
+            ),
             ..Default::default()
         });
 
         assert!(args.iter().any(|arg| arg == "--force-cpu"));
+    }
+
+    #[test]
+    fn worker_command_forwards_gpu_thread_pool_size() {
+        let args = command_args(&WorkerConfig {
+            python_path: "python3".to_string(),
+            profile: WorkerProfile::Gpu,
+            runtime: WorkerRuntimeConfig::from_sources(
+                false,
+                None,
+                7,
+                HostMemoryRuntimeConfig::default(),
+            ),
+            ..Default::default()
+        });
+
+        assert!(args.windows(2).any(|window| {
+            window[0] == "--gpu-thread-pool-size" && window[1] == "7"
+        }));
     }
 
     #[test]
@@ -1098,7 +1160,12 @@ mod tests {
             test_echo: false,
             ready_timeout_s: 300,
             verbose: 0,
-            runtime: WorkerRuntimeConfig::from_sources(false, Some("  injected-key  ".to_string())),
+            runtime: WorkerRuntimeConfig::from_sources(
+                false,
+                Some("  injected-key  ".to_string()),
+                4,
+                HostMemoryRuntimeConfig::default(),
+            ),
             ..Default::default()
         });
 
@@ -1120,7 +1187,12 @@ mod tests {
                 test_echo: false,
                 ready_timeout_s: 300,
                 verbose: 0,
-                runtime: WorkerRuntimeConfig::from_sources(false, None),
+                runtime: WorkerRuntimeConfig::from_sources(
+                    false,
+                    None,
+                    4,
+                    HostMemoryRuntimeConfig::default(),
+                ),
                 ..Default::default()
             },
             &HkAsrCredentialSources::from_sources(

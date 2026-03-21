@@ -175,8 +175,9 @@ pub struct ServerConfig {
     /// `--server` is configured. Default: `true`.
     #[serde(default = "default_true")]
     pub auto_daemon: bool,
-    /// Minimum available RAM (MB) to start a new job.  0 = disable memory gate.
-    /// Default: 2048.
+    /// Minimum host headroom (MB) the coordinator keeps free after worker-start
+    /// and job-execution reservations. 0 = disable host-memory headroom checks.
+    /// Default: 8192.
     #[serde(default = "default_memory_gate_mb")]
     pub memory_gate_mb: MemoryMb,
     /// Seconds of inactivity before a worker is shut down. 0 = use pool default (600).
@@ -185,6 +186,11 @@ pub struct ServerConfig {
     /// Seconds between worker health checks. 0 = use pool default (30).
     #[serde(default = "default_worker_health_interval_s")]
     pub worker_health_interval_s: u64,
+
+    /// Maximum number of local worker/model startups allowed at once across all
+    /// participating batchalign3 processes on the host. Default: 1.
+    #[serde(default = "default_max_concurrent_worker_startups")]
+    pub max_concurrent_worker_startups: u32,
 
     /// Maximum Python worker processes per (profile, lang, engine) key.
     /// 0 = use built-in default (8). Reduces GPU memory pressure on smaller machines.
@@ -206,12 +212,12 @@ pub struct ServerConfig {
     #[serde(default = "default_max_body_bytes_mb")]
     pub max_body_bytes_mb: MemoryMb,
 
-    /// Seconds to wait for memory to become available before rejecting a job.
-    /// Default: 120. 0 = reject immediately if below gate.
+    /// Seconds to wait for host-memory reservations to fit before rejecting or
+    /// deferring a job. Default: 120. 0 = reject immediately if no plan fits.
     #[serde(default = "default_memory_gate_timeout_s")]
     pub memory_gate_timeout_s: u64,
 
-    /// Seconds between memory gate polling checks. Default: 5.
+    /// Seconds between host-memory reservation polling checks. Default: 5.
     #[serde(default = "default_memory_gate_poll_s")]
     pub memory_gate_poll_s: u64,
 
@@ -273,7 +279,7 @@ fn default_job_ttl_days() -> i32 {
 }
 
 fn default_memory_gate_mb() -> MemoryMb {
-    MemoryMb(2048)
+    MemoryMb(8192)
 }
 
 fn default_worker_idle_timeout_s() -> u64 {
@@ -282,6 +288,10 @@ fn default_worker_idle_timeout_s() -> u64 {
 
 fn default_worker_health_interval_s() -> u64 {
     30
+}
+
+fn default_max_concurrent_worker_startups() -> u32 {
+    1
 }
 
 fn default_worker_ready_timeout_s() -> u64 {
@@ -326,9 +336,10 @@ impl Default for ServerConfig {
             redis_url: String::new(),
             warmup_commands: default_warmup_commands(),
             auto_daemon: true,
-            memory_gate_mb: MemoryMb(2048),
+            memory_gate_mb: default_memory_gate_mb(),
             worker_idle_timeout_s: default_worker_idle_timeout_s(),
             worker_health_interval_s: default_worker_health_interval_s(),
+            max_concurrent_worker_startups: default_max_concurrent_worker_startups(),
             max_workers_per_key: 0,
             max_total_workers: 0,
             worker_ready_timeout_s: default_worker_ready_timeout_s(),
@@ -389,6 +400,10 @@ impl ServerConfig {
         if self.memory_gate_poll_s == 0 {
             warnings.push("memory_gate_poll_s must be >= 1, defaulting to 1".into());
             self.memory_gate_poll_s = 1;
+        }
+        if self.max_concurrent_worker_startups == 0 {
+            warnings.push("max_concurrent_worker_startups must be >= 1, defaulting to 1".into());
+            self.max_concurrent_worker_startups = 1;
         }
         if self.gpu_thread_pool_size == 0 {
             warnings.push("gpu_thread_pool_size must be >= 1, defaulting to 1".into());
@@ -473,6 +488,8 @@ mod tests {
         assert!(cfg.auto_daemon);
         assert_eq!(cfg.worker_idle_timeout_s, 600);
         assert_eq!(cfg.worker_health_interval_s, 30);
+        assert_eq!(cfg.memory_gate_mb, MemoryMb(8192));
+        assert_eq!(cfg.max_concurrent_worker_startups, 1);
         assert_eq!(cfg.max_workers_per_key, 0);
         assert_eq!(cfg.worker_ready_timeout_s, 300);
         assert_eq!(cfg.max_body_bytes_mb, MemoryMb(100));
@@ -537,6 +554,7 @@ warmup: false
             max_concurrent_jobs: -1,
             job_ttl_days: 0,
             memory_gate_poll_s: 0,
+            max_concurrent_worker_startups: 0,
             gpu_thread_pool_size: 0,
             ..Default::default()
         };
@@ -544,8 +562,9 @@ warmup: false
         assert_eq!(cfg.max_concurrent_jobs, 0);
         assert_eq!(cfg.job_ttl_days, 1);
         assert_eq!(cfg.memory_gate_poll_s, 1);
+        assert_eq!(cfg.max_concurrent_worker_startups, 1);
         assert_eq!(cfg.gpu_thread_pool_size, 1);
-        assert_eq!(warnings.len(), 4);
+        assert_eq!(warnings.len(), 5);
     }
 
     #[test]
@@ -562,7 +581,7 @@ warmup: false
         let config_path = state_dir.join("server.yaml");
         std::fs::write(
             &config_path,
-            "port: 0\njob_ttl_days: 0\nmemory_gate_poll_s: 0\ngpu_thread_pool_size: 0\n",
+            "port: 0\njob_ttl_days: 0\nmemory_gate_poll_s: 0\nmax_concurrent_worker_startups: 0\ngpu_thread_pool_size: 0\n",
         )
         .unwrap();
 
@@ -571,8 +590,9 @@ warmup: false
         assert_eq!(cfg.port, 8000);
         assert_eq!(cfg.job_ttl_days, 1);
         assert_eq!(cfg.memory_gate_poll_s, 1);
+        assert_eq!(cfg.max_concurrent_worker_startups, 1);
         assert_eq!(cfg.gpu_thread_pool_size, 1);
-        assert_eq!(warnings.len(), 4);
+        assert_eq!(warnings.len(), 5);
     }
 
     #[test]

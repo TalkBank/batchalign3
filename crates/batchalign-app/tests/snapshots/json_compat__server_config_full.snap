@@ -26,6 +26,7 @@ expression: cfg
   "memory_gate_mb": 2048,
   "worker_idle_timeout_s": 300,
   "worker_health_interval_s": 15,
+  "max_concurrent_worker_startups": 1,
   "max_workers_per_key": 0,
   "max_total_workers": 0,
   "worker_ready_timeout_s": 300,

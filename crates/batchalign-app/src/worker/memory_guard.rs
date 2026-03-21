@@ -15,14 +15,18 @@
 //!
 //! # Solution
 //!
-//! A process-global semaphore serializes all worker spawns. Before each spawn,
-//! the guard checks available memory against a configurable threshold. If
+//! A process-global semaphore serializes worker spawns within one process, and
+//! a host-wide ledger coordinates heavy worker/model startups across local
+//! batchalign3 processes. Before each spawn, the guard checks local available
+//! memory and then reserves a host-wide startup slot plus startup headroom. If
 //! memory is insufficient, the spawn is rejected with a typed error — never
 //! silently retried or defaulted.
 //!
 //! This is defense-in-depth: even if a caller forgets to check memory, the
-//! spawn itself will refuse. The semaphore prevents the TOCTOU race where N
-//! concurrent checks all see "enough" before any model is loaded.
+//! spawn itself will refuse. The local semaphore prevents the in-process TOCTOU
+//! race where N concurrent checks all see "enough" before any model is loaded,
+//! and the host-wide ledger extends that protection across separate local
+//! servers, ports, and test binaries.
 //!
 //! # Usage in tests
 //!
@@ -37,9 +41,14 @@
 //! ```
 
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use tokio::sync::Semaphore;
 use tracing::warn;
+
+use crate::host_memory::{HostMemoryCoordinator, HostMemoryLease};
+
+use super::handle::WorkerConfig;
 
 /// Minimum available memory (MB) to allow a worker spawn.
 /// Default: 4 GB. Override via `BATCHALIGN_SPAWN_MIN_MEMORY_MB` env var.
@@ -87,6 +96,16 @@ pub enum MemoryGuardError {
     /// Spawn semaphore was closed (server shutting down).
     #[error("worker spawn semaphore closed (server shutting down)")]
     SemaphoreClosed,
+
+    /// Host-wide coordinator rejected or timed out the startup reservation.
+    #[error("host memory coordinator blocked worker spawn: {0}")]
+    HostReservation(String),
+}
+
+/// Combined local+host guard that protects one worker startup window.
+pub struct SpawnPermit {
+    _local_permit: tokio::sync::SemaphorePermit<'static>,
+    _host_lease: HostMemoryLease,
 }
 
 /// Query current available memory in MB.
@@ -116,20 +135,24 @@ pub fn total_memory_mb() -> u64 {
 /// It serializes spawns via a global semaphore and checks memory before
 /// each one, preventing the concurrent-check TOCTOU race.
 ///
-/// Returns a permit guard. The caller must hold the guard until the worker
-/// process has been created (not until the model is loaded — we can't hold
-/// a semaphore for 30+ seconds of model loading).
-pub async fn acquire_spawn_permit(
-    required_mb: u64,
-) -> Result<tokio::sync::SemaphorePermit<'static>, MemoryGuardError> {
+/// Returns a permit guard. The caller holds the guard through
+/// `WorkerHandle::spawn()`, which blocks until the worker sends its ready
+/// signal (i.e., models are loaded). This means the next spawn's memory
+/// check sees an accurate picture of available RAM.
+pub async fn acquire_spawn_permit(config: &WorkerConfig) -> Result<SpawnPermit, MemoryGuardError> {
     let permit = SPAWN_SEMAPHORE
         .acquire()
         .await
         .map_err(|_| MemoryGuardError::SemaphoreClosed)?;
 
+    let required_mb = config
+        .profile
+        .startup_reservation_mb()
+        .0
+        .max(min_spawn_memory_mb());
     let available = available_memory_mb();
     let total = total_memory_mb();
-    let threshold = required_mb.max(min_spawn_memory_mb());
+    let threshold = required_mb;
 
     if available < threshold {
         // Drop the permit before returning the error so other spawns can proceed.
@@ -147,7 +170,28 @@ pub async fn acquire_spawn_permit(
         });
     }
 
-    Ok(permit)
+    let coordinator = HostMemoryCoordinator::new(config.runtime.host_memory.clone());
+    let profile = config.profile;
+    let lang = config.lang.clone();
+    let engine_overrides = config.engine_overrides.clone();
+    let timeout = Duration::from_secs(config.ready_timeout_s.max(1));
+    let host_lease = tokio::task::spawn_blocking(move || {
+        coordinator.acquire_worker_startup_lease(
+            profile,
+            &lang,
+            &engine_overrides,
+            timeout,
+            Duration::from_secs(1),
+        )
+    })
+    .await
+    .map_err(|error| MemoryGuardError::HostReservation(error.to_string()))?
+    .map_err(|error| MemoryGuardError::HostReservation(error.to_string()))?;
+
+    Ok(SpawnPermit {
+        _local_permit: permit,
+        _host_lease: host_lease,
+    })
 }
 
 /// Check available memory and skip the current test if insufficient.
@@ -177,6 +221,56 @@ pub fn skip_if_insufficient_memory(required_mb: u64) {
         // Return from the test function. In Rust test harness, this counts as "pass".
         // The test body after this call won't execute.
         return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{LanguageCode3, MemoryMb, WorkerLanguage};
+    use crate::host_memory::HostMemoryRuntimeConfig;
+    use crate::worker::WorkerProfile;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn host_reservation_rejects_when_reserve_is_impossible() {
+        let temp = tempdir().expect("tempdir");
+        let config = WorkerConfig {
+            profile: WorkerProfile::Stanza,
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+            runtime: crate::worker::handle::WorkerRuntimeConfig::from_sources(
+                false,
+                None,
+                1,
+                HostMemoryRuntimeConfig::from_sources(
+                    temp.path().join("host-memory.json"),
+                    MemoryMb(1_000_000_000),
+                    1,
+                ),
+            ),
+            ..Default::default()
+        };
+        let result = acquire_spawn_permit(&config).await;
+        assert!(
+            matches!(result, Err(MemoryGuardError::HostReservation(_))),
+            "expected host reservation rejection"
+        );
+    }
+
+    #[test]
+    fn profile_startup_reservation_exceeds_old_flat_floor() {
+        let gpu_budget = WorkerProfile::Gpu.startup_reservation_mb();
+        assert!(
+            gpu_budget.0 > 4096,
+            "GPU startup reservation ({} MB) must exceed the old flat 4096 MB floor",
+            gpu_budget.0
+        );
+        let stanza_budget = WorkerProfile::Stanza.startup_reservation_mb();
+        assert!(
+            stanza_budget.0 > 4096,
+            "Stanza startup reservation ({} MB) must exceed the old flat 4096 MB floor",
+            stanza_budget.0
+        );
     }
 }
 

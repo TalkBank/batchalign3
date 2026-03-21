@@ -1,52 +1,66 @@
 # Worker Memory Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-21 13:17 EDT
 
-Developer reference for the auto-tuning, memory gate, worker pool, and warmup
+Developer reference for the host-memory coordinator, worker pool, and warmup
 internals. For user-facing configuration, see
 [Worker Tuning](../user-guide/worker-tuning.md).
 
-## Auto-tuning formula
+## Job worker planning
 
 `compute_job_workers()` in `runner/util/auto_tune.rs` decides per-job file
 parallelism:
 
 ```
-workers = min(num_files, by_cpu, by_memory)
-        clamped to [1, max_thread_workers]
+requested_workers = min(num_files, by_cpu)
+                  clamped to category cap
 ```
 
-Where:
-- `by_memory = available_mb / (command_base_mb * loading_overhead)`
-- `by_cpu = std::thread::available_parallelism()`
-- `command_base_mb` comes from `runtime_constants.toml` `[command_base_mb.threaded]`
-- `loading_overhead` is 1.5× (from `runtime_constants.toml` `[memory]`)
+This is now only a **requested** count. The actual granted worker count comes
+from `HostMemoryCoordinator::wait_for_job_execution_plan()`, which applies
+host-wide memory reservations and preserves `memory_gate_mb` as machine reserve.
 
 If `config.max_workers_per_job > 0`, it overrides auto-tuning (still capped).
 
 For single-file jobs, the function short-circuits to 1.
 
-## Memory gate
+## Host-memory coordinator
 
-`memory_gate()` in `store/mod.rs` blocks job dispatch until sufficient RAM is
-available. Flow:
+A machine-local JSON ledger under a locked file coordinates all participating
+local batchalign3 processes on the same host.
 
-1. **Disabled check:** if `critical_mb == 0`, skip entirely
-2. **Idle worker bypass:** if the pool has idle workers for `(command, lang)`,
-   skip the memory check — those workers are already loaded, no new allocation
-   needed. This prevents a deadlock where idle workers consume RAM yet are the
-   exact workers the new job needs.
-3. **Threshold check:** compare `sysinfo::available_memory()` against
-   `memory_gate_mb` (default 2048 MB)
-4. **Polling:** if below threshold, poll every 2 seconds with a 60-second
-   timeout
-5. **Timeout:** return `ServerError::MemoryPressure` with a hint listing
-   active workers
+### Lease types
 
-The idle worker bypass is critical: without it, a server with warm workers
-holding 200 GB of models would fail the 2 GB gate even though the next job
-needs no new memory.
+- `WorkerStartup` — held while a heavy worker/model load is in progress
+- `JobExecution` — held for the duration of one job's active execution window
+- `MlTestExclusive` — machine-wide lock for real-model test fixtures
+
+### Startup reservations
+
+Worker startup reservations are explicit profile-level constants from
+`runtime_constants.toml`:
+
+- GPU: 16000 MB
+- Stanza: 12000 MB
+- IO: 4000 MB
+
+These are intentionally larger than the steady-state per-command execution
+budgets because the model-loading spike is what repeatedly crashed shared
+machines.
+
+### Job execution planning
+
+For a requested worker count, the coordinator:
+
+1. samples current OS-visible available memory,
+2. subtracts active local reservations already recorded in the ledger,
+3. keeps `memory_gate_mb` as free headroom,
+4. grants the largest worker count that still fits,
+5. or returns a capacity error so the runner can re-queue the job.
+
+This replaced the old standalone `memory_gate()` plus the flat 12 GB/job slot
+heuristic.
 
 ## Worker pool
 
@@ -194,7 +208,9 @@ push/pop operations — never across `.await`.
 The `bootstrap` `AsyncMutex` on each `WorkerGroup` prevents a burst of
 concurrent requests from launching multiple heavy Python workers for the same
 key simultaneously. Only one spawn per key proceeds at a time, smoothing
-model-loading spikes without reducing steady-state concurrency.
+model-loading spikes without reducing steady-state concurrency. This is
+in-process protection; the host-memory coordinator extends the same idea across
+multiple local servers and tests.
 
 ## runtime_constants.toml
 
@@ -205,6 +221,7 @@ and Python (`read` at import time). Key sections:
 - `[worker_caps]` — hard maximums: `max_gpu_workers`, `max_process_workers`,
   `max_thread_workers` (all 8)
 - `[memory]` — `default_base_mb` (4000), `loading_overhead` (1.5)
+- `[worker_startup_mb]` — cross-process startup reservations for GPU/Stanza/IO
 - `[command_base_mb.process]` — per-command budgets for process workers (GIL)
 - `[command_base_mb.threaded]` — per-command budgets for thread workers
 
@@ -246,8 +263,8 @@ Two entry points in `server.rs`:
 ### Concurrent warmup
 
 Within `pool.warmup()`, each command spawns as a separate `JoinSet` task. This
-means `morphotag`, `align`, and `transcribe` warmup workers load their models
-in parallel rather than sequentially. Each task:
+means `morphotag`, `align`, and `transcribe` can still warm in parallel, but
+each heavy spawn must first acquire a host-wide startup lease. Each task:
 
 1. Resolves the `WorkerProfile` for the command via `WorkerProfile::for_command()`
 2. Gets or creates the `WorkerGroup` (Stanza/IO) or `SharedGpuWorker` (GPU)

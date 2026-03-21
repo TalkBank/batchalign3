@@ -19,6 +19,7 @@ struct RuntimeConstants {
     cmd2task: HashMap<String, String>,
     worker_caps: WorkerCaps,
     memory: MemoryConstants,
+    worker_startup_mb: WorkerStartupMb,
     gpu_heavy_commands: GpuHeavy,
     process_commands: ProcessCommands,
     command_base_mb: CommandBaseMb,
@@ -37,6 +38,13 @@ struct MemoryConstants {
     default_base_mb: u64,
     mb_per_file_mb: u64,
     loading_overhead: f64,
+}
+
+#[derive(Deserialize)]
+struct WorkerStartupMb {
+    gpu: u64,
+    stanza: u64,
+    io: u64,
 }
 
 #[derive(Deserialize)]
@@ -123,6 +131,23 @@ pub fn default_base_mb() -> MemoryMb {
     MemoryMb(CONSTANTS.memory.default_base_mb)
 }
 
+/// Conservative per-command execution reservation (MB) used for job-level host
+/// memory planning.
+///
+/// Uses the thread-worker budgets because file-level concurrency inside one job
+/// reflects in-flight request working set rather than one fresh model load per
+/// file. The loading-overhead factor still applies because requests carry
+/// transient buffers and tensor allocations.
+pub fn command_execution_budget_mb(command: &str) -> MemoryMb {
+    let base = CONSTANTS
+        .command_base_mb
+        .threaded
+        .get(command)
+        .copied()
+        .unwrap_or(CONSTANTS.memory.default_base_mb);
+    MemoryMb((base as f64 * CONSTANTS.memory.loading_overhead) as u64)
+}
+
 /// Additional memory budget (MB) allocated per file queued to a worker.
 pub fn mb_per_file_mb() -> MemoryMb {
     MemoryMb(CONSTANTS.memory.mb_per_file_mb)
@@ -132,6 +157,21 @@ pub fn mb_per_file_mb() -> MemoryMb {
 /// allocation spikes during model loading.
 pub fn loading_overhead() -> f64 {
     CONSTANTS.memory.loading_overhead
+}
+
+/// Conservative cross-process startup reservation (MB) for one GPU worker.
+pub fn gpu_worker_startup_mb() -> MemoryMb {
+    MemoryMb(CONSTANTS.worker_startup_mb.gpu)
+}
+
+/// Conservative cross-process startup reservation (MB) for one Stanza worker.
+pub fn stanza_worker_startup_mb() -> MemoryMb {
+    MemoryMb(CONSTANTS.worker_startup_mb.stanza)
+}
+
+/// Conservative cross-process startup reservation (MB) for one IO worker.
+pub fn io_worker_startup_mb() -> MemoryMb {
+    MemoryMb(CONSTANTS.worker_startup_mb.io)
 }
 
 /// CPU-bound commands that need process isolation (non-free-threaded).
@@ -174,6 +214,9 @@ mod tests {
         assert!(default_base_mb().0 > 0);
         assert!(mb_per_file_mb().0 > 0);
         assert!(loading_overhead() > 1.0);
+        assert!(gpu_worker_startup_mb().0 > stanza_worker_startup_mb().0);
+        assert!(stanza_worker_startup_mb().0 > io_worker_startup_mb().0);
+        assert!(command_execution_budget_mb("align").0 >= command_base_mb_threaded()["align"].0);
     }
 
     #[test]

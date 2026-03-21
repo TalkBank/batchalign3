@@ -144,6 +144,7 @@ pub mod ensure_wav;
 pub mod error;
 pub mod fa;
 pub mod hostname;
+pub mod host_memory;
 mod infer_retry;
 pub mod media;
 pub mod morphosyntax;

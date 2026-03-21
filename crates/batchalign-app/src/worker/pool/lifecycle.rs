@@ -38,6 +38,14 @@ impl WorkerPool {
                         run_health_check(
                             &groups, idle_timeout, &pool_config,
                         ).await;
+                        // Reap orphaned workers left behind by previous server
+                        // crashes (SIGKILL, OOM). This is cheap (reads a small
+                        // directory) and catches orphans that would otherwise
+                        // hold 2-15 GB each until the next server restart.
+                        let reaped = super::reaper::reap_orphaned_workers();
+                        if reaped > 0 {
+                            info!(reaped, "Periodic orphan reaper cleaned up workers");
+                        }
                     }
                 }
             }

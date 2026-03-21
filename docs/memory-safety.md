@@ -1,7 +1,7 @@
 # Memory Safety: Preventing Kernel OOM Crashes
 
 **Status:** Current
-**Last updated:** 2026-03-21 12:30
+**Last updated:** 2026-03-21 13:17 EDT
 
 ## The Problem
 
@@ -20,25 +20,47 @@ kill; it is a Jetsam-triggered kernel panic that requires a hard reboot.
 
 ```mermaid
 flowchart TD
-    A[Test / Job / Warmup<br>wants to spawn a worker] --> B{Memory Guard:<br>acquire_spawn_permit}
-    B -->|Semaphore full| C[Wait for permit<br>serializes spawns]
-    B -->|Permit acquired| D{Check available RAM}
-    D -->|Below threshold| E[Return MemoryGuardError<br>worker NOT spawned]
-    D -->|Sufficient RAM| F[Spawn Python worker]
-    F --> G[Worker loads ML models<br>2-15 GB]
-    G --> H[Drop spawn permit<br>next spawn can proceed]
+    A[Test / Job / Warmup<br>wants capacity] --> B{Host memory coordinator}
+    B -->|startup lease| C[One worker/model startup window]
+    B -->|job execution lease| D[Clamp per-job file parallelism]
+    B -->|ML test lock| E[Allow one real-model test owner]
+    C --> F{Local spawn guard}
+    F -->|permit + local RAM check| G[Spawn Python worker]
+    G --> H[Worker loads ML models<br>2-15 GB]
+    H --> I[Drop startup lease<br>keep only job/runtime leases]
 
-    style E fill:#f99,stroke:#c00,color:#000
-    style F fill:#9f9,stroke:#0c0,color:#000
     style B fill:#ff9,stroke:#cc0,color:#000
+    style G fill:#9f9,stroke:#0c0,color:#000
+    style E fill:#f99,stroke:#c00,color:#000
 ```
 
 ## Defense Layers
 
-### Layer 1: Spawn Semaphore (prevents TOCTOU race)
+### Layer 1: Host-wide coordinator (prevents cross-process overcommit)
+
+A machine-local JSON ledger guarded by an exclusive file lock coordinates memory
+across local `batchalign3` processes on the same host. This covers:
+
+- multiple server ports,
+- CLI auto-daemons,
+- warmup vs foreground jobs,
+- independent Rust test binaries.
+
+The coordinator tracks three lease types:
+
+- **worker startup leases** for the model-loading spike,
+- **job execution leases** for in-flight file parallelism,
+- **machine-wide ML test locks** so real-model test runs do not stampede the host.
+
+The reserve/headroom policy comes from `ServerConfig.memory_gate_mb`, which now
+means "keep at least this much RAM free after reservations" rather than a
+standalone job gate. The default is now **8192 MB**, not 2048.
+
+### Layer 2: Spawn semaphore (prevents in-process TOCTOU race)
 
 A process-global `tokio::sync::Semaphore` serializes all worker spawns. This
-prevents the critical race condition:
+still matters even with the host-wide coordinator because one server process can
+otherwise race with itself:
 
 ```mermaid
 sequenceDiagram
@@ -70,22 +92,63 @@ sequenceDiagram
 
 **Location:** `crates/batchalign-app/src/worker/memory_guard.rs`
 
-Default: `max_concurrent_spawns = 1` (fully serialized).
-Override: `BATCHALIGN_MAX_CONCURRENT_SPAWNS=N`
+### Layer 3: Explicit startup reservations (before every worker spawn)
 
-### Layer 2: Memory Check (before every spawn)
+Worker startup budgets are now explicit profile-shaped constants from
+`runtime_constants.toml`:
 
-After acquiring the semaphore permit, the guard queries `sysinfo::available_memory()`
-and refuses the spawn if below the threshold.
+- GPU worker startup: **16000 MB**
+- Stanza worker startup: **12000 MB**
+- IO worker startup: **4000 MB**
 
-**Default threshold:** 4096 MB (4 GB)
-**Override:** `BATCHALIGN_SPAWN_MIN_MEMORY_MB=8192`
+These are intentionally more conservative than the per-command execution budgets.
+They protect the model-loading spike where Whisper, Stanza, or related engines
+can temporarily consume far more memory than steady-state request handling.
 
 **Note:** On macOS, `sysinfo::available_memory()` undercounts because it only
 reports free + purgeable pages, not inactive pages. The kernel can reclaim
 inactive pages, so the real headroom is larger. We use the conservative number.
 
-### Layer 3: Test-Level Skip (bail out before any setup)
+### Layer 4: Job execution reservations (before a job starts running)
+
+The runner no longer uses a separate `memory_gate()` plus independent
+memory-based auto-tune formula. Instead it:
+
+1. computes a **requested** worker count from file count, CPU, and category caps,
+2. asks the host coordinator for a **job execution plan**,
+3. receives a granted worker count plus a lease held for the job lifetime,
+4. re-queues the job if the host cannot safely fit that plan.
+
+This makes worker startup and job execution share one memory story instead of
+two unrelated heuristics.
+
+### Layer 5: Machine-wide ML test lock
+
+The live ML fixture now acquires a machine-wide test lock before preparing warm
+workers. This prevents concurrent `cargo test`, IDE, or nextest runs from each
+building their own model pool on the same machine.
+
+This lock complements, rather than replaces:
+
+- `RUST_TEST_THREADS=1`,
+- the nextest ML test group,
+- the single-binary `ml_golden` layout.
+
+### Layer 6: SIGKILL Follow-Through in Drop
+
+Both `WorkerHandle::Drop` and `SharedGpuWorker::Drop` now send SIGTERM, wait
+200ms, then send SIGKILL if the worker is still alive. This prevents zombie
+Python processes when the worker is stuck in a C extension (PyTorch, NumPy)
+that ignores SIGTERM.
+
+### Layer 7: Periodic Orphan Reaping
+
+The health check background task now calls `reap_orphaned_workers()` on every
+tick (default: 30s). This catches orphaned workers from server crashes without
+waiting for the next server restart. Previously, orphans only got cleaned up
+when a new server instance started.
+
+### Layer 8: Test-level skip (bail out before any setup)
 
 Every test file that spawns workers has a `require_python!()` macro that checks
 available memory BEFORE attempting to spawn:
@@ -103,7 +166,7 @@ macro_rules! require_python {
 }
 ```
 
-### Layer 4: Test Isolation (default `make test-rust` skips integration tests)
+### Layer 9: Test isolation (default `make test-rust` skips integration tests)
 
 The Makefile `test-rust` target only runs `--lib` tests (pure Rust, no Python).
 Integration tests that spawn workers are opt-in:
@@ -120,7 +183,16 @@ make test-ml         # ML model tests — net only (256 GB)
 |----------|---------|--------------|
 | `BATCHALIGN_SPAWN_MIN_MEMORY_MB` | `4096` | Minimum free RAM (MB) to allow a worker spawn |
 | `BATCHALIGN_MAX_CONCURRENT_SPAWNS` | `1` | Max concurrent worker spawns (semaphore size) |
+| `BATCHALIGN_HOST_MEMORY_LEDGER` | temp-dir path | Override the shared host-memory ledger path |
 | `RUST_TEST_THREADS` | `1` | Max parallel test threads (set in `.cargo/config.toml`) |
+
+## Key config knobs
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `memory_gate_mb` | `8192` | Host reserve/headroom preserved after reservations |
+| `max_concurrent_worker_startups` | `1` | Host-wide limit for simultaneous worker/model startups |
+| `gpu_thread_pool_size` | `4` | In-process GPU request concurrency, now forwarded into Python |
 
 ## How to Run Tests Safely
 
@@ -172,8 +244,11 @@ cargo nextest run -p batchalign-app
 
 | File | What |
 |------|------|
-| `crates/batchalign-app/src/worker/memory_guard.rs` | Spawn semaphore, memory check, `bail_if_low_memory!` macro |
+| `crates/batchalign-app/src/host_memory.rs` | Host-wide ledger, startup leases, job execution leases, ML test lock |
+| `crates/batchalign-app/src/worker/memory_guard.rs` | Local spawn semaphore plus host-memory startup reservation |
 | `crates/batchalign-app/src/worker/handle.rs` | `WorkerHandle::spawn()` and `spawn_tcp_daemon()` call `acquire_spawn_permit()` |
+| `crates/batchalign-app/src/runner/mod.rs` | Coordinator-backed job execution planning and requeue |
+| `crates/batchalign-app/tests/common/mod.rs` | Machine-wide ML fixture lock |
 | `crates/batchalign-app/tests/worker_integration.rs` | `require_python!` macro with memory check |
 | `crates/batchalign-app/tests/gpu_concurrent_dispatch.rs` | Same |
 | `crates/batchalign-app/tests/worker_protocol_matrix.rs` | Same |

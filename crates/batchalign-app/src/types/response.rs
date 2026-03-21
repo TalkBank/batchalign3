@@ -327,8 +327,8 @@ pub struct HealthResponse {
     /// workers, stuck processes) since server start.
     #[serde(default)]
     pub forced_terminal_errors: i64,
-    /// Cumulative count of job submissions rejected because the memory gate
-    /// timed out (system RAM below `memory_gate_mb` for >120 s).
+    /// Backward-compat counter for job deferrals caused by host-memory
+    /// admission pressure.
     #[serde(default)]
     pub memory_gate_aborts: i64,
     /// Build fingerprint — changes on every rebuild.  Used for stale-binary
@@ -352,11 +352,32 @@ pub struct HealthResponse {
     /// Used memory in MB (`total - available`).
     #[serde(default)]
     pub system_memory_used_mb: MemoryMb,
-    /// Memory gate threshold in MB from server config.  0 means the gate
-    /// is disabled.  The dashboard uses this to show how close available
-    /// memory is to the blocking threshold.
+    /// Host-memory reserve threshold in MB from server config.  0 means the
+    /// coordinator will not keep explicit free-memory headroom.
     #[serde(default)]
     pub memory_gate_threshold_mb: MemoryMb,
+    /// Host-memory pressure classification derived from current OS memory plus
+    /// active cross-process reservations.
+    #[serde(default)]
+    pub host_memory_pressure: crate::host_memory::HostMemoryPressureLevel,
+    /// Total memory currently reserved by the host-memory coordinator.
+    #[serde(default)]
+    pub host_memory_reserved_mb: MemoryMb,
+    /// Number of active worker/model startup leases in the host coordinator.
+    #[serde(default)]
+    pub host_memory_startup_leases: i64,
+    /// Number of active job-execution leases in the host coordinator.
+    #[serde(default)]
+    pub host_memory_job_leases: i64,
+    /// Number of active machine-wide ML test locks in the host coordinator.
+    #[serde(default)]
+    pub host_memory_ml_test_locks: i64,
+    /// Human-readable labels for active coordinator leases.
+    #[serde(default)]
+    pub host_memory_active_leases: Vec<String>,
+    /// Snapshot error surfaced when the host-memory ledger cannot be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_memory_error: Option<String>,
 }
 
 pub(crate) fn default_cache_backend() -> String {

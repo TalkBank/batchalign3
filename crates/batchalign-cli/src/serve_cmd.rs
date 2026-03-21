@@ -18,6 +18,7 @@
 //!   the configured local server URL.
 
 use batchalign_app::config::{self, RuntimeLayout, WARMUP_PRESET_FULL, WARMUP_PRESET_MINIMAL};
+use batchalign_app::host_memory::HostMemoryRuntimeConfig;
 use batchalign_app::worker::handle::WorkerRuntimeConfig;
 use batchalign_app::worker::pool::PoolConfig;
 
@@ -87,6 +88,8 @@ pub async fn start(
         });
         let worker_runtime = WorkerRuntimeConfig {
             force_cpu,
+            gpu_thread_pool_size: cfg.gpu_thread_pool_size,
+            host_memory: HostMemoryRuntimeConfig::from_server_config(&cfg),
             ..WorkerRuntimeConfig::default()
         };
         let pool_config = PoolConfig {

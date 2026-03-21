@@ -77,6 +77,12 @@ def build_arg_parser():
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--gpu-thread-pool-size",
+        type=int,
+        default=4,
+        help="Maximum concurrent requests served inside one GPU worker process.",
+    )
 
     parser.add_argument(
         "--transport",
@@ -184,13 +190,13 @@ def main() -> None:
     if args.transport == "tcp":
         port = args.port if args.port != 0 else _auto_assign_port(args.host)
         if bootstrap.profile == WorkerProfile.GPU:
-            _serve_tcp_concurrent(args.host, port)
+            _serve_tcp_concurrent(args.host, port, max_threads=max(1, args.gpu_thread_pool_size))
         else:
             _serve_tcp(args.host, port)
     else:
         _print_ready()
         if bootstrap.profile == WorkerProfile.GPU:
-            _serve_stdio_concurrent()
+            _serve_stdio_concurrent(max_threads=max(1, args.gpu_thread_pool_size))
         else:
             _serve_stdio()
 

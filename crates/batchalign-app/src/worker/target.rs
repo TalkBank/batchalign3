@@ -4,7 +4,8 @@
 //! of top-level commands for warmup, memory checks, and scheduling, but Python
 //! workers are always bootstrapped around one inference task.
 
-use crate::api::CommandName;
+use crate::api::{CommandName, MemoryMb};
+use crate::runtime;
 use crate::workflow::command_workflow_descriptor;
 
 use super::InferTask;
@@ -67,6 +68,22 @@ impl WorkerProfile {
     /// Whether this profile uses concurrent request handling inside one process.
     pub fn is_concurrent(&self) -> bool {
         matches!(self, Self::Gpu)
+    }
+
+    /// Conservative host-wide startup reservation (MB) for spawning one worker
+    /// of this profile.
+    ///
+    /// This is intentionally explicit and profile-shaped rather than derived
+    /// from the smaller per-command execution budgets. The startup reservation
+    /// protects the model-loading window where multiple local batchalign3
+    /// processes could otherwise overcommit host RAM before the OS snapshot
+    /// catches up.
+    pub fn startup_reservation_mb(&self) -> MemoryMb {
+        match self {
+            Self::Gpu => runtime::gpu_worker_startup_mb(),
+            Self::Stanza => runtime::stanza_worker_startup_mb(),
+            Self::Io => runtime::io_worker_startup_mb(),
+        }
     }
 
     /// Default maximum worker processes per ``(profile, lang, engine_overrides)`` key.
@@ -235,5 +252,19 @@ mod tests {
         assert_eq!(WorkerProfile::Gpu.default_max_workers(4), 1);
         assert_eq!(WorkerProfile::Stanza.default_max_workers(4), 4);
         assert_eq!(WorkerProfile::Io.default_max_workers(4), 1);
+    }
+
+    #[test]
+    fn startup_reservations_match_runtime_constants() {
+        let gpu = WorkerProfile::Gpu.startup_reservation_mb();
+        let stanza = WorkerProfile::Stanza.startup_reservation_mb();
+        let io = WorkerProfile::Io.startup_reservation_mb();
+
+        assert_eq!(gpu.0, 16_000, "GPU startup reservation should match runtime constants");
+        assert_eq!(
+            stanza.0, 12_000,
+            "Stanza startup reservation should match runtime constants"
+        );
+        assert_eq!(io.0, 4_000, "IO startup reservation should match runtime constants");
     }
 }

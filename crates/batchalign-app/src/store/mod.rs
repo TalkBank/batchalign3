@@ -28,50 +28,27 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::{
-    CommandName, ContentType, FileName, FileProgressStage, FileStatusEntry, FileStatusKind,
-    JobStatus, NodeId, UnixTimestamp, WorkerLanguage,
+    ContentType, FileName, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus, NodeId,
+    UnixTimestamp,
 };
 use crate::config::ServerConfig;
 use crate::scheduling::FailureCategory;
 use tokio::sync::{AcquireError, Semaphore, SemaphorePermit, broadcast};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::db::JobDB;
-use crate::error::ServerError;
 use crate::ws::WsEvent;
 use counters::OperationalCounterStore;
 use registry::JobRegistry;
 
-// ---------------------------------------------------------------------------
-// Memory pressure thresholds
-// ---------------------------------------------------------------------------
-
-/// Default warning threshold when no config is provided (in MB).
-const DEFAULT_MEMORY_WARNING_MB: u64 = 4096;
-
-/// Default timeout when no config is provided (in seconds).
-const DEFAULT_MEMORY_GATE_TIMEOUT_S: u64 = 120;
-
-/// Default polling interval when no config is provided (in seconds).
-const DEFAULT_MEMORY_GATE_POLL_S: u64 = 5;
-
-/// Assumed memory budget per concurrent job slot (in MB) for auto-tuning.
-///
-/// Each Python worker loads ~4 GB of ML models, but actual peak usage including
-/// intermediate tensors and audio buffers reaches ~10-12 GB.  12 GB per slot is
-/// the same conservative budget the Python server uses.
-const AUTO_CONCURRENT_BUDGET_MB: u64 = 12_000;
-
 /// Hard upper bound on auto-tuned concurrent slots, regardless of available RAM.
 ///
-/// Even on a 256 GB host, running more than 8 simultaneous model-loading workers
-/// saturates CPU, memory bandwidth, and SSD I/O (thundering-herd effect).
+/// Even on large hosts, too many simultaneously active jobs amplify queue churn
+/// and worker contention. Host-memory coordination handles the actual capacity
+/// decision; this is only a CPU-side runner ceiling.
 const AUTO_CONCURRENT_MAX_SLOTS: usize = 8;
 
-/// Fallback slot count when `sysinfo` reports 0 available memory.
-///
-/// On some platforms (containers, early boot) the memory query may return 0.
-/// Four slots is a safe middle ground that avoids both under-utilization and OOM.
+/// Fallback slot count when the CPU count cannot be detected.
 const AUTO_CONCURRENT_FALLBACK_SLOTS: usize = 4;
 
 // ---------------------------------------------------------------------------
@@ -329,158 +306,15 @@ impl JobStore {
 // ---------------------------------------------------------------------------
 
 fn auto_max_concurrent() -> usize {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let available_mb = sys.available_memory() / (1024 * 1024);
-
     let by_cpu = std::thread::available_parallelism()
         .map(|p| p.get())
-        .unwrap_or(4);
+        .unwrap_or(AUTO_CONCURRENT_FALLBACK_SLOTS);
 
-    auto_max_concurrent_from(available_mb, by_cpu)
+    auto_max_concurrent_from(by_cpu)
 }
 
-fn auto_max_concurrent_from(available_mb: u64, by_cpu: usize) -> usize {
-    // In Rust server mode, workers are separate Python processes.
-    // Use the same conservative 12 GB/slot budget as Python server mode,
-    // and hard-cap to 8 slots to avoid large-host overcommit.
-    let by_mem = if available_mb > 0 {
-        (available_mb / AUTO_CONCURRENT_BUDGET_MB) as usize
-    } else {
-        AUTO_CONCURRENT_FALLBACK_SLOTS
-    };
-
-    by_cpu.min(by_mem).clamp(2, AUTO_CONCURRENT_MAX_SLOTS)
-}
-
-// ---------------------------------------------------------------------------
-// Memory gate
-// ---------------------------------------------------------------------------
-
-/// Block until available memory is above critical threshold.
-///
-/// When a `pool` is provided along with the job's `command` and `lang`, the
-/// gate checks whether idle workers already exist for that key. If so, the
-/// memory check is skipped entirely — those workers are already loaded and no
-/// new memory allocation is needed. This prevents the deadlock where idle
-/// workers consume all RAM yet are the exact workers the new job needs.
-///
-/// The `config` parameter supplies tunable timeout/poll/warning thresholds
-/// from `ServerConfig`. When `None`, built-in defaults are used.
-///
-/// Returns available memory in MB, or `Err(ServerError::MemoryPressure)` if
-/// memory stays critically low past the timeout.
-pub(crate) async fn memory_gate(
-    context: &str,
-    pool: Option<&crate::worker::pool::WorkerPool>,
-    command: Option<&CommandName>,
-    lang: Option<WorkerLanguage>,
-    critical_mb: u64,
-    config: Option<&ServerConfig>,
-) -> Result<Option<u64>, ServerError> {
-    let timeout_s = config
-        .map(|c| c.memory_gate_timeout_s)
-        .unwrap_or(DEFAULT_MEMORY_GATE_TIMEOUT_S);
-    let poll_s = config
-        .map(|c| c.memory_gate_poll_s)
-        .unwrap_or(DEFAULT_MEMORY_GATE_POLL_S);
-    let warning_mb = config
-        .map(|c| c.memory_warning_mb.0)
-        .unwrap_or(DEFAULT_MEMORY_WARNING_MB);
-
-    // Gate disabled when threshold is 0.
-    if critical_mb == 0 {
-        return Ok(available_memory_mb());
-    }
-
-    // If the pool already has idle workers for this (command, lang), skip the
-    // memory check — those workers are already loaded and will be reused.
-    if let (Some(pool), Some(cmd), Some(lang)) = (pool, command, lang)
-        && pool.has_idle_workers(cmd, &lang)
-    {
-        info!(
-            command = %cmd,
-            lang = %lang,
-            context = context,
-            "Skipping memory gate — reusable idle workers exist"
-        );
-        return Ok(available_memory_mb());
-    }
-
-    let avail = available_memory_mb();
-    let Some(avail) = avail else {
-        return Ok(None);
-    };
-
-    if avail >= critical_mb {
-        if avail < warning_mb {
-            warn!(available_mb = avail, context = context, "Memory pressure");
-        }
-        return Ok(Some(avail));
-    }
-
-    // If timeout_s is 0, reject immediately without polling.
-    if timeout_s == 0 {
-        return Err(ServerError::MemoryPressure(format!(
-            "Insufficient memory ({avail} MB available, need {critical_mb} MB). {context}"
-        )));
-    }
-
-    warn!(
-        available_mb = avail,
-        context = context,
-        timeout_s = timeout_s,
-        "Memory critically low, waiting for recovery"
-    );
-
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_s);
-
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(poll_s)).await;
-        let current = available_memory_mb();
-        match current {
-            Some(a) if a >= critical_mb => {
-                info!(available_mb = a, context = context, "Memory recovered");
-                return Ok(Some(a));
-            }
-            None => return Ok(None),
-            Some(a) => {
-                warn!(
-                    available_mb = a,
-                    context = context,
-                    "Still waiting for memory"
-                );
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let current_mb = current.unwrap_or(0);
-            let worker_hint = pool
-                .map(|p| {
-                    let keys = p.worker_keys();
-                    if keys.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            "\nHint: {} idle workers holding memory: {}.",
-                            p.worker_count(),
-                            keys.join(", ")
-                        )
-                    }
-                })
-                .unwrap_or_default();
-            return Err(ServerError::MemoryPressure(format!(
-                "Insufficient memory ({current_mb} MB available, need {critical_mb} MB). \
-                 {context}{worker_hint}"
-            )));
-        }
-    }
-}
-
-fn available_memory_mb() -> Option<u64> {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let avail = sys.available_memory() / (1024 * 1024);
-    if avail > 0 { Some(avail) } else { None }
+fn auto_max_concurrent_from(by_cpu: usize) -> usize {
+    by_cpu.clamp(2, AUTO_CONCURRENT_MAX_SLOTS)
 }
 
 // ---------------------------------------------------------------------------

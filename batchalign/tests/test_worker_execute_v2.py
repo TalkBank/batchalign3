@@ -14,6 +14,7 @@ from batchalign.worker._fa_v2 import ForcedAlignmentExecutionHostV2
 from batchalign.worker._opensmile_v2 import OpenSmileExecutionHostV2
 from batchalign.worker._speaker_v2 import SpeakerExecutionHostV2
 from batchalign.worker._text_v2 import TextExecutionHostV2
+from batchalign.worker._types import _state
 from batchalign.inference.asr import AsrElement, AsrMonologue, MonologueAsrResponse
 from batchalign.inference.avqi import AvqiResponse
 from batchalign.inference.opensmile import OpenSmileResponse
@@ -94,6 +95,39 @@ def _assert_runtime_failure_response(response, message_fragment: str) -> None:
     assert isinstance(response.outcome, ExecuteErrorV2)
     assert response.outcome.code is ProtocolErrorCodeV2.RUNTIME_FAILURE
     assert message_fragment in response.outcome.message
+    assert response.result is None
+
+
+def test_test_echo_rejects_mismatched_task_payload_boundary() -> None:
+    """Test-echo mode must still reject malformed top-level V2 task/payload pairs."""
+
+    previous_test_echo = _state.test_echo
+    previous_test_delay_ms = _state.test_delay_ms
+    _state.test_echo = True
+    _state.test_delay_ms = 0
+    try:
+        response = execute_request_v2(
+            request=ExecuteRequestV2(
+                request_id="req-execute-v2-mismatch-1",
+                task=InferenceTaskV2.MORPHOSYNTAX,
+                payload=AsrRequestV2(
+                    lang="eng",
+                    backend=AsrBackendV2.HK_TENCENT,
+                    input=ProviderMediaInputV2(
+                        media_path="/tmp/provider.wav",
+                        num_speakers=2,
+                    ),
+                ),
+                attachments=[],
+            )
+        )
+    finally:
+        _state.test_echo = previous_test_echo
+        _state.test_delay_ms = previous_test_delay_ms
+
+    assert isinstance(response.outcome, ExecuteErrorV2)
+    assert response.outcome.code is ProtocolErrorCodeV2.INVALID_PAYLOAD
+    assert "does not match task morphosyntax" in response.outcome.message
     assert response.result is None
 
 

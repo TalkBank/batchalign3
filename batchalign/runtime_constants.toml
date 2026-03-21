@@ -30,6 +30,11 @@ default_base_mb = 4000
 mb_per_file_mb = 25
 loading_overhead = 1.5
 
+[worker_startup_mb]
+gpu = 16000
+stanza = 12000
+io = 4000
+
 [gpu_heavy_commands]
 commands = ["align", "transcribe", "transcribe_s", "benchmark"]
 

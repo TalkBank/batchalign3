@@ -1,7 +1,7 @@
 # Worker Tuning
 
 **Status:** Current
-**Last modified:** 2026-03-21 08:20 EDT
+**Last modified:** 2026-03-21 13:17 EDT
 
 This page explains how the server decides how many workers to run, how memory
 budgets work, and how to configure warmup and tuning for your hardware.
@@ -16,27 +16,27 @@ batchalign3 --workers 4 morphotag corpus/ -o output/     # Four files in paralle
 batchalign3 transcribe corpus/ -o output/                 # Auto-tune (default)
 ```
 
-All commands use the same memory-based auto-tuner to determine parallelism.
-GPU-heavy commands (`transcribe`, `align`, `benchmark`) are capped at
-`max_gpu_workers` (default 8) because they share a single GPU worker process.
-CPU-only commands (`morphotag`, `utseg`, `translate`) are capped at
-`max_thread_workers` (default 8).
+All commands now use a two-stage policy: the runner computes a **requested**
+worker count from file count, CPU, and category caps, then the host-memory
+coordinator clamps that request to what the machine can safely fit right now.
+GPU-heavy commands (`transcribe`, `align`, `benchmark`) are capped by both
+`max_gpu_workers` and `gpu_thread_pool_size`.
 
 Override with `--workers N` when you want explicit control, or set
 `max_workers_per_job` in `server.yaml` for a persistent override.
 
-## How auto-tuning works
+## How worker planning works
 
 When you submit a job, the server decides how many parallel file workers to
-assign. The formula (matching batchalign-next's `_server_auto_tune_workers()`):
+assign.
 
-1. Look up the command's per-worker memory budget (from `runtime_constants.toml`)
-2. Multiply by the loading overhead factor (1.5×) to account for GC and buffers
-3. Check available system RAM and CPU core count
-4. Pick the minimum of: file count, cores, and `available_ram / budget`
-5. Apply per-category cap:
-   - GPU commands: `max_gpu_workers` (default 8)
-   - CPU commands: `max_thread_workers` (default 8)
+1. Compute a requested worker count from file count, CPU, and category caps:
+   - GPU commands: `min(max_gpu_workers, gpu_thread_pool_size)`
+   - CPU/IO commands: `max_thread_workers`
+2. Ask the host-memory coordinator for a job execution plan.
+3. The coordinator subtracts active local reservations, preserves
+   `memory_gate_mb` as host headroom, and grants the largest safe worker count.
+4. If nothing safe fits, the job is re-queued instead of speculatively running.
 
 For a single file, the server always uses 1 worker — no parallelism needed.
 
@@ -47,7 +47,7 @@ If `max_workers_per_job` is set in `server.yaml`, it overrides auto-tuning
 `SharedGpuWorker` process with a thread pool. While file N's ASR runs on the
 GPU, file N+1 can do post-processing, utseg, or morphosyntax on CPU. The GPU
 itself serializes inference, but pipeline stages overlap. On a machine with
-256 GB RAM, the auto-tuner may assign 4–8 parallel files for transcribe.
+256 GB RAM, the coordinator may grant 4–8 parallel files for transcribe.
 
 ## Worker profiles
 
@@ -140,8 +140,9 @@ are loading:
   (no duplicate worker spawns — the job reuses the in-progress warmup)
 - Once complete, `/health` reports `"warmup_status": "complete"`
 
-All warmup commands load concurrently (not sequentially), so total warmup time
-is roughly the time for the slowest model, not the sum of all models.
+Warmup still fans out across commands, but each heavy worker startup must now
+acquire a host-wide startup lease. On shared machines this intentionally
+reduces warmup aggression so background warmup cannot stampede the host.
 
 ### On-demand loading
 
@@ -158,12 +159,14 @@ Key tuning parameters:
 
 ```yaml
 # Worker parallelism
-max_workers_per_job: 0          # 0 = auto-tune based on RAM and CPU
-max_concurrent_jobs: 0          # 0 = auto-tune (roughly 1 slot per 25 GB)
+max_workers_per_job: 0          # 0 = auto-plan from files, CPU, and category caps
+max_concurrent_jobs: 0          # 0 = CPU-based runner slot cap
+gpu_thread_pool_size: 4         # In-process GPU request concurrency
+max_concurrent_worker_startups: 1
 
-# Memory gate — minimum available RAM (MB) to start a new job
-# 0 = disable. Default: 2048
-memory_gate_mb: 2048
+# Host-memory reserve/headroom (MB) preserved after reservations
+# 0 = disable explicit reserve. Default: 8192
+memory_gate_mb: 8192
 
 # Worker lifecycle
 worker_idle_timeout_s: 600      # Shut down idle workers after 10 minutes
@@ -180,11 +183,13 @@ warmup_commands:
 
 ## Scenarios
 
-### 16 GB laptop
+### 16 GB laptop / shared developer machine
 
 ```yaml
 max_workers_per_job: 1
-memory_gate_mb: 2048
+memory_gate_mb: 8192
+max_concurrent_worker_startups: 1
+gpu_thread_pool_size: 1
 warmup_commands:
   - morphotag
 worker_idle_timeout_s: 300      # Free memory faster
@@ -204,14 +209,17 @@ batchalign3 serve start --warmup off
 
 ### 32 GB desktop
 
-Default settings work well. Auto-tuning will typically run 2-3 parallel workers
-for memory-heavy commands and more for lightweight ones.
+Default settings usually work well, but keep warmup conservative if the machine
+also runs other inference tools. The coordinator will clamp jobs as host
+pressure changes.
 
 ### 256 GB server (production)
 
 ```yaml
-max_workers_per_job: 0          # Auto-tune — will pick 4-8 workers
+max_workers_per_job: 0          # Coordinator-backed auto planning
 max_concurrent_jobs: 8
+max_concurrent_worker_startups: 1
+memory_gate_mb: 8192
 warmup_commands:
   - morphotag
   - align
@@ -239,26 +247,28 @@ infrastructure without waiting for model initialization.
 
 ### "Job deferred due to memory pressure"
 
-The memory gate detected insufficient RAM. Possible causes:
+The host-memory coordinator could not fit the requested execution plan. Possible causes:
 
 1. **Too many concurrent workers.** Reduce `max_workers_per_job` or
-   `max_concurrent_jobs` in `server.yaml`.
+   `gpu_thread_pool_size`.
 2. **Other processes using RAM.** Check system memory usage.
 3. **Idle workers holding memory.** Workers that haven't been used in a while
-   still hold their loaded models. Reduce `worker_idle_timeout_s` to free
-   them sooner, or restart the server.
+    still hold their loaded models. Reduce `worker_idle_timeout_s` to free
+    them sooner, or restart the server.
+4. **Another local batchalign3 server or test run is already holding leases.**
+   Check `/health` for `host_memory_*` fields.
 
-The memory gate has a 60-second timeout. If memory doesn't recover, the job
-fails with a `MemoryPressure` error. When idle workers exist for the job's
-command, the memory gate is bypassed (those workers are already loaded).
+Jobs are re-queued when the plan does not fit. `/health` now reports
+`host_memory_pressure`, current reservations, and active lease labels.
 
 ### Only 1 worker running
 
-Auto-tuning decided that only 1 worker fits in available memory. Check:
+The coordinator decided that only 1 worker currently fits. Check:
 
-- `command_base_mb` for your command in `runtime_constants.toml`
-- Available system RAM (the server uses `sysinfo::available_memory()`)
-- On macOS, `available_memory()` undercounts by excluding inactive pages
+- `/health` `host_memory_pressure` and `host_memory_reserved_mb`
+- `memory_gate_mb`
+- `gpu_thread_pool_size` for GPU commands
+- other local `batchalign3` servers or ML tools on the same host
 
 Override with `max_workers_per_job` if you know your system can handle more.
 

@@ -17,7 +17,6 @@ export interface paths {
          *     it detects semantic errors (e.g., alignment mismatches, monotonicity
          *     violations). This endpoint scans the reports directory by mtime so the
          *     dashboard can surface recent failures without requiring database queries.
-         *     Missing or unreadable files are silently skipped.
          */
         get: operations["list_bug_reports"];
         put?: never;
@@ -311,7 +310,10 @@ export interface components {
          * @enum {string}
          */
         FailureCategory: "validation" | "parse_error" | "input_missing" | "worker_crash" | "worker_timeout" | "worker_protocol" | "provider_transient" | "provider_terminal" | "memory_pressure" | "cancelled" | "system";
-        /** @description Basename of a file being processed (e.g. `"sample.cha"`). */
+        /**
+         * @description Basename of a file being processed (e.g. `"sample.cha"`).
+         *     Rejects empty strings and path separators.
+         */
         FileName: string;
         /** @description A single CHAT file submitted by the client. */
         FilePayload: {
@@ -468,6 +470,32 @@ export interface components {
              *     (3.14t+).  Affects memory budgets and concurrency strategy.
              */
             free_threaded?: boolean;
+            /** @description Human-readable labels for active coordinator leases. */
+            host_memory_active_leases?: string[];
+            /** @description Snapshot error surfaced when the host-memory ledger cannot be read. */
+            host_memory_error?: string | null;
+            /**
+             * Format: int64
+             * @description Number of active job-execution leases in the host coordinator.
+             */
+            host_memory_job_leases?: number;
+            /**
+             * Format: int64
+             * @description Number of active machine-wide ML test locks in the host coordinator.
+             */
+            host_memory_ml_test_locks?: number;
+            /**
+             * @description Host-memory pressure classification derived from current OS memory plus
+             *     active cross-process reservations.
+             */
+            host_memory_pressure?: components["schemas"]["HostMemoryPressureLevel"];
+            /** @description Total memory currently reserved by the host-memory coordinator. */
+            host_memory_reserved_mb?: components["schemas"]["MemoryMb"];
+            /**
+             * Format: int64
+             * @description Number of active worker/model startup leases in the host coordinator.
+             */
+            host_memory_startup_leases?: number;
             /**
              * Format: int64
              * @description Number of additional jobs the server can accept right now, based on
@@ -501,14 +529,13 @@ export interface components {
             media_roots?: string[];
             /**
              * Format: int64
-             * @description Cumulative count of job submissions rejected because the memory gate
-             *     timed out (system RAM below `memory_gate_mb` for >120 s).
+             * @description Backward-compat counter for job deferrals caused by host-memory
+             *     admission pressure.
              */
             memory_gate_aborts?: number;
             /**
-             * @description Memory gate threshold in MB from server config.  0 means the gate
-             *     is disabled.  The dashboard uses this to show how close available
-             *     memory is to the blocking threshold.
+             * @description Host-memory reserve threshold in MB from server config.  0 means the
+             *     coordinator will not keep explicit free-memory headroom.
              */
             memory_gate_threshold_mb?: components["schemas"]["MemoryMb"];
             /** @description Identifier of the current server node. */
@@ -564,7 +591,13 @@ export interface components {
          * @enum {string}
          */
         HealthStatus: "ok";
-        /** @description Server-assigned UUID (v4) for a job. */
+        /**
+         * @description Host-wide memory pressure level derived from the current memory snapshot and
+         *     reserved headroom.
+         * @enum {string}
+         */
+        HostMemoryPressureLevel: "healthy" | "guarded" | "constrained" | "critical";
+        /** @description Server-assigned identifier for a job (non-empty). */
         JobId: string;
         /**
          * @description `GET /jobs/{id}` response — job progress.
@@ -803,7 +836,10 @@ export interface components {
          *     Used for memory gate thresholds and health-response memory readings.
          */
         MemoryMb: number;
-        /** @description Identifier of a server/fleet node. */
+        /**
+         * @description Identifier of a server/fleet node.
+         *     Empty when the node does not report an identity (older server versions).
+         */
         NodeId: string;
         /**
          * Format: int32
@@ -867,6 +903,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Bug report storage could not be read */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     get_bug_report: {
@@ -890,6 +935,15 @@ export interface operations {
             };
             /** @description Bug report not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bug report storage could not be read */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

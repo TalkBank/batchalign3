@@ -38,7 +38,6 @@ mod tests {
     use crate::api::{CommandName, FileName, JobId, LanguageCode3, NumSpeakers, NumWorkers};
     use crate::config::ServerConfig;
     use crate::options::{AlignOptions, CommandOptions, CommonOptions, UtrEngine};
-    use crate::runner::util::auto_tune::command_base_mb;
     use crate::runtime;
     use crate::scheduling::FailureCategory;
     use crate::store::{
@@ -112,31 +111,24 @@ mod tests {
     }
 
     #[test]
-    fn compute_workers_gpu_commands_use_memory_scaling() {
-        let config = ServerConfig::default();
-        // GPU commands must use memory-based auto-tuning (not hardcoded to 1).
-        // On any machine with >8 GB available, transcribe with 47 files should
-        // get more than 1 worker. Capped at max_gpu_workers (default 8).
+    fn compute_workers_gpu_commands_use_thread_pool_cap() {
+        let config = ServerConfig {
+            gpu_thread_pool_size: 2,
+            ..Default::default()
+        };
         let result = compute_job_workers(&CommandName::from("transcribe"), 47, &config);
         assert!(
-            *result >= 1,
-            "GPU auto-tune must return at least 1, got {result}"
+            *result <= 2,
+            "GPU worker count must respect gpu_thread_pool_size, got {result}"
         );
-        assert!(
-            *result <= runtime::max_gpu_workers(),
-            "GPU auto-tune must cap at max_gpu_workers ({}), got {result}",
-            runtime::max_gpu_workers()
-        );
-        // On a typical dev machine (16+ GB), should get >1 workers
-        // (4 GB base * 1.5 overhead = 6 GB per worker, 16 GB → 2 workers)
     }
 
     #[test]
-    fn command_base_mb_defaults() {
-        assert_eq!(command_base_mb(&CommandName::from("morphotag")), 2_000);
-        assert_eq!(command_base_mb(&CommandName::from("align")), 4_000);
-        assert_eq!(command_base_mb(&CommandName::from("opensmile")), 500);
-        assert_eq!(command_base_mb(&CommandName::from("unknown_cmd")), 4_000);
+    fn command_execution_budgets_follow_runtime_constants() {
+        assert_eq!(runtime::command_execution_budget_mb("morphotag").0, 3_000);
+        assert_eq!(runtime::command_execution_budget_mb("align").0, 6_000);
+        assert_eq!(runtime::command_execution_budget_mb("opensmile").0, 750);
+        assert_eq!(runtime::command_execution_budget_mb("unknown_cmd").0, 6_000);
     }
 
     #[test]
