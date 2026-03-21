@@ -278,7 +278,12 @@ export interface components {
         /** @description Batchalign command name (e.g. `"morphotag"`, `"align"`). */
         CommandName: string;
         /**
-         * @description MIME-like content discriminator for file results.
+         * @description Engine category that supports backend overrides.
+         *
+         *     Currently only ASR and FA have multiple engine backends.
+         *     Other inference tasks (morphosyntax, utseg, translate, coref)
+         *     always use their single built-in engine.
+         *     MIME-like content discriminator for file results.
          * @enum {string}
          */
         ContentType: "chat" | "csv" | "text";

@@ -2,8 +2,6 @@
 //!
 //! These are re-exported from [`super::api`] for backward compatibility.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -695,118 +693,6 @@ validated_string_id!(
 /// Currently only ASR and FA have multiple engine backends.
 /// Other inference tasks (morphosyntax, utseg, translate, coref)
 /// always use their single built-in engine.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord,
-    serde::Serialize, serde::Deserialize,
-    utoipa::ToSchema, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum EngineCategory {
-    /// ASR engine (whisper, rev, tencent, aliyun, funaudio).
-    Asr,
-    /// Forced alignment engine (whisper, wave2vec, wav2vec_canto).
-    Fa,
-}
-
-impl EngineCategory {
-    /// Wire name used in JSON and CLI args.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Asr => "asr",
-            Self::Fa => "fa",
-        }
-    }
-}
-
-impl std::fmt::Display for EngineCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Engine overrides selected by Rust for one worker spawn.
-///
-/// Maps [`EngineCategory`] to engine backend names. Used as part of the
-/// worker pool key to route requests to workers with the correct engine.
-///
-/// Empty means no overrides (use server defaults). Serialized to JSON only
-/// at the CLI boundary when passed as `--engine-overrides` to Python.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord,
-    serde::Serialize, serde::Deserialize,
-    utoipa::ToSchema, schemars::JsonSchema,
-)]
-#[serde(transparent)]
-pub struct EngineOverrides(pub BTreeMap<EngineCategory, String>);
-
-impl EngineOverrides {
-    /// Create an empty overrides set (use server defaults).
-    pub fn empty() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    /// Return `true` when no overrides are set.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Set an override for one engine category.
-    pub fn set(&mut self, category: EngineCategory, engine: impl Into<String>) {
-        self.0.insert(category, engine.into());
-    }
-
-    /// Look up an override by category.
-    pub fn get(&self, category: EngineCategory) -> Option<&str> {
-        self.0.get(&category).map(|s| s.as_str())
-    }
-
-    /// Serialize to a JSON string for CLI pass-through to the Python worker.
-    ///
-    /// Returns an empty string when no overrides are set.
-    pub fn to_json_string(&self) -> String {
-        if self.0.is_empty() {
-            String::new()
-        } else {
-            // Serialize with string keys for Python compatibility
-            let string_map: BTreeMap<&str, &str> = self
-                .0
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            serde_json::to_string(&string_map).unwrap_or_default()
-        }
-    }
-
-    /// Parse from a JSON string (CLI or IPC boundary).
-    pub fn from_json(json: &str) -> Self {
-        if json.is_empty() {
-            return Self::empty();
-        }
-        // Parse string-keyed JSON map into typed map
-        let string_map: BTreeMap<String, String> =
-            serde_json::from_str(json).unwrap_or_default();
-        let mut overrides = Self::empty();
-        for (key, value) in string_map {
-            match key.as_str() {
-                "asr" => overrides.set(EngineCategory::Asr, value),
-                "fa" => overrides.set(EngineCategory::Fa, value),
-                _ => {} // Unknown categories silently ignored (forward compat)
-            }
-        }
-        overrides
-    }
-}
-
-impl std::fmt::Display for EngineOverrides {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0.is_empty() {
-            write!(f, "(none)")
-        } else {
-            write!(f, "{}", self.to_json_string())
-        }
-    }
-}
-
 /// MIME-like content discriminator for file results.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]

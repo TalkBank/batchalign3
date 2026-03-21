@@ -6,7 +6,7 @@
         "type": "string"
       },
       "ContentType": {
-        "description": "MIME-like content discriminator for file results.",
+        "description": "Engine category that supports backend overrides.\n\nCurrently only ASR and FA have multiple engine backends.\nOther inference tasks (morphosyntax, utseg, translate, coref)\nalways use their single built-in engine.\nMIME-like content discriminator for file results.",
         "enum": [
           "chat",
           "csv",
