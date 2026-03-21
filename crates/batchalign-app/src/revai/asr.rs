@@ -132,15 +132,11 @@ pub(super) fn fetch_revai_transcript(
         return client.poll_and_download(job_id, 5, 30);
     }
 
-    let is_auto = matches!(lang, LanguageSpec::Auto);
-    let lang_hint_str = if is_auto {
-        "auto".to_string()
-    } else {
-        let code = lang
-            .as_resolved()
-            .expect("Resolved variant after Auto check");
-        RevAiLanguageHint::from(code).as_str().to_string()
+    let lang_hint_str = match lang.as_resolved() {
+        Some(code) => RevAiLanguageHint::from(code).as_str().to_string(),
+        None => "auto".to_string(),
     };
+    let is_auto = lang.is_auto();
 
     // In auto mode, we can't assume language-specific settings.
     let speakers_count = if is_auto {

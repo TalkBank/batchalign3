@@ -72,10 +72,9 @@ pub(super) fn collect_final_timings(
         )));
     }
 
-    Ok(all_timings
-        .into_iter()
-        .map(|timings| timings.expect("missing groups checked before collecting final FA timings"))
-        .collect())
+    // Safety: the None check above returned Err for any missing groups,
+    // so all remaining elements are guaranteed Some.
+    Ok(all_timings.into_iter().flatten().collect())
 }
 
 // ---------------------------------------------------------------------------

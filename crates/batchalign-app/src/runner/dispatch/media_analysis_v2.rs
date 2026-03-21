@@ -52,7 +52,7 @@ pub(in crate::runner) async fn dispatch_media_analysis_v2(
             break;
         }
 
-        let permit = file_sem.clone().acquire_owned().await.unwrap();
+        let Ok(permit) = file_sem.clone().acquire_owned().await else { tracing::warn!("file semaphore closed during shutdown"); break; };
         let store = store.clone();
         let pool = runtime.pool.clone();
         let job = job.clone();
