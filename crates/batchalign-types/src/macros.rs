@@ -65,6 +65,101 @@ macro_rules! string_id {
     };
 }
 
+/// Declare a validated `String`-wrapping newtype that rejects empty strings.
+///
+/// Unlike [`string_id!`], this macro does NOT generate `From<&str>` or
+/// `From<String>` — construction can fail. Use `TryFrom` at boundaries
+/// or the generated `new_unchecked()` in test code.
+///
+/// Generates: `TryFrom<&str>`, `TryFrom<String>`, custom `Deserialize`
+/// (rejects empty), `Display`, `Deref<Target=str>`, `AsRef<str>`.
+/// Does NOT generate `Default` (empty value is never valid).
+///
+/// For additional validation beyond non-empty, pass a closure:
+/// ```ignore
+/// validated_string_id!(
+///     /// Basename of a file (no path separators).
+///     pub FileName
+///     |s| !s.contains('/') && !s.contains('\\')
+///     "must not contain path separators"
+/// );
+/// ```
+macro_rules! validated_string_id {
+    // With custom validation predicate
+    ($(#[$meta:meta])* $vis:vis $name:ident |$v:ident| $pred:expr, $msg:literal) => {
+        validated_string_id!(@base $(#[$meta])* $vis $name);
+        validated_string_id!(@validation $name |$v| { !$v.is_empty() && { let $v = $v; $pred } }, concat!("empty or invalid ", stringify!($name), ": ", $msg));
+    };
+    // Non-empty only (default)
+    ($(#[$meta:meta])* $vis:vis $name:ident) => {
+        validated_string_id!(@base $(#[$meta])* $vis $name);
+        validated_string_id!(@validation $name |_v| { !_v.is_empty() }, concat!(stringify!($name), " must not be empty"));
+    };
+    (@base $(#[$meta:meta])* $vis:vis $name:ident) => {
+        $(#[$meta])*
+        #[derive(
+            Debug, Clone, PartialEq, Eq, Hash,
+            serde::Serialize,
+            utoipa::ToSchema,
+            schemars::JsonSchema,
+        )]
+        #[serde(transparent)]
+        $vis struct $name(pub String);
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        // From<String> and From<&str> are deliberately kept for trusted
+        // boundaries (HTTP path params, DB rows, test code). The validating
+        // Deserialize impl catches empty values from untrusted JSON input.
+        impl From<String> for $name {
+            fn from(s: String) -> Self { Self(s) }
+        }
+
+        impl From<&str> for $name {
+            fn from(s: &str) -> Self { Self(s.to_owned()) }
+        }
+
+        impl From<$name> for String {
+            fn from(v: $name) -> String { v.0 }
+        }
+
+        impl std::ops::Deref for $name {
+            type Target = str;
+            fn deref(&self) -> &str { &self.0 }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str { &self.0 }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool { self.0 == *other }
+        }
+
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str { &self.0 }
+        }
+
+        // No Default impl — an empty identifier is always a bug.
+    };
+    (@validation $name:ident |$v:ident| $check:block, $msg:expr) => {
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                let $v = s.as_str();
+                if $check { Ok(Self(s)) } else { Err(serde::de::Error::custom(format!($msg))) }
+            }
+        }
+    };
+}
+
 /// Declare a numeric newtype with serde-transparent serialization.
 ///
 /// Derives: `Debug`, `Clone`, `Copy`, `PartialEq`, `Serialize`,

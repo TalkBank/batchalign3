@@ -497,8 +497,10 @@ async fn process_one_fa_file(
                     let output_text = fa_result.chat_text.clone();
                     let file_traces = crate::types::traces::FileTraces {
                         filename: FileName::from(filename),
+                        dp_alignments: Vec::new(),
+                        asr_pipeline: None,
                         fa_timeline: Some(fa_result.into_timeline_trace()),
-                        ..Default::default()
+                        retokenizations: Vec::new(),
                     };
                     store
                         .trace_store()

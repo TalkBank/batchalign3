@@ -28,7 +28,7 @@ pub struct JobTraces {
 }
 
 /// Algorithm traces for a single file within a job.
-#[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FileTraces {
     /// Original filename (e.g. "01DM_18.cha").
     pub filename: crate::api::FileName,

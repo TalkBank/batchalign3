@@ -9,8 +9,8 @@ use utoipa::ToSchema;
 // Domain newtypes (shared across modules, re-exported from lib.rs)
 // ---------------------------------------------------------------------------
 
-string_id!(
-    /// Server-assigned UUID (v4) for a job.
+validated_string_id!(
+    /// Server-assigned identifier for a job (non-empty).
     pub JobId
 );
 
@@ -614,13 +614,16 @@ impl schemars::JsonSchema for LanguageSpec {
     }
 }
 
-string_id!(
+validated_string_id!(
     /// Basename of a file being processed (e.g. `"sample.cha"`).
+    /// Rejects empty strings and path separators.
     pub FileName
+    |s| !s.contains('/') && !s.contains('\\'), "must not contain path separators"
 );
 
 string_id!(
     /// Identifier of a server/fleet node.
+    /// Empty when the node does not report an identity (older server versions).
     pub NodeId
 );
 
@@ -655,13 +658,13 @@ numeric_id!(
     pub MemoryMb(u64) [Eq]
 );
 
-string_id!(
-    /// ML engine version string for cache keying (e.g. `"stanza-1.9.2"`).
+validated_string_id!(
+    /// ML engine version string for cache keying (e.g. `"stanza-1.9.2"`, non-empty).
     pub EngineVersion
 );
 
-string_id!(
-    /// Correlation ID for tracing a job across log entries.
+validated_string_id!(
+    /// Correlation ID for tracing a job across log entries (non-empty).
     ///
     /// Usually the same as `JobId` but may differ for retried or cloned jobs.
     pub CorrelationId
@@ -675,8 +678,8 @@ numeric_id!(
     pub NumWorkers(usize) [Eq]
 );
 
-string_id!(
-    /// A Rev.AI server-side job identifier returned after audio submission.
+validated_string_id!(
+    /// A Rev.AI server-side job identifier returned after audio submission (non-empty).
     ///
     /// Obtained during preflight batch upload and passed to polling calls so
     /// individual file tasks can retrieve results without re-uploading audio.
