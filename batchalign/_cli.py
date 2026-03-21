@@ -17,7 +17,16 @@ _BIN_NAME = "batchalign3.exe" if sys.platform == "win32" else "batchalign3"
 
 
 def _exec_binary(binary: Path) -> None:
-    """Replace this process with the Rust binary."""
+    """Replace this process with the Rust binary.
+
+    Propagates the current Python interpreter via BATCHALIGN_PYTHON so the
+    Rust binary can spawn workers using the same venv that has batchalign
+    installed. Without this, the binary would fall back to system Python
+    which doesn't have the batchalign package.
+    """
+    if "BATCHALIGN_PYTHON" not in os.environ:
+        os.environ["BATCHALIGN_PYTHON"] = sys.executable
+
     if sys.platform == "win32":
         import subprocess
 
