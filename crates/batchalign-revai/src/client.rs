@@ -56,6 +56,10 @@ pub enum RevAiError {
     #[error("Rev.AI job failed: {0}")]
     JobFailed(String),
 
+    /// All upload retry attempts were exhausted.
+    #[error("Rev.AI upload retries exhausted: {0}")]
+    Retry(String),
+
     /// JSON decoding failed for a Rev.AI response body.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -140,7 +144,9 @@ impl RevAiClient {
             }
         }
 
-        Err(last_err.expect("retry loop exhausted without storing an upload error"))
+        Err(last_err.unwrap_or(RevAiError::Retry(
+            "all upload retries exhausted without error".into(),
+        )))
     }
 
     /// Fetch the current status for one previously submitted job.

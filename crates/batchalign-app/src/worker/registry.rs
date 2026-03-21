@@ -78,7 +78,7 @@ pub fn default_registry_path() -> PathBuf {
         }
     }
     dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .unwrap_or_else(std::env::temp_dir)
         .join(".batchalign3")
         .join("workers.json")
 }

@@ -33,7 +33,13 @@ impl RuntimeLayout {
             .map(str::trim)
             .filter(|dir| !dir.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(home_env.unwrap_or("/tmp")).join(".batchalign3"));
+            .unwrap_or_else(|| {
+                // Documented default: fall back to home dir or platform temp dir.
+                let base = home_env
+                    .map(PathBuf::from)
+                    .unwrap_or_else(std::env::temp_dir);
+                base.join(".batchalign3")
+            });
         Self::from_state_dir(state_dir)
     }
 
