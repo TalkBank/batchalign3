@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$ROOT"
-cargo run -q -p batchalign-cli -- openapi --output openapi.json
+cargo run -q -p batchalign-cli --no-default-features --features binary-entry -- openapi --output openapi.json
 
 cp "$ROOT/openapi.json" "$ROOT/frontend/openapi.json"
 
