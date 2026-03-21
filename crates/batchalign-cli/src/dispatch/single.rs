@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use batchalign_app::ReleasedCommand;
 use batchalign_app::api::JobSubmission;
 use batchalign_app::options::CommandOptions;
 
@@ -22,7 +23,7 @@ use super::{server_supports_command, warn_stale_server};
 pub(super) async fn dispatch_single_server(
     client: &BatchalignClient,
     server_url: &str,
-    command: &str,
+    command: ReleasedCommand,
     lang: &str,
     num_speakers: u32,
     extensions: &[&str],
@@ -56,21 +57,26 @@ pub(super) async fn dispatch_single_server(
     }
 
     // Discover files
-    let (files, outputs) = crate::discover::discover_server_inputs(inputs, out_dir, extensions);
+    let (files, outputs) = crate::discover::discover_server_inputs(inputs, out_dir, extensions)?;
     let (files, outputs) = filter_files_for_command(command, files, outputs);
 
     // Copy non-matching files
     if let Some(od) = out_dir {
         for inp in inputs {
             if Path::new(inp).is_dir() {
-                copy_nonmatching(Path::new(inp), Path::new(od), extensions, command);
+                copy_nonmatching(
+                    Path::new(inp),
+                    Path::new(od),
+                    extensions,
+                    command,
+                )?;
             }
         }
     }
 
     // Build server names and result map
-    let base_dir = infer_base_dir(inputs);
-    let (server_names, result_map) = build_server_names(&files, &outputs, inputs);
+    let base_dir = infer_base_dir(inputs)?;
+    let (server_names, result_map) = build_server_names(&files, &outputs, inputs)?;
 
     // Classify files: CHAT → content, media → names
     let (file_payloads, media_file_names) = classify_files(&files, &server_names)?;
@@ -96,11 +102,11 @@ pub(super) async fn dispatch_single_server(
             remote_files,
         )
     } else {
-        let (mk, ms) = client::detect_media_mapping(&base_dir, &health.media_mapping_keys);
-        if !mk.is_empty() {
-            eprintln!("Media mapping: {mk} / {ms}");
+        let mapping = client::detect_media_mapping(&base_dir, &health.media_mapping_keys)?;
+        if !mapping.key.is_empty() {
+            eprintln!("Media mapping: {} / {}", mapping.key, mapping.subdir);
         }
-        (mk, ms, media_file_names)
+        (mapping.key, mapping.subdir, media_file_names)
     };
 
     if file_payloads.is_empty() && media_file_names.is_empty() {
@@ -128,8 +134,10 @@ pub(super) async fn dispatch_single_server(
         .unwrap_or_else(|| base_dir.clone());
 
     let submission = JobSubmission {
-        command: command.into(),
-        lang: lang.into(),
+        command: command.as_wire_name().into(),
+        lang: batchalign_app::api::LanguageSpec::try_from(lang).map_err(|e| {
+            CliError::InvalidArgument(format!("invalid language: {e}"))
+        })?,
         num_speakers: num_speakers.into(),
         files: file_payloads,
         media_files: media_file_names,
@@ -160,7 +168,8 @@ pub(super) async fn dispatch_single_server(
     // Poll and write incrementally
     if !info.status.is_terminal() {
         if use_tui && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-            let (tui_progress, tui_runtime) = TuiProgress::new(total_files as u64, command);
+            let (tui_progress, tui_runtime) =
+                TuiProgress::new(total_files as u64, command.as_wire_name());
             let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
 
             // Cancel task — awaits signal from TUI, sends DELETE cancel
@@ -186,7 +195,7 @@ pub(super) async fn dispatch_single_server(
                 total_files as u64,
                 &result_map,
                 &effective_out,
-                command,
+                command.as_wire_name(),
                 &tui_progress,
             );
             tokio::pin!(poll_fut);
@@ -204,7 +213,7 @@ pub(super) async fn dispatch_single_server(
                 }
             }
         } else {
-            let progress = BatchProgress::new(total_files as u64, command);
+            let progress = BatchProgress::new(total_files as u64, command.as_wire_name());
             poll_and_write_incrementally(
                 client,
                 server_url,
@@ -212,7 +221,7 @@ pub(super) async fn dispatch_single_server(
                 total_files as u64,
                 &result_map,
                 &effective_out,
-                command,
+                command.as_wire_name(),
                 &progress,
             )
             .await?;

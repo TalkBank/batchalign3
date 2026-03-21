@@ -7,6 +7,9 @@ use crate::cache::{CacheBackend, UtteranceCache};
 use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
+use crate::workflow::text_batch::{
+    TextBatchFileInput, TextBatchFileResults, wrap_legacy_batch_results,
+};
 use batchalign_chat_ops::morphosyntax::{
     BatchItemWithPosition, MwtDict, cache_key, clear_morphosyntax, collect_payloads,
     declared_languages, extract_strings, inject_from_cache, inject_results, validate_mor_alignment,
@@ -33,11 +36,11 @@ use super::worker::{cache_put_entries, infer_batch};
 /// This function preserves per-file correctness boundaries while sharing one
 /// model call: parse/collect per file, aggregate misses globally, then
 /// repartition responses back by file before injection and validation.
-pub(crate) async fn process_morphosyntax_batch(
-    files: &[(String, String)], // (filename, chat_text)
+pub(crate) async fn run_morphosyntax_batch_impl(
+    files: &[TextBatchFileInput],
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
-) -> Vec<(String, Result<String, String>)> {
+) -> TextBatchFileResults {
     let primary_lang = LanguageCode::new(params.lang.as_ref());
     let mut results: Vec<(String, Result<String, String>)> = Vec::with_capacity(files.len());
 
@@ -45,8 +48,9 @@ pub(crate) async fn process_morphosyntax_batch(
     let mut parsed_files: Vec<ChatFile> = Vec::with_capacity(files.len());
     let mut dummy_flags: Vec<bool> = Vec::with_capacity(files.len());
     let mut validation_errors: Vec<Option<String>> = Vec::with_capacity(files.len());
-    for (filename, chat_text) in files {
-        let (mut chat_file, parse_errors) = parse_lenient(chat_text);
+    for file in files {
+        let filename = file.filename.as_ref();
+        let (mut chat_file, parse_errors) = parse_lenient(file.chat_text.as_ref());
         if !parse_errors.is_empty() {
             warn!(
                 filename = %filename,
@@ -127,7 +131,11 @@ pub(crate) async fn process_morphosyntax_batch(
         if !hits.is_empty()
             && let Err(e) = inject_cache_hits(&mut parsed_files[file_idx], &hits)
         {
-            warn!(filename = %files[file_idx].0, error = %e, "Cache injection failed (non-fatal)");
+            warn!(
+                filename = %files[file_idx].filename,
+                error = %e,
+                "Cache injection failed (non-fatal)"
+            );
         }
 
         if misses.is_empty() {
@@ -152,30 +160,34 @@ pub(crate) async fn process_morphosyntax_batch(
             Ok(responses) => responses,
             Err(e) => {
                 warn!(error = %e, "Batch infer failed for all files");
-                for (file_idx, (filename, _)) in files.iter().enumerate() {
+                for (file_idx, file) in files.iter().enumerate() {
                     if per_file_info
                         .get(file_idx)
                         .and_then(|f| f.as_ref())
                         .is_some()
                     {
-                        results.push((filename.clone(), Err(format!("Batch infer failed: {e}"))));
+                        results.push((
+                            file.filename.to_string(),
+                            Err(format!("Batch infer failed: {e}")),
+                        ));
                     } else {
                         results.push((
-                            filename.clone(),
+                            file.filename.to_string(),
                             Ok(to_chat_string(&parsed_files[file_idx])),
                         ));
                     }
                 }
-                return results;
+                return wrap_legacy_batch_results(results);
             }
         }
     };
 
     // 4. Distribute responses back to files and inject
-    for (file_idx, (filename, _)) in files.iter().enumerate() {
+    for (file_idx, file) in files.iter().enumerate() {
+        let filename = file.filename.as_ref();
         // Skip files that failed pre-validation
         if let Some(ref err) = validation_errors[file_idx] {
-            results.push((filename.clone(), Err(err.clone())));
+            results.push((file.filename.to_string(), Err(err.clone())));
             continue;
         }
 
@@ -202,7 +214,7 @@ pub(crate) async fn process_morphosyntax_batch(
                 Ok(_retokenize_traces) => {}
                 Err(e) => {
                     results.push((
-                        filename.clone(),
+                        file.filename.to_string(),
                         Err(format!("Result injection failed: {e}")),
                     ));
                     continue;
@@ -235,10 +247,10 @@ pub(crate) async fn process_morphosyntax_batch(
             warn!(filename = %filename, errors = ?msgs, "morphotag post-validation warnings (non-fatal)");
         }
 
-        results.push((filename.clone(), Ok(to_chat_string(chat_file))));
+        results.push((file.filename.to_string(), Ok(to_chat_string(chat_file))));
     }
 
-    results
+    wrap_legacy_batch_results(results)
 }
 
 // ---------------------------------------------------------------------------

@@ -12,15 +12,15 @@ and producing silently corrupt output.
 
 Implementation snapshot (current):
 - Enforced pre-validation and post-validation gates exist for:
-  - `morphotag` (`crates/batchalign-app/src/morphosyntax.rs`)
+  - `morphotag` (`crates/batchalign-app/src/morphosyntax/`)
   - `utseg` (`crates/batchalign-app/src/utseg.rs`)
   - `translate` (`crates/batchalign-app/src/translate.rs`)
   - `coref` (`crates/batchalign-app/src/coref.rs`)
-  - `align` (`crates/batchalign-app/src/fa.rs`)
+  - `align` (`crates/batchalign-app/src/fa/`)
 - These commands use `validate_to_level(...)` before inference and
   `validate_output(...)` before serialization.
 - Media-path preflight validation is also enforced in
-  `crates/batchalign-app/src/runner/util.rs`.
+  `crates/batchalign-app/src/runner/util/`.
 
 ---
 

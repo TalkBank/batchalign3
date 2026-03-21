@@ -25,7 +25,9 @@
 
 use std::path::Path;
 
-use crate::api::{DurationSeconds, LanguageCode3, LanguageSpec, NumSpeakers, RevAiJobId};
+use crate::api::{
+    DurationSeconds, LanguageCode3, LanguageSpec, NumSpeakers, RevAiJobId, WorkerLanguage,
+};
 use crate::revai::infer_revai_asr;
 use crate::types::worker_v2::{AsrBackendV2, SpeakerBackendV2, SpeakerSegmentV2};
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
@@ -49,8 +51,9 @@ use tracing::warn;
 
 use crate::error::ServerError;
 use crate::pipeline::PipelineServices;
-use crate::pipeline::transcribe::run_transcribe_pipeline;
 use crate::runner::util::ProgressSender;
+use crate::workflow::PerFileWorkflow;
+use crate::workflow::transcribe::{TranscribeWorkflow, TranscribeWorkflowRequest};
 
 // ---------------------------------------------------------------------------
 // ASR response types (match Python inference/asr.py models)
@@ -82,7 +85,7 @@ pub struct AsrResponse {
 }
 
 fn default_lang() -> LanguageCode3 {
-    LanguageCode3::new("eng")
+    LanguageCode3::eng()
 }
 
 /// Which runtime boundary owns raw ASR inference for one command execution.
@@ -208,7 +211,15 @@ pub(crate) async fn process_transcribe(
     progress: Option<&ProgressSender>,
     debug_dir: Option<&Path>,
 ) -> Result<String, ServerError> {
-    run_transcribe_pipeline(audio_path, services, opts, progress, debug_dir).await
+    TranscribeWorkflow
+        .run(TranscribeWorkflowRequest {
+            audio_path,
+            services,
+            options: opts,
+            progress,
+            debug_dir,
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -242,18 +253,21 @@ pub(crate) struct SpeakerInferParams<'a> {
     pub backend: SpeakerBackendV2,
 }
 
+fn asr_worker_languages(lang: &LanguageSpec) -> (WorkerLanguage, LanguageCode3) {
+    (
+        lang.to_worker_language(),
+        lang.as_resolved()
+            .cloned()
+            .unwrap_or_else(LanguageCode3::eng),
+    )
+}
+
 /// Call the Python worker for ASR inference on a single audio file.
 pub(crate) async fn infer_asr(
     pool: &WorkerPool,
     params: &AsrInferParams<'_>,
 ) -> Result<AsrResponse, ServerError> {
-    // For pool dispatch, resolve Auto to a concrete key. The actual
-    // auto-detect happens inside the ASR engine, not at the pool level.
-    let pool_lang = params
-        .lang
-        .as_resolved()
-        .cloned()
-        .unwrap_or_else(|| LanguageCode3::from("eng"));
+    let (worker_lang, fallback_lang) = asr_worker_languages(params.lang);
 
     match params.backend {
         AsrBackend::RustRevAi => {
@@ -268,7 +282,7 @@ pub(crate) async fn infer_asr(
             .await
         }
         AsrBackend::Worker(worker_mode) => {
-            infer_asr_via_worker_v2(pool, params, worker_mode, &pool_lang).await
+            infer_asr_via_worker_v2(pool, params, worker_mode, &worker_lang, &fallback_lang).await
         }
     }
 }
@@ -280,7 +294,8 @@ async fn infer_asr_via_worker_v2(
     pool: &WorkerPool,
     params: &AsrInferParams<'_>,
     worker_mode: AsrWorkerMode,
-    pool_lang: &LanguageCode3,
+    worker_lang: &WorkerLanguage,
+    fallback_lang: &LanguageCode3,
 ) -> Result<AsrResponse, ServerError> {
     let artifacts = PreparedArtifactRuntimeV2::new("asr_v2").map_err(|error| {
         ServerError::Validation(format!("failed to create ASR V2 artifact runtime: {error}"))
@@ -300,7 +315,7 @@ async fn infer_asr_via_worker_v2(
                     num_speakers: params.num_speakers,
                 },
             },
-            lang: pool_lang,
+            lang: worker_lang,
             backend: worker_mode.as_v2_backend(),
         },
     )
@@ -312,11 +327,11 @@ async fn infer_asr_via_worker_v2(
     })?;
 
     let response = pool
-        .dispatch_execute_v2(pool_lang, &request)
+        .dispatch_execute_v2(worker_lang, &request)
         .await
         .map_err(ServerError::Worker)?;
 
-    parse_asr_response_v2(&response, pool_lang)
+    parse_asr_response_v2(&response, fallback_lang)
         .map_err(|error| ServerError::Validation(format!("ASR V2 response parse failed: {error}")))
 }
 
@@ -351,7 +366,7 @@ pub(crate) async fn infer_speaker(
         .lang
         .as_resolved()
         .cloned()
-        .unwrap_or_else(|| LanguageCode3::from("eng"));
+        .unwrap_or_else(LanguageCode3::eng);
     let response = pool
         .dispatch_execute_v2(&pool_lang, &request)
         .await
@@ -564,12 +579,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn asr_auto_uses_auto_worker_language_with_resolved_fallback() {
+        let (worker_lang, fallback_lang) = asr_worker_languages(&LanguageSpec::Auto);
+        assert_eq!(worker_lang, WorkerLanguage::Auto);
+        assert_eq!(fallback_lang, LanguageCode3::eng());
+    }
+
+    #[test]
+    fn asr_resolved_language_preserves_worker_and_fallback_values() {
+        let lang = LanguageSpec::Resolved(LanguageCode3::fra());
+        let (worker_lang, fallback_lang) = asr_worker_languages(&lang);
+        assert_eq!(worker_lang, WorkerLanguage::from(LanguageCode3::fra()));
+        assert_eq!(fallback_lang, LanguageCode3::fra());
+    }
+
     fn sample_transcribe_options(backend: AsrBackend) -> TranscribeOptions {
         TranscribeOptions {
             backend,
             diarize: false,
             speaker_backend: None,
-            lang: LanguageCode3::new("fra").into(),
+            lang: LanguageCode3::fra().into(),
             num_speakers: 1,
             with_utseg: false,
             with_morphosyntax: false,
@@ -662,7 +692,7 @@ mod tests {
                     confidence: None,
                 },
             ],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         };
 
         let output = convert_asr_response(&response);
@@ -699,7 +729,7 @@ mod tests {
                     confidence: None,
                 },
             ],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         };
 
         let output = convert_asr_response(&response);
@@ -713,7 +743,7 @@ mod tests {
     fn test_convert_asr_response_empty() {
         let response = AsrResponse {
             tokens: vec![],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         };
         let output = convert_asr_response(&response);
         assert!(output.monologues.is_empty());
@@ -729,7 +759,7 @@ mod tests {
                 speaker: None,
                 confidence: None,
             }],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         };
 
         let output = convert_asr_response(&response);
@@ -765,7 +795,7 @@ mod tests {
                     confidence: None,
                 },
             ],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         };
 
         // Speaker labels must be respected regardless of any diarization flag.
@@ -800,7 +830,7 @@ mod tests {
                 speaker: Some("SPEAKER_1".into()),
                 confidence: None,
             }],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         };
 
         assert!(response_has_speaker_labels(&response));
@@ -1062,7 +1092,7 @@ mod tests {
                     confidence: Some(0.99),
                 },
             ],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         }
     }
 
@@ -1163,7 +1193,7 @@ mod tests {
                     confidence: Some(0.96),
                 },
             ],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         }
     }
 

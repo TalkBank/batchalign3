@@ -6,7 +6,7 @@
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
 use crate::common::{poll_job_done, require_live_server, submit_and_complete};
-use batchalign_app::api::{FilePayload, JobStatus, JobSubmission, NumSpeakers};
+use batchalign_app::api::{FilePayload, JobStatus, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers};
 use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 use batchalign_app::worker::InferTask;
 
@@ -48,7 +48,7 @@ async fn error_align_missing_audio() {
 
     let submission = JobSubmission {
         command: "align".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],

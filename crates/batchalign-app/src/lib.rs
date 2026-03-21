@@ -133,6 +133,7 @@ pub mod types;
 // (the WorkerHandle/WorkerPool module). Access types::worker items via
 // `crate::types::worker::` or the re-exports below.
 pub use types::{api, config, options, params, runtime, scheduling, traces};
+pub use batchalign_types::domain::ReleasedCommand;
 
 pub mod benchmark;
 pub mod cache;
@@ -163,6 +164,7 @@ pub mod translate;
 pub mod utseg;
 pub(crate) mod websocket;
 pub mod worker;
+pub(crate) mod workflow;
 pub mod ws;
 
 // Re-export primary API surface from submodules.
@@ -172,3 +174,17 @@ pub use server::{
 };
 pub use state::AppState;
 pub(crate) use websocket::ws_route;
+
+/// Return whether one closed released command requires client-local audio access.
+pub fn released_command_uses_local_audio(command: ReleasedCommand) -> bool {
+    workflow::released_command_uses_local_audio(command)
+}
+
+/// Return whether one released command name requires client-local audio access.
+///
+/// This keeps the old stringly helper only for callers that still sit at a
+/// trust boundary. Contributor-facing Rust code should prefer
+/// [`released_command_uses_local_audio`].
+pub fn command_uses_local_audio(command: &str) -> bool {
+    workflow::command_uses_local_audio(command)
+}

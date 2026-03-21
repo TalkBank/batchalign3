@@ -104,14 +104,9 @@
 //! assert_eq!(config.default_lang, "spa");
 //! ```
 
-// Macros kept locally for modules in this crate that use `string_id!`/`numeric_id!`
-// (e.g. scheduling.rs). The canonical copy lives in `batchalign-types`.
-#[allow(unused_macros)]
-#[macro_use]
-mod macros;
-
 pub mod api;
 pub mod config;
+pub mod domain;
 pub mod options;
 pub mod params;
 pub mod request;
@@ -121,9 +116,5 @@ pub mod runtime;
 pub mod scheduling;
 pub mod status;
 pub mod traces;
-
-// Re-export from batchalign-types so existing `crate::types::domain`,
-// `crate::types::worker`, `crate::types::worker_v2` paths still resolve.
-pub use batchalign_types::domain;
-pub use batchalign_types::worker;
-pub use batchalign_types::worker_v2;
+pub mod worker;
+pub mod worker_v2;

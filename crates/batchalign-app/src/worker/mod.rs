@@ -23,6 +23,7 @@ pub mod avqi_request_v2;
 pub mod error;
 pub mod fa_result_v2;
 pub mod handle;
+pub mod memory_guard;
 pub mod opensmile_request_v2;
 pub mod pool;
 pub(crate) mod provider_credentials;

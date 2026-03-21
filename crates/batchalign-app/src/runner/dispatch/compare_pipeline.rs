@@ -6,6 +6,7 @@ use crate::api::{ContentType, FileName, LanguageCode3};
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::FailureCategory;
+use crate::workflow::text_batch::TextBatchFileInput;
 use tracing::{info, warn};
 
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
@@ -23,7 +24,7 @@ pub(in crate::runner) async fn dispatch_compare(
     job: &RunnerJobSnapshot,
     store: &Arc<JobStore>,
     services: PipelineServices<'_>,
-    file_texts: &[(String, String)],
+    file_texts: &[TextBatchFileInput],
     cache_policy: CachePolicy,
     mwt: &batchalign_chat_ops::morphosyntax::MwtDict,
     should_merge_abbrev: bool,
@@ -31,10 +32,12 @@ pub(in crate::runner) async fn dispatch_compare(
     let job_id = &job.identity.job_id;
     let correlation_id = &*job.identity.correlation_id;
     let file_list = &job.pending_files;
-    let fallback_lang = crate::api::LanguageCode3::from("eng");
+    let fallback_lang = crate::api::LanguageCode3::eng();
     let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
 
-    for (filename, chat_text) in file_texts {
+    for file in file_texts {
+        let filename = file.filename.as_ref();
+        let chat_text = file.chat_text.as_ref();
         let lifecycle = FileRunTracker::new(store, job_id, filename);
         // Skip gold files — they're companions, not inputs
         if crate::compare::is_gold_file(filename) {
@@ -49,8 +52,8 @@ pub(in crate::runner) async fn dispatch_compare(
         // Read gold file: check if it's in the same batch, or read from disk
         let gold_text = file_texts
             .iter()
-            .find(|(fn_, _)| *fn_ == gold_filename)
-            .map(|(_, text)| text.clone());
+            .find(|candidate| candidate.filename.as_ref() == gold_filename)
+            .map(|candidate| candidate.chat_text.to_string());
 
         let gold_text = match gold_text {
             Some(text) => text,
@@ -58,7 +61,7 @@ pub(in crate::runner) async fn dispatch_compare(
                 // Try to read from the filesystem
                 let file_index = file_list
                     .iter()
-                    .find(|file| file.filename.as_ref() == filename.as_str())
+                    .find(|file| file.filename.as_ref() == filename)
                     .map(|file| file.file_index)
                     .unwrap_or(0);
                 let gold_read_path = if job.filesystem.paths_mode {
@@ -106,7 +109,9 @@ pub(in crate::runner) async fn dispatch_compare(
         )
         .await
         {
-            Ok((mut chat_output, csv_output)) => {
+            Ok(outputs) => {
+                let mut chat_output = outputs.annotated_main_chat;
+                let csv_output = outputs.metrics_csv;
                 if should_merge_abbrev {
                     chat_output = apply_merge_abbrev(&chat_output);
                 }
@@ -114,7 +119,7 @@ pub(in crate::runner) async fn dispatch_compare(
                 let finished_at = unix_now();
                 let file_index = file_list
                     .iter()
-                    .find(|file| file.filename.as_ref() == filename.as_str())
+                    .find(|file| file.filename.as_ref() == filename)
                     .map(|file| file.file_index)
                     .unwrap_or(0);
 
@@ -141,7 +146,7 @@ pub(in crate::runner) async fn dispatch_compare(
 
                 lifecycle
                     .complete_with_result(
-                        FileName::from(filename.as_str()),
+                        FileName::from(filename),
                         ContentType::Chat,
                         finished_at,
                     )
@@ -167,6 +172,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{EngineVersion, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp};
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
@@ -194,7 +200,7 @@ mod tests {
             },
             dispatch: JobDispatchConfig {
                 command: "compare".into(),
-                lang: "eng".into(),
+                lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Compare(CompareOptions {
                     common: CommonOptions::default(),
@@ -298,7 +304,10 @@ mod tests {
             &snapshot,
             &store,
             services,
-            &[(filename.to_string(), String::from("*PAR:\tgold"))],
+            &[TextBatchFileInput::new(
+                filename.to_string(),
+                String::from("*PAR:\tgold"),
+            )],
             CachePolicy::UseCache,
             &batchalign_chat_ops::morphosyntax::MwtDict::default(),
             false,

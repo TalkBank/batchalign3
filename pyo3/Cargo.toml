@@ -14,6 +14,8 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 extension-module = ["pyo3/extension-module"]
+cli-entry = ["dep:batchalign-cli"]
+revai-bridge = ["dep:batchalign-revai"]
 
 [dependencies]
 indexmap = { version = "2.13", features = ["serde"] }
@@ -28,16 +30,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Shared batchalign crates
 batchalign-types = { path = "../crates/batchalign-types" }
 batchalign-chat-ops = { path = "../crates/batchalign-chat-ops" }
-batchalign-revai = { path = "../crates/batchalign-revai" }
-batchalign-cli = { path = "../crates/batchalign-cli", default-features = false }
-
-# CLI runtime
-tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive", "env"] }
+batchalign-revai = { path = "../crates/batchalign-revai", optional = true }
+batchalign-cli = { path = "../crates/batchalign-cli", optional = true, default-features = false }
 
 # TalkBank crates — path deps to talkbank-tools
-talkbank-model = { path = "../../talkbank-tools/crates/talkbank-model", features = ["python"] }
-talkbank-transform = { path = "../../talkbank-tools/crates/talkbank-transform" }
+talkbank-model = { path = "../../talkbank-tools/crates/talkbank-model" }
 talkbank-parser = { path = "../../talkbank-tools/crates/talkbank-parser" }
 
 [dev-dependencies]

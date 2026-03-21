@@ -35,6 +35,8 @@ fn help_lists_visible_commands() {
         .success()
         .stdout(predicate::str::contains("align"))
         .stdout(predicate::str::contains("transcribe"))
+        .stdout(predicate::str::contains("compare"))
+        .stdout(predicate::str::contains("benchmark"))
         .stdout(predicate::str::contains("morphotag"))
         .stdout(predicate::str::contains("cache"))
         .stdout(predicate::str::contains("logs"))
@@ -71,6 +73,32 @@ fn help_per_subcommand() {
             .assert()
             .success()
             .stdout(predicate::str::is_empty().not());
+    }
+}
+
+#[test]
+fn workflow_command_help_descriptions_match_narrative() {
+    for (subcmd, expected) in [
+        (
+            "align",
+            "Align transcripts against corresponding media files",
+        ),
+        ("transcribe", "Create a transcript from audio files"),
+        (
+            "morphotag",
+            "Perform morphosyntactic analysis on transcripts",
+        ),
+        (
+            "compare",
+            "Compare transcripts against gold-standard references",
+        ),
+        ("benchmark", "Benchmark ASR word accuracy"),
+    ] {
+        cmd()
+            .args([subcmd, "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(expected));
     }
 }
 
@@ -269,6 +297,26 @@ fn serve_start_invalid_config_is_config_error() {
         .stderr(predicate::str::contains("failed to parse config"));
 }
 
+#[test]
+fn serve_start_unknown_config_field_is_config_error() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let bad_cfg = tmp.path().join("bad.yaml");
+    std::fs::write(&bad_cfg, "port: 9123\nwarmup: false\n").unwrap();
+
+    cmd()
+        .args([
+            "serve",
+            "start",
+            "--foreground",
+            "--config",
+            bad_cfg.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("unknown field `warmup`"));
+}
+
 // ---------------------------------------------------------------------------
 // Cache commands (HOME-isolated)
 // ---------------------------------------------------------------------------
@@ -305,6 +353,20 @@ fn serve_status_unreachable() {
         .assert()
         .success()
         .stderr(predicate::str::contains("cannot reach"));
+}
+
+#[test]
+fn serve_status_unknown_config_field_is_config_error() {
+    let harness = CliHarness::new();
+    harness.write_server_config("port: 9123\nwarmup: false\n");
+
+    harness
+        .cmd()
+        .args(["serve", "status"])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("unknown field `warmup`"));
 }
 
 // ---------------------------------------------------------------------------
@@ -514,7 +576,7 @@ fn cli_transcribe_explicit_server_falls_back_to_local_daemon() {
         .expect("local addr")
         .port();
     harness.write_server_config(&format!(
-        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup: false\n"
+        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup_commands: []\n"
     ));
 
     let start_result = harness
@@ -611,7 +673,7 @@ fn cli_align_explicit_server_reaches_remote_content_mode() {
         .expect("local addr")
         .port();
     harness.write_server_config(&format!(
-        "host: 127.0.0.1\nport: {port}\nauto_daemon: false\nwarmup: false\nmedia_roots:\n  - {}\n",
+        "host: 127.0.0.1\nport: {port}\nauto_daemon: false\nwarmup_commands: []\nmedia_roots:\n  - {}\n",
         media_dir.display()
     ));
 
@@ -695,7 +757,7 @@ fn cli_transcribe_in_place_mp4_succeeds_via_local_daemon() {
         .expect("local addr")
         .port();
     harness.write_server_config(&format!(
-        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup: false\n"
+        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup_commands: []\n"
     ));
 
     let start_result = harness
@@ -785,7 +847,7 @@ fn cli_transcribe_in_place_mp4_populates_injected_media_cache_live() {
         .expect("local addr")
         .port();
     harness.write_server_config(&format!(
-        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup: false\n"
+        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup_commands: []\n"
     ));
 
     let cli_result = harness
@@ -918,7 +980,7 @@ fn cli_compare_failed_auto_daemon_job_returns_server_exit_code() {
         .expect("local addr")
         .port();
     harness.write_server_config(&format!(
-        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup: false\n"
+        "host: 127.0.0.1\nport: {port}\nauto_daemon: true\nwarmup_commands: []\n"
     ));
 
     let cli_result = harness

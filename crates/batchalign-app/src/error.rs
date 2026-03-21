@@ -46,6 +46,13 @@ pub enum ServerError {
     #[error("migration error: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
 
+    /// Persisted structured data could not be serialized or deserialized.
+    ///
+    /// **HTTP 500.** Indicates an internal schema/shape mismatch or corrupt
+    /// stored JSON payload in SQLite.
+    #[error("persistence error: {0}")]
+    Persistence(String),
+
     /// The requested `job_id` does not exist in the [`JobStore`](crate::store::JobStore).
     ///
     /// **HTTP 404.** Callers should verify the job ID. The job may have been
@@ -138,6 +145,7 @@ impl ServerError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Database(_) | Self::Migration(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Persistence(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::JobNotFound(_) => StatusCode::NOT_FOUND,
             Self::JobConflict { .. } => StatusCode::CONFLICT,
             Self::JobNotTerminal(_) => StatusCode::CONFLICT,

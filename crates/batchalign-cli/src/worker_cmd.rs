@@ -141,11 +141,16 @@ async fn check_worker_health(entry: &RegistryEntry) -> &'static str {
         return "unknown-profile";
     };
 
+    let lang = match batchalign_app::api::WorkerLanguage::parse_untrusted(&entry.lang) {
+        Ok(lang) => lang,
+        Err(_) => return "invalid-lang",
+    };
+
     let info = TcpWorkerInfo {
         host: entry.host.clone(),
         port: entry.port,
         profile,
-        lang: batchalign_app::api::LanguageCode3::from_worker_lang(&entry.lang),
+        lang,
         engine_overrides: entry.engine_overrides.clone(),
         pid: WorkerPid(entry.pid),
         audio_task_timeout_s: 0,
@@ -198,11 +203,22 @@ async fn stop(args: &WorkerStopArgs) -> Result<(), CliError> {
 
     for entry in targets {
         let profile = RegistryEntry::worker_profile(entry).unwrap_or(WorkerProfile::Stanza);
+        let lang = match batchalign_app::api::WorkerLanguage::parse_untrusted(&entry.lang) {
+            Ok(lang) => lang,
+            Err(error) => {
+                eprintln!(
+                    "Invalid worker language in registry for {} worker ({}:{}, pid={}): {}",
+                    entry.profile, entry.host, entry.port, entry.pid, error
+                );
+                continue;
+            }
+        };
+
         let info = TcpWorkerInfo {
             host: entry.host.clone(),
             port: entry.port,
             profile,
-            lang: batchalign_app::api::LanguageCode3::from_worker_lang(&entry.lang),
+            lang,
             engine_overrides: entry.engine_overrides.clone(),
             pid: WorkerPid(entry.pid),
             audio_task_timeout_s: 0,

@@ -1,7 +1,7 @@
 # Rust Core (batchalign_core)
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last modified:** 2026-03-21 07:16 EDT
 
 For new contributors, start with:
 
@@ -15,6 +15,18 @@ single-crate project (`batchalign-pyo3`) that builds the `batchalign_core`
 Python extension module. It depends on `batchalign-chat-ops` (same workspace)
 and on `talkbank-*` crates via path dependencies pointing to the sibling
 `talkbank-tools` repo — they are **not** vendored copies.
+
+Recent cleanup narrowed that boundary slightly: `batchalign-pyo3` no longer
+depends on `talkbank-transform` just to implement `extract_timed_tiers`; that
+path now uses `talkbank-parser` plus `talkbank-model` validation directly.
+Python-tagged string extraction wrappers also moved out of `talkbank-model`
+and into `pyo3/src/pytypes.rs`, which keeps PyO3 glue at the binding edge
+instead of in the shared model crate.
+
+The default editable build is intentionally slim. It builds only the extension
+surface, leaving the embedded CLI bridge and Rev.AI bridge for the full
+packaged profile. In a source checkout, the Python console-script wrapper can
+still run `batchalign3` by falling back to the repo CLI.
 
 | Crate | Location | Purpose |
 |-------|----------|---------|
@@ -70,7 +82,7 @@ The PyO3 crate is organized by domain. `pyo3/src/lib.rs` declares:
 | `parse` | Pure-Rust parse helpers |
 | `metadata` | Metadata extraction from CHAT headers |
 | `pyfunctions` | Standalone `#[pyfunction]`s (see below) |
-| `cli_entry` | Console_scripts entry point for `batchalign3` command |
+| `cli_entry` | Native CLI bridge called by the Python `batchalign3` wrapper |
 | `py_json_bridge` | JSON serialization/deserialization for Python ↔ Rust |
 | `revai` | Rev.AI native HTTP client |
 
@@ -178,7 +190,15 @@ Python consumes, rebuild the extension with the repo-native command:
 make build-python
 ```
 
-This runs `uv run maturin develop -m pyo3/Cargo.toml` under the hood.
+This runs `uv run maturin develop -m pyo3/Cargo.toml --no-default-features -F
+pyo3/extension-module` under the hood.
+
+If you need to verify the packaged install surface instead of the fast dev
+loop, run:
+
+```bash
+make build-python-full
+```
 
 If you also plan to validate the standalone Rust CLI directly after a shared
 crate change, rebuild that binary too:
@@ -224,8 +244,8 @@ CPU-bound Rust work does not block other Python threads, while the callback
 2. Add the inner logic in the corresponding `*_ops.rs` module.
 3. Write Rust tests.
 4. Regenerate the grammar if you changed `grammar.js`.
-5. Rebuild `batchalign_core` (`make build-python`, which runs
-   `uv run maturin develop -m pyo3/Cargo.toml`).
+5. Rebuild `batchalign_core` (`make build-python` for the fast loop, or
+   `make build-python-full` when you need the embedded CLI bridge too).
 6. Call the new function from Python — either through the worker dispatch
    (`batchalign/worker/_infer.py`) or through `pipeline_api.py` operations.
 7. Test against real corpus data, not just unit tests.

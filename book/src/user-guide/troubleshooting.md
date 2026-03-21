@@ -264,8 +264,8 @@ Look at the `capabilities` list. If the command you need is missing:
    - `opensmile` needs `opensmile`
    - `avqi` needs `parselmouth` and `torchaudio`
 
-   All of these are included in the base `batchalign3` package. Only
-   HK/Cantonese engines require optional extras (`batchalign3[hk]`).
+   All of these are included in the base `batchalign3` package, including the
+   Cantonese/HK providers.
 
 3. **Restart the server** after installing missing packages — capabilities are
    detected once at startup:

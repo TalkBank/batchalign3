@@ -1,7 +1,7 @@
 # Building & Development
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last modified:** 2026-03-21 07:16 EDT
 
 Development is supported on **Windows, macOS, and Linux**. The instructions below use Unix shell syntax; on Windows, use PowerShell or Git Bash equivalently.
 
@@ -29,6 +29,8 @@ make build
 
 If you do not need the dashboard build during iteration, you can rebuild just
 the Rust/PyO3 surfaces with `make build-python` and `make build-rust`.
+For the fastest contributor loop, `make build-python` is the slim local-dev
+profile and `make build-python-full` is the packaged-release surface.
 
 The expected directory layout:
 
@@ -40,25 +42,30 @@ parent/
 
 This creates a `.venv` managed by uv. Never use `pip install` directly.
 
-The base `make sync` environment does **not** include optional HK/Cantonese
-engines. If you need to exercise those providers from a source checkout, sync
-the matching extras into the repo venv explicitly:
-
-```bash
-uv sync --group dev --extra hk
-# or a narrower subset:
-uv sync --group dev --extra hk-tencent
-```
-
-`uv sync` is declarative about extras. A later sync only includes the extras
-named on that command, so include the full set you still need rather than
-assuming separate `uv sync --extra ...` calls accumulate.
+`make sync` provisions the same built-in engine surface as the base package,
+including Cantonese/HK providers. There is no separate HK-specific dev extra
+path.
 
 ## Running the CLI
 
-`batchalign3` is a Rust binary, not a Python console-script entry point. Use the
-compiled binary or `cargo run` during development. Reserve `uv run` for Python
-tools such as `pytest`, `mypy`, and `maturin`.
+In a source checkout, `uv run batchalign3` is still the normal way to invoke
+the installed console script. After `make build-python`, the Python wrapper
+falls back to the repo CLI when the embedded bridge is intentionally omitted,
+so the fast extension-only rebuild still leaves you with a runnable
+`batchalign3` command. This is the recommended loop while editing command
+semantics, workflow families, or most docs.
+
+For the fastest contributor loop, pair `make build-python` with one CLI build
+up front:
+
+```bash
+cargo build -p batchalign-cli
+```
+
+After that, repeated `uv run batchalign3 ...` invocations will use the local
+`target/debug/batchalign3` binary through the wrapper fallback. Reserve
+`uv run` for Python tools such as `pytest`, `mypy`, and `maturin` when you are
+not invoking the CLI.
 
 ```bash
 make build
@@ -80,7 +87,8 @@ crate, and the `batchalign_core` extension stay in sync:
 | --- | --- |
 | Python code only (`batchalign/`) | Nothing; the next worker process picks up the change |
 | Rust CLI / server (`crates/batchalign-cli/`, `crates/batchalign-app/`) | `cargo build -p batchalign-cli` or `make build-rust` |
-| Shared chat logic (`crates/batchalign-chat-ops/`) or PyO3 bridge (`pyo3/`) | `make build-python`; if you will run `./target/debug/batchalign3` directly after a shared crate change, also rebuild the CLI or use `cargo run -p batchalign-cli -- ...` |
+| Shared chat logic (`crates/batchalign-chat-ops/`) or PyO3 bridge (`pyo3/`) | `make build-python`; for the fastest CLI loop in a source checkout, also build the CLI once (`cargo build -p batchalign-cli` or `make build-rust`) so the wrapper can fall back to `target/debug/batchalign3` |
+| Workflow-layer changes (`crates/batchalign-app/src/workflow/`) | `make build-rust` and usually `make build-python` if the CLI bridge surface changed |
 | Cross-cutting or dashboard changes | `make build` (requires Node.js + npm because it rebuilds the embedded dashboard) |
 
 ## Rebuilding the Rust Extension
@@ -92,58 +100,39 @@ The repo-native rebuild path is:
 make build-python
 ```
 
-This runs `uv run maturin develop -m pyo3/Cargo.toml` under the hood.
+This is the **slim local-dev** PyO3 profile. It skips the heavy CLI-entry and
+Rev.AI bridge features so local rebuilds do not always drag those crates into
+the extension build graph. In a source checkout, the Python wrapper falls back
+to the repo CLI when the embedded bridge is absent.
+
+When you need to verify the packaged-release feature set, use:
+
+```bash
+make build-python-full
+```
+
+That target builds the fuller extension profile used by the packaged install
+path, including the embedded CLI bridge and Rev.AI bridge. Use it when you are
+changing the packaging contract, not for ordinary workflow development.
+
+## Where Command Logic Should Live
+
+If you are changing command behavior, the first stop should be
+`crates/batchalign-app/src/workflow/`.
+
+- Workflow families own command semantics and typed intermediate bundles.
+- `crates/batchalign-app/src/runner/` owns job lifecycle and queueing.
+- `crates/batchalign-cli/src/dispatch/` should stay thin and focus on
+  argument parsing, capability gating, and whether a command runs locally or
+  through the server.
+- `pyo3/` should stay a thin bridge, not the place where new command logic is
+  invented.
 
 Run the Rust test suite to verify your changes:
 
 ```bash
 cargo nextest run --manifest-path pyo3/Cargo.toml
 ```
-
-## Pre-push Checks
-
-Install the hook once with `make install-hooks`. On every `git push` it runs
-the checks below in order and aborts the push on the first failure.
-
-| Gate | Command | What it catches |
-| --- | --- | --- |
-| **Formatting** | `cargo fmt --all -- --check` | Unformatted Rust code that CI will reject |
-| **Clippy** | `cargo clippy --workspace --all-targets -- -D warnings` | Lint warnings promoted to errors; also proves compilation across all targets |
-| **Dashboard API drift** | `bash scripts/check_dashboard_api_drift.sh` | REST API schema out of sync with generated TypeScript (CI fails on drift) |
-
-### Why not `cargo check`?
-
-`cargo check --workspace` was removed from the hook because `cargo clippy
---workspace --all-targets` is a strict superset — it invokes the same type
-system and borrow checker, then also runs lints. Running both just doubles
-compile time for no additional signal.
-
-### Why not mypy?
-
-mypy is run in `make ci-local` and in CI, but is excluded from the pre-push
-hook because it is noticeably slower on first run (cold transitive import
-resolution) and produces noise from vendored stub packages outside our control.
-Run it manually before committing Python changes:
-
-```bash
-uv run mypy
-# or together with clippy:
-make lint
-```
-
-### Why not IPC schema drift?
-
-IPC schema drift (`make check-ipc-drift`) is also in `make ci-local` but not
-the pre-push hook because it requires a full Rust build of the schema-generation
-binary, which is expensive. Run it manually when you change any Rust struct
-with `#[derive(schemars::JsonSchema)]` that crosses the Python worker boundary.
-
-### Cost of a CI failure
-
-CI minutes on GitHub Actions are finite and failures block merges. Each full
-Rust CI run takes 8–15 minutes. The pre-push hook's goal is to catch the
-commonest CI killers (formatting, clippy, API drift) in under a minute on
-a warm build cache.
 
 ## Type Checking
 

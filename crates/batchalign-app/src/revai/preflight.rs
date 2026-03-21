@@ -308,7 +308,7 @@ mod tests {
     async fn preflight_collects_successes_and_failures() {
         let plan = RevAiPreflightPlan {
             audio_paths: vec![PathBuf::from("/tmp/a.wav"), PathBuf::from("/tmp/b.wav")],
-            lang: crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng")),
+            lang: crate::api::LanguageSpec::Resolved(LanguageCode3::eng()),
             num_speakers: NumSpeakers(2),
             max_concurrent: 2,
         };
@@ -347,7 +347,7 @@ mod tests {
                 PathBuf::from("/tmp/b.wav"),
                 PathBuf::from("/tmp/c.wav"),
             ],
-            lang: crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng")),
+            lang: crate::api::LanguageSpec::Resolved(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             max_concurrent: 1,
         };
@@ -377,15 +377,15 @@ mod tests {
     #[test]
     fn language_hint_maps_common_codes() {
         assert_eq!(
-            RevAiLanguageHint::from(&LanguageCode3::from("eng")).as_str(),
+            RevAiLanguageHint::from(&LanguageCode3::eng()).as_str(),
             "en"
         );
         assert_eq!(
-            RevAiLanguageHint::from(&LanguageCode3::from("spa")).as_str(),
+            RevAiLanguageHint::from(&LanguageCode3::spa()).as_str(),
             "es"
         );
         assert_eq!(
-            RevAiLanguageHint::from(&LanguageCode3::from("zho")).as_str(),
+            RevAiLanguageHint::from(&LanguageCode3::zho()).as_str(),
             "cmn"
         );
     }

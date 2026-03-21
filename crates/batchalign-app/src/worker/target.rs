@@ -5,6 +5,7 @@
 //! workers are always bootstrapped around one inference task.
 
 use crate::api::CommandName;
+use crate::workflow::command_workflow_descriptor;
 
 use super::InferTask;
 
@@ -116,17 +117,7 @@ impl WorkerTarget {
 
     /// Return the infer-task worker target used for one released command.
     pub(crate) fn for_command(command: &CommandName) -> Option<Self> {
-        let task = match command.as_ref() {
-            "morphotag" | "compare" => InferTask::Morphosyntax,
-            "utseg" => InferTask::Utseg,
-            "translate" => InferTask::Translate,
-            "coref" => InferTask::Coref,
-            "align" => InferTask::Fa,
-            "transcribe" | "transcribe_s" | "benchmark" => InferTask::Asr,
-            "opensmile" => InferTask::Opensmile,
-            "avqi" => InferTask::Avqi,
-            _ => return None,
-        };
+        let task = command_workflow_descriptor(command)?.infer_task;
         Some(Self::InferTask(task))
     }
 }

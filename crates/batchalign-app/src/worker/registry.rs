@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::api::LanguageCode3;
+use crate::api::WorkerLanguage;
 use crate::worker::tcp_handle::{TcpWorkerHandle, TcpWorkerInfo};
 use crate::worker::{WorkerPid, WorkerProfile};
 
@@ -61,8 +61,8 @@ pub struct DiscoveredWorker {
     pub entry: RegistryEntry,
     /// Parsed worker profile.
     pub profile: WorkerProfile,
-    /// Parsed language code.
-    pub lang: LanguageCode3,
+    /// Parsed worker-runtime language string.
+    pub lang: WorkerLanguage,
 }
 
 // ---------------------------------------------------------------------------
@@ -170,14 +170,14 @@ pub async fn discover_workers(
             continue;
         };
 
-        let lang = match LanguageCode3::try_new(&entry.lang) {
+        let lang = match WorkerLanguage::parse_untrusted(&entry.lang) {
             Ok(code) => code,
             Err(e) => {
                 warn!(
                     lang = %entry.lang,
                     pid = entry.pid,
                     error = %e,
-                    "Registry entry has invalid language code, skipping"
+                    "Registry entry has invalid worker language, skipping"
                 );
                 stale_indices.push(i);
                 continue;

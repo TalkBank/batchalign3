@@ -1,0 +1,314 @@
+//! Generic workflow harness for Rust-owned text commands that can run either
+//! per-file or as one cross-file batch.
+//!
+//! This keeps the contributor-facing request/output shape consistent across
+//! commands like utseg, translate, and coref while still allowing each command
+//! to keep its own orchestration internals.
+
+use std::marker::PhantomData;
+
+use async_trait::async_trait;
+
+use crate::api::{ChatText, FileName, LanguageCode3};
+use crate::error::ServerError;
+use super::{CrossFileBatchWorkflow, PerFileWorkflow};
+
+/// Owned serialized CHAT text produced by a text workflow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedChatText(String);
+
+impl OwnedChatText {
+    /// Wrap one owned CHAT string.
+    pub(crate) fn new(text: String) -> Self {
+        Self(text)
+    }
+
+    /// Consume into the underlying `String`.
+    pub(crate) fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for OwnedChatText {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl std::fmt::Display for OwnedChatText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::ops::Deref for OwnedChatText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for OwnedChatText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Per-file error emitted by a text workflow after file identity is already known.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[error("{message}")]
+pub(crate) struct TextWorkflowFileError {
+    message: String,
+}
+
+impl TextWorkflowFileError {
+    /// Construct one file-scoped workflow error from a message.
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Consume into the legacy message form used by older runner code.
+    pub(crate) fn into_message(self) -> String {
+        self.message
+    }
+}
+
+impl From<String> for TextWorkflowFileError {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for TextWorkflowFileError {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+/// Named per-file outcome for one text workflow batch.
+#[derive(Debug, Clone)]
+pub(crate) struct TextBatchFileResult {
+    /// Stable file identity for this output or error.
+    pub filename: FileName,
+    /// File-local workflow outcome.
+    pub result: Result<OwnedChatText, TextWorkflowFileError>,
+}
+
+/// Cross-file outputs for one text workflow family.
+pub(crate) type TextBatchFileResults = Vec<TextBatchFileResult>;
+
+impl TextBatchFileResult {
+    /// Construct one successful named file result.
+    pub(crate) fn ok(filename: impl Into<FileName>, text: impl Into<OwnedChatText>) -> Self {
+        Self {
+            filename: filename.into(),
+            result: Ok(text.into()),
+        }
+    }
+
+    /// Construct one failed named file result.
+    pub(crate) fn err(
+        filename: impl Into<FileName>,
+        error: impl Into<TextWorkflowFileError>,
+    ) -> Self {
+        Self {
+            filename: filename.into(),
+            result: Err(error.into()),
+        }
+    }
+}
+
+/// Owned named input for one CHAT file in a batch workflow.
+#[derive(Debug, Clone)]
+pub(crate) struct TextBatchFileInput {
+    /// Stable file identity for this input.
+    pub filename: FileName,
+    /// Owned serialized CHAT document for this file.
+    pub chat_text: OwnedChatText,
+}
+
+impl TextBatchFileInput {
+    /// Construct one named batch input from a filename and CHAT text.
+    pub(crate) fn new(
+        filename: impl Into<FileName>,
+        chat_text: impl Into<OwnedChatText>,
+    ) -> Self {
+        Self {
+            filename: filename.into(),
+            chat_text: chat_text.into(),
+        }
+    }
+
+}
+
+/// Convert one legacy tuple batch shape into the typed file-result shape.
+pub(crate) fn wrap_legacy_batch_results(
+    results: Vec<(String, Result<String, String>)>,
+) -> TextBatchFileResults {
+    results
+        .into_iter()
+        .map(|(filename, result)| match result {
+            Ok(text) => TextBatchFileResult::ok(filename, text),
+            Err(error) => TextBatchFileResult::err(filename, error),
+        })
+        .collect()
+}
+
+/// Convert typed file results back into the legacy tuple shape at the older
+/// runner boundary that has not been cleaned up yet.
+pub(crate) fn into_legacy_batch_results(
+    results: TextBatchFileResults,
+) -> Vec<(String, Result<String, String>)> {
+    results
+        .into_iter()
+        .map(|result| {
+            let filename = result.filename.to_string();
+            let outcome = result
+                .result
+                .map(OwnedChatText::into_string)
+                .map_err(TextWorkflowFileError::into_message);
+            (filename, outcome)
+        })
+        .collect()
+}
+
+/// Borrowed request bundle for one per-file text workflow execution.
+pub(crate) struct TextPerFileWorkflowRequest<'a, Shared, Params> {
+    /// CHAT text to process.
+    pub chat_text: ChatText<'a>,
+    /// Primary language shaping the text workflow.
+    pub lang: &'a LanguageCode3,
+    /// Shared context owned by the workflow family.
+    pub shared: Shared,
+    /// Command-specific parameters for this execution.
+    pub params: Params,
+}
+
+/// Borrowed request bundle for one cross-file text workflow execution.
+pub(crate) struct TextBatchWorkflowRequest<'a, Shared, Params> {
+    /// Files and their CHAT text payloads.
+    pub files: &'a [TextBatchFileInput],
+    /// Primary language shaping the text workflow.
+    pub lang: &'a LanguageCode3,
+    /// Shared context owned by the workflow family.
+    pub shared: Shared,
+    /// Command-specific parameters shared across the batch.
+    pub params: Params,
+}
+
+/// Command-specific behavior for a Rust-owned text workflow family.
+#[async_trait]
+pub(crate) trait TextBatchOperation {
+    /// Shared context threaded through this workflow family.
+    type Shared<'a>: Send
+    where
+        Self: 'a;
+
+    /// Command-specific parameters threaded through the workflow.
+    type Params<'a>: Send
+    where
+        Self: 'a;
+
+    /// Run the command for one CHAT file.
+    async fn run_single(
+        chat_text: ChatText<'_>,
+        lang: &LanguageCode3,
+        shared: Self::Shared<'_>,
+        params: Self::Params<'_>,
+    ) -> Result<String, ServerError>;
+
+    /// Run the command over a batch of CHAT files.
+    async fn run_batch(
+        files: &[TextBatchFileInput],
+        lang: &LanguageCode3,
+        shared: Self::Shared<'_>,
+        params: Self::Params<'_>,
+    ) -> TextBatchFileResults;
+}
+
+/// Generic workflow wrapper around one [`TextBatchOperation`] implementation.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TextBatchWorkflow<O>(PhantomData<O>);
+
+impl<O> TextBatchWorkflow<O> {
+    /// Construct the zero-sized workflow wrapper.
+    pub(crate) const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<O> TextBatchWorkflow<O>
+where
+    O: TextBatchOperation + Send + Sync + 'static,
+{
+    /// Run one per-file text workflow without forcing call sites to disambiguate
+    /// between the per-file and batch trait impls.
+    pub(crate) async fn run_per_file<'a>(
+        &self,
+        request: TextPerFileWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>,
+    ) -> Result<String, ServerError> {
+        O::run_single(
+            request.chat_text,
+            request.lang,
+            request.shared,
+            request.params,
+        )
+        .await
+    }
+
+    /// Run one cross-file text workflow without wrapping the naturally
+    /// infallible batch adapter in a `Result` and then unwrapping it.
+    pub(crate) async fn run_batch_files<'a>(
+        &self,
+        request: TextBatchWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>,
+    ) -> TextBatchFileResults {
+        O::run_batch(request.files, request.lang, request.shared, request.params).await
+    }
+}
+
+#[async_trait]
+impl<O> PerFileWorkflow for TextBatchWorkflow<O>
+where
+    O: TextBatchOperation + Send + Sync + 'static,
+{
+    type Output = String;
+    type Request<'a>
+        = TextPerFileWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>
+    where
+        Self: 'a;
+
+    async fn run(&self, request: Self::Request<'_>) -> Result<Self::Output, ServerError> {
+        O::run_single(
+            request.chat_text,
+            request.lang,
+            request.shared,
+            request.params,
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl<O> CrossFileBatchWorkflow for TextBatchWorkflow<O>
+where
+    O: TextBatchOperation + Send + Sync + 'static,
+{
+    type Output = TextBatchFileResults;
+    type Request<'a>
+        = TextBatchWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>
+    where
+        Self: 'a;
+
+    async fn run(&self, request: Self::Request<'_>) -> Result<Self::Output, ServerError> {
+        Ok(O::run_batch(
+            request.files,
+            request.lang,
+            request.shared,
+            request.params,
+        )
+        .await)
+    }
+}

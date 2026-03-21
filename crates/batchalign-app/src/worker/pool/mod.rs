@@ -22,6 +22,7 @@
 //! where a tokio mutex was held for 10–300 seconds during dispatch.
 
 mod checkout;
+mod execute_v2;
 mod lifecycle;
 pub(crate) mod reaper;
 pub(crate) mod shared_gpu;
@@ -32,12 +33,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-use crate::api::{CommandName, LanguageCode3, NumSpeakers};
-use crate::types::worker_v2::{
-    AsrBackendV2, ExecuteRequestV2, ExecuteResponseV2, FaBackendV2, InferenceTaskV2, TaskRequestV2,
-};
+use crate::api::{CommandName, LanguageCode3, NumSpeakers, WorkerLanguage};
+use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::{
-    BatchInferRequest, BatchInferResponse, InferTask, WorkerCapabilities, WorkerPid, WorkerProfile,
+    BatchInferRequest, BatchInferResponse, WorkerCapabilities, WorkerPid, WorkerProfile,
 };
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -49,8 +48,29 @@ use crate::worker::python::resolve_python_executable;
 use crate::worker::registry;
 use crate::worker::tcp_handle::{TcpWorkerHandle, TcpWorkerInfo};
 
+// ---------------------------------------------------------------------------
+// Poison-recovery helper for std::sync::Mutex
+// ---------------------------------------------------------------------------
+
+/// Lock a `std::sync::Mutex`, recovering from poison if a previous thread
+/// panicked while holding it.
+///
+/// All `std::sync::Mutex` instances in the worker pool guard `VecDeque` or
+/// `HashMap` containers with short (microsecond) critical sections. If a
+/// panic occurs during a push/pop, the data structure may have been partially
+/// mutated, but it is still structurally valid -- the worst case is a
+/// missing or double-counted worker, which the health checker will reconcile.
+/// Recovering from poison keeps the server alive instead of cascading the
+/// panic into every subsequent request.
+pub(super) fn lock_recovered<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        warn!("Recovering from poisoned std::sync::Mutex in worker pool");
+        poisoned.into_inner()
+    })
+}
+
 /// Key for looking up workers: (worker profile, lang, engine overrides).
-type WorkerKey = (WorkerProfile, LanguageCode3, String);
+type WorkerKey = (WorkerProfile, WorkerLanguage, String);
 
 /// Lifecycle state of background model warmup.
 #[derive(
@@ -273,7 +293,7 @@ type GroupsMap = Arc<std::sync::Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>;
 // ---------------------------------------------------------------------------
 
 /// Key for shared GPU workers: (lang, engine_overrides).
-type GpuWorkerKey = (LanguageCode3, String);
+type GpuWorkerKey = (WorkerLanguage, String);
 
 /// Manages a pool of Python worker processes.
 pub struct WorkerPool {
@@ -414,7 +434,7 @@ impl WorkerPool {
                             &worker.lang,
                             &worker.entry.engine_overrides,
                         );
-                        group.tcp_workers.lock().unwrap().push_back(handle);
+                        lock_recovered(&group.tcp_workers).push_back(handle);
                         group.tcp_available.add_permits(1);
                         group.total.fetch_add(1, Ordering::Relaxed);
                         info!(
@@ -450,7 +470,7 @@ impl WorkerPool {
     async fn checkout(
         &self,
         profile: &WorkerProfile,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Result<CheckedOutWorker, WorkerError> {
         let group = self.get_or_create_group(profile, lang, engine_overrides);
@@ -460,7 +480,7 @@ impl WorkerPool {
             match group.available.try_acquire() {
                 Ok(permit) => {
                     permit.forget(); // We manage permits manually
-                    match group.idle.lock().unwrap().pop_front() {
+                    match lock_recovered(&group.idle).pop_front() {
                         Some(handle) => {
                             return Ok(CheckedOutWorker {
                                 handle: Some(handle),
@@ -505,7 +525,7 @@ impl WorkerPool {
                 .map_err(|_| WorkerError::SpawnFailed("worker pool semaphore closed".into()))?;
             permit.forget();
 
-            match group.idle.lock().unwrap().pop_front() {
+            match lock_recovered(&group.idle).pop_front() {
                 Some(handle) => {
                     return Ok(CheckedOutWorker {
                         handle: Some(handle),
@@ -533,16 +553,21 @@ impl WorkerPool {
     ) -> Result<BatchInferResponse, WorkerError> {
         let profile = WorkerProfile::for_task(request.task);
         let engine_overrides = &self.config.engine_overrides;
+        let worker_lang = WorkerLanguage::from(lang);
 
         // Try TCP worker first.
-        if let Some(mut tcp_handle) = self.try_checkout_tcp(&profile, lang, engine_overrides) {
+        if let Some(mut tcp_handle) =
+            self.try_checkout_tcp(&profile, &worker_lang, engine_overrides)
+        {
             let result = tcp_handle.batch_infer(request).await;
-            self.return_tcp_worker(tcp_handle, &profile, lang, engine_overrides);
+            self.return_tcp_worker(tcp_handle, &profile, &worker_lang, engine_overrides);
             return result;
         }
 
         // Fall back to stdio worker.
-        let mut worker = self.checkout(&profile, lang, engine_overrides).await?;
+        let mut worker = self
+            .checkout(&profile, &worker_lang, engine_overrides)
+            .await?;
         worker.batch_infer(request).await
     }
 
@@ -550,16 +575,16 @@ impl WorkerPool {
     fn try_checkout_tcp(
         &self,
         profile: &WorkerProfile,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Option<TcpWorkerHandle> {
         let key: WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
-        let groups = self.groups.lock().unwrap();
+        let groups = lock_recovered(&self.groups);
         let group = groups.get(&key)?;
         match group.tcp_available.try_acquire() {
             Ok(permit) => {
                 permit.forget();
-                group.tcp_workers.lock().unwrap().pop_front()
+                lock_recovered(&group.tcp_workers).pop_front()
             }
             Err(_) => None,
         }
@@ -570,13 +595,13 @@ impl WorkerPool {
         &self,
         handle: TcpWorkerHandle,
         profile: &WorkerProfile,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) {
         let key: WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
-        let groups = self.groups.lock().unwrap();
+        let groups = lock_recovered(&self.groups);
         if let Some(group) = groups.get(&key) {
-            group.tcp_workers.lock().unwrap().push_back(handle);
+            lock_recovered(&group.tcp_workers).push_back(handle);
             group.tcp_available.add_permits(1);
         }
     }
@@ -588,9 +613,10 @@ impl WorkerPool {
     /// then fall back to the traditional exclusive checkout model.
     pub async fn dispatch_execute_v2(
         &self,
-        lang: &LanguageCode3,
+        lang: impl Into<WorkerLanguage>,
         request: &ExecuteRequestV2,
     ) -> Result<ExecuteResponseV2, WorkerError> {
+        let lang = lang.into();
         let (profile, worker_lang, engine_overrides) =
             execute_v2_worker_key(lang, request, &self.config.engine_overrides)?;
 
@@ -624,7 +650,7 @@ impl WorkerPool {
     /// [`SharedGpuWorker`](shared_gpu::SharedGpuWorker) pattern.
     async fn dispatch_gpu_execute_v2(
         &self,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
         request: &ExecuteRequestV2,
     ) -> Result<ExecuteResponseV2, WorkerError> {
@@ -656,7 +682,7 @@ impl WorkerPool {
     /// before file dispatch begins.
     async fn get_or_create_gpu_worker(
         &self,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Result<Arc<shared_gpu::SharedGpuWorker>, WorkerError> {
         let key = (lang.clone(), engine_overrides.to_owned());
@@ -705,7 +731,7 @@ impl WorkerPool {
         let config = WorkerConfig {
             python_path: self.config.python_path.clone(),
             profile: WorkerProfile::Stanza,
-            lang: "eng".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             engine_overrides: self.config.engine_overrides.clone(),
             test_echo: self.config.test_echo,
@@ -759,29 +785,27 @@ impl WorkerPool {
     /// Each command spawns concurrently so independent models load in parallel.
     /// The caller is responsible for setting [`mark_warmup_complete()`] after
     /// this returns (or spawning this method in a background task).
-    pub async fn warmup(&self, commands: &[(String, String)]) {
+    pub async fn warmup(&self, targets: &[crate::server::WarmupTarget]) {
         use crate::worker::handle::spawn_tcp_daemon;
 
         struct WarmupItem {
             profile: WorkerProfile,
-            lang: LanguageCode3,
+            lang: WorkerLanguage,
             engine_overrides: String,
         }
 
-        let items: Vec<WarmupItem> = commands
+        let items: Vec<WarmupItem> = targets
             .iter()
-            .filter_map(|(command, lang)| {
-                let command = CommandName::from(command.clone());
-                let lang = LanguageCode3::from(lang.clone());
-                let profile = WorkerProfile::for_command(&command);
+            .filter_map(|target| {
+                let profile = WorkerProfile::for_command(&target.command);
                 match profile {
                     Some(profile) => Some(WarmupItem {
                         profile,
-                        lang,
+                        lang: target.lang.clone(),
                         engine_overrides: self.config.engine_overrides.clone(),
                     }),
                     None => {
-                        warn!(command = %command, lang = %lang, "Skipping warmup for unknown command profile");
+                        warn!(command = %target.command, lang = %target.lang, "Skipping warmup for unknown command profile");
                         None
                     }
                 }
@@ -875,14 +899,14 @@ impl WorkerPool {
                                 item.lang.clone(),
                                 item.engine_overrides.clone(),
                             );
-                            let mut groups = groups_ref.lock().unwrap();
+                            let mut groups = lock_recovered(&groups_ref);
                             let group = groups
                                 .entry(key)
                                 .or_insert_with(|| Arc::new(WorkerGroup::new()))
                                 .clone();
                             drop(groups);
 
-                            group.tcp_workers.lock().unwrap().push_back(handle);
+                            lock_recovered(&group.tcp_workers).push_back(handle);
                             group.tcp_available.add_permits(1);
                             group.total.fetch_add(1, Ordering::Relaxed);
                             info!(
@@ -931,7 +955,12 @@ impl WorkerPool {
     ///
     /// Delegates to [`pre_scale_with_overrides`] using the pool's default
     /// engine overrides.
-    pub async fn pre_scale(&self, command: &CommandName, lang: &LanguageCode3, target: usize) {
+    pub async fn pre_scale(
+        &self,
+        command: &CommandName,
+        lang: impl Into<WorkerLanguage>,
+        target: usize,
+    ) {
         self.pre_scale_with_overrides(command, lang, target, &self.config.engine_overrides)
             .await;
     }
@@ -956,10 +985,11 @@ impl WorkerPool {
     pub async fn pre_scale_with_overrides(
         &self,
         command: &CommandName,
-        lang: &LanguageCode3,
+        lang: impl Into<WorkerLanguage>,
         target: usize,
         engine_overrides: &str,
     ) {
+        let lang = lang.into();
         let target = target.min(self.config.max_workers_per_key);
         let Some(profile) = WorkerProfile::for_command(command) else {
             warn!(command = %command, lang = %lang, "Skipping pre-scale for unknown command profile");
@@ -981,10 +1011,10 @@ impl WorkerPool {
         } else {
             let key: WorkerKey = (profile, lang.clone(), engine_overrides.to_owned());
             let has_tcp = {
-                let groups = self.groups.lock().unwrap();
+                let groups = lock_recovered(&self.groups);
                 groups
                     .get(&key)
-                    .is_some_and(|g| !g.tcp_workers.lock().unwrap().is_empty())
+                    .is_some_and(|g| !lock_recovered(&g.tcp_workers).is_empty())
             };
             if has_tcp {
                 info!(
@@ -1002,7 +1032,7 @@ impl WorkerPool {
         // the TOCTOU race in `get_or_create_gpu_worker` where multiple tasks
         // would each try to spawn their own worker process.
         if profile.is_concurrent() {
-            match self.get_or_create_gpu_worker(lang, engine_overrides).await {
+            match self.get_or_create_gpu_worker(&lang, engine_overrides).await {
                 Ok(_) => {
                     info!(
                         command = %command,
@@ -1023,7 +1053,7 @@ impl WorkerPool {
             return;
         }
 
-        let group = self.get_or_create_group(&profile, lang, engine_overrides);
+        let group = self.get_or_create_group(&profile, &lang, engine_overrides);
 
         loop {
             let current = group.total.load(Ordering::Relaxed);
@@ -1032,7 +1062,7 @@ impl WorkerPool {
             }
 
             match self
-                .try_spawn_into_group(&group, &profile, lang, &self.config.engine_overrides)
+                .try_spawn_into_group(&group, &profile, &lang, &self.config.engine_overrides)
                 .await
             {
                 Ok(true) => {}      // Keep going
@@ -1091,12 +1121,12 @@ impl WorkerPool {
         }
 
         let all_groups: Vec<(WorkerKey, Arc<WorkerGroup>)> = {
-            let mut groups = self.groups.lock().unwrap();
+            let mut groups = lock_recovered(&self.groups);
             groups.drain().collect()
         };
 
         for (key, group) in all_groups {
-            let workers: Vec<WorkerHandle> = { group.idle.lock().unwrap().drain(..).collect() };
+            let workers: Vec<WorkerHandle> = { lock_recovered(&group.idle).drain(..).collect() };
             let idle_count = workers.len();
             let total = group.total.load(Ordering::Relaxed);
             let checked_out = total.saturating_sub(idle_count);
@@ -1135,8 +1165,9 @@ impl WorkerPool {
 /// goes out of scope without graceful shutdown.
 ///
 /// GPU workers behind `tokio::sync::Mutex` cannot be locked outside a
-/// runtime, but their inner `WorkerHandle` will be dropped when Arc
-/// refcounts hit zero — triggering `WorkerHandle::Drop` (SIGTERM+SIGKILL).
+/// runtime, but their shared-worker owners are dropped when Arc refcounts
+/// hit zero. The stdio variant's `Drop` impl kills the worker process; the
+/// TCP variant only disconnects from the daemon it does not own.
 impl Drop for WorkerPool {
     fn drop(&mut self) {
         self.cancel.cancel();
@@ -1162,7 +1193,8 @@ impl WorkerPool {
     /// Used by the memory gate to skip the system memory check when reusable
     /// workers already exist -- those workers are already loaded, so no new
     /// memory allocation is needed. Checks both stdio and TCP workers.
-    pub fn has_idle_workers(&self, command: &CommandName, lang: &LanguageCode3) -> bool {
+    pub fn has_idle_workers(&self, command: &CommandName, lang: impl Into<WorkerLanguage>) -> bool {
+        let lang = lang.into();
         let Some(profile) = WorkerProfile::for_command(command) else {
             return false;
         };
@@ -1171,26 +1203,26 @@ impl WorkerPool {
         if profile.is_concurrent() {
             // Check TCP GPU workers first.
             if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock()
-                && tcp_gpu_workers.keys().any(|(l, _)| l == lang)
+                && tcp_gpu_workers.keys().any(|(l, _)| l == &lang)
             {
                 return true;
             }
             let gpu_workers = self.gpu_workers.try_lock().ok();
             if let Some(gpu_workers) = gpu_workers {
-                return gpu_workers.keys().any(|(l, _)| l == lang);
+                return gpu_workers.keys().any(|(l, _)| l == &lang);
             }
             return false;
         }
 
-        let groups = self.groups.lock().unwrap();
+        let groups = lock_recovered(&self.groups);
         groups
             .iter()
             .any(|((group_profile, group_lang, _), group)| {
-                if *group_profile != profile || group_lang != lang {
+                if *group_profile != profile || group_lang != &lang {
                     return false;
                 }
-                !group.idle.lock().unwrap().is_empty()
-                    || !group.tcp_workers.lock().unwrap().is_empty()
+                !lock_recovered(&group.idle).is_empty()
+                    || !lock_recovered(&group.tcp_workers).is_empty()
             })
     }
 
@@ -1199,7 +1231,7 @@ impl WorkerPool {
     /// Counts sequential group workers, shared GPU workers, and TCP workers.
     pub fn worker_count(&self) -> usize {
         let groups_count: usize = {
-            let groups = self.groups.lock().unwrap();
+            let groups = lock_recovered(&self.groups);
             groups
                 .values()
                 .map(|g| g.total.load(Ordering::Relaxed))
@@ -1218,12 +1250,12 @@ impl WorkerPool {
     ///
     /// Includes both sequential group workers and shared GPU workers.
     pub fn worker_keys(&self) -> Vec<String> {
-        let groups = self.groups.lock().unwrap();
+        let groups = lock_recovered(&self.groups);
         let mut keys: Vec<String> = groups
             .iter()
             .map(|((profile, lang, engine_overrides), group)| {
                 let total = group.total.load(Ordering::Relaxed);
-                let idle = group.idle.lock().unwrap().len();
+                let idle = lock_recovered(&group.idle).len();
                 let suffix = if engine_overrides.is_empty() {
                     String::new()
                 } else {
@@ -1268,10 +1300,10 @@ impl WorkerPool {
     /// Reports idle sequential workers and shared GPU workers. Checked-out
     /// sequential workers are invisible; use `worker_count()` for full totals.
     pub fn worker_summary(&self) -> Vec<String> {
-        let groups = self.groups.lock().unwrap();
+        let groups = lock_recovered(&self.groups);
         let mut summary = Vec::new();
         for group in groups.values() {
-            let idle = group.idle.lock().unwrap();
+            let idle = lock_recovered(&group.idle);
             for worker in idle.iter() {
                 summary.push(format!(
                     "{}:{}:pid={}:transport={}",
@@ -1307,9 +1339,9 @@ impl WorkerPool {
 
         // Include TCP workers from sequential groups.
         {
-            let groups = self.groups.lock().unwrap();
+            let groups = lock_recovered(&self.groups);
             for group in groups.values() {
-                let tcp = group.tcp_workers.lock().unwrap();
+                let tcp = lock_recovered(&group.tcp_workers);
                 for worker in tcp.iter() {
                     summary.push(format!(
                         "{}:{}:pid={}:transport=tcp",
@@ -1327,136 +1359,5 @@ impl WorkerPool {
 }
 
 /// Map one V2 task family onto the existing worker bootstrap profile space.
-fn infer_task_for_execute_v2(task: InferenceTaskV2) -> Result<InferTask, WorkerError> {
-    match task {
-        InferenceTaskV2::Morphosyntax => Ok(InferTask::Morphosyntax),
-        InferenceTaskV2::Utseg => Ok(InferTask::Utseg),
-        InferenceTaskV2::Translate => Ok(InferTask::Translate),
-        InferenceTaskV2::Coref => Ok(InferTask::Coref),
-        InferenceTaskV2::Asr => Ok(InferTask::Asr),
-        InferenceTaskV2::ForcedAlignment => Ok(InferTask::Fa),
-        InferenceTaskV2::Speaker => Ok(InferTask::Speaker),
-        InferenceTaskV2::Opensmile => Ok(InferTask::Opensmile),
-        InferenceTaskV2::Avqi => Ok(InferTask::Avqi),
-    }
-}
-
-fn execute_v2_worker_key(
-    lang: &LanguageCode3,
-    request: &ExecuteRequestV2,
-    default_engine_overrides: &str,
-) -> Result<(WorkerProfile, LanguageCode3, String), WorkerError> {
-    let infer_task = infer_task_for_execute_v2(request.task)?;
-    let engine_overrides =
-        execute_v2_engine_overrides(request).unwrap_or_else(|| default_engine_overrides.to_owned());
-    Ok((
-        WorkerProfile::for_task(infer_task),
-        lang.clone(),
-        engine_overrides,
-    ))
-}
-
-fn execute_v2_engine_overrides(request: &ExecuteRequestV2) -> Option<String> {
-    match &request.payload {
-        TaskRequestV2::Asr(request) => asr_backend_override_name(request.backend)
-            .map(|backend| format!(r#"{{"asr":"{backend}"}}"#)),
-        TaskRequestV2::ForcedAlignment(request) => Some(format!(
-            r#"{{"fa":"{}"}}"#,
-            fa_backend_override_name(request.backend)
-        )),
-        _ => None,
-    }
-}
-
-fn asr_backend_override_name(backend: AsrBackendV2) -> Option<&'static str> {
-    match backend {
-        AsrBackendV2::LocalWhisper => Some("whisper"),
-        AsrBackendV2::HkTencent => Some("tencent"),
-        AsrBackendV2::HkAliyun => Some("aliyun"),
-        AsrBackendV2::HkFunaudio => Some("funaudio"),
-        AsrBackendV2::Revai => None,
-    }
-}
-
-fn fa_backend_override_name(backend: FaBackendV2) -> &'static str {
-    match backend {
-        FaBackendV2::Whisper => "whisper",
-        FaBackendV2::Wave2vec => "wave2vec",
-        FaBackendV2::Wav2vecCanto => "wav2vec_canto",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::worker_v2::{
-        AsrInputV2, AsrRequestV2, FaTextModeV2, ForcedAlignmentRequestV2, PreparedAudioInputV2,
-        WorkerArtifactIdV2, WorkerRequestIdV2,
-    };
-
-    fn request_with_payload(task: InferenceTaskV2, payload: TaskRequestV2) -> ExecuteRequestV2 {
-        ExecuteRequestV2 {
-            request_id: WorkerRequestIdV2::from("req-1"),
-            task,
-            payload,
-            attachments: Vec::new(),
-        }
-    }
-
-    /// The V2 execute path should reuse the established infer-task worker
-    /// profiles instead of inventing a separate bootstrap namespace.
-    #[test]
-    fn maps_forced_alignment_execute_v2_to_fa_worker_profile() {
-        assert_eq!(
-            infer_task_for_execute_v2(InferenceTaskV2::ForcedAlignment).unwrap(),
-            InferTask::Fa
-        );
-    }
-
-    #[test]
-    fn execute_v2_asr_worker_key_uses_request_backend_override() {
-        let request = request_with_payload(
-            InferenceTaskV2::Asr,
-            TaskRequestV2::Asr(AsrRequestV2 {
-                lang: "fra".into(),
-                backend: AsrBackendV2::LocalWhisper,
-                input: AsrInputV2::PreparedAudio(PreparedAudioInputV2 {
-                    audio_ref_id: WorkerArtifactIdV2::from("audio-1"),
-                }),
-            }),
-        );
-
-        let key = execute_v2_worker_key(
-            &LanguageCode3::from("fra"),
-            &request,
-            r#"{"asr":"tencent"}"#,
-        )
-        .unwrap();
-
-        assert_eq!(key.0, WorkerProfile::for_task(InferTask::Asr));
-        assert_eq!(key.1, LanguageCode3::from("fra"));
-        assert_eq!(key.2, r#"{"asr":"whisper"}"#);
-    }
-
-    #[test]
-    fn execute_v2_fa_worker_key_uses_request_backend_override() {
-        let request = request_with_payload(
-            InferenceTaskV2::ForcedAlignment,
-            TaskRequestV2::ForcedAlignment(ForcedAlignmentRequestV2 {
-                backend: FaBackendV2::Wave2vec,
-                payload_ref_id: WorkerArtifactIdV2::from("payload-1"),
-                audio_ref_id: WorkerArtifactIdV2::from("audio-1"),
-                text_mode: FaTextModeV2::SpaceJoined,
-                pauses: false,
-            }),
-        );
-
-        let key =
-            execute_v2_worker_key(&LanguageCode3::from("eng"), &request, r#"{"fa":"whisper"}"#)
-                .unwrap();
-
-        assert_eq!(key.0, WorkerProfile::for_task(InferTask::Fa));
-        assert_eq!(key.1, LanguageCode3::from("eng"));
-        assert_eq!(key.2, r#"{"fa":"wave2vec"}"#);
-    }
-}
+// V2 execute helpers live in execute_v2.rs for browsability.
+use execute_v2::execute_v2_worker_key;

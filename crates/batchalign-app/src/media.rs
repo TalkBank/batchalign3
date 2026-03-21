@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use dashmap::DashMap;
+use tracing::{debug, warn};
 
 /// File extensions treated as audio/video during media walks.
 ///
@@ -24,8 +25,24 @@ const MEDIA_EXTENSIONS: &[&str] = &[".wav", ".mp3", ".mp4", ".m4a", ".flac", ".o
 /// per-root, so adding a new root does not invalidate existing entries.
 const CACHE_TTL_SECS: u64 = 60;
 
+/// One discovered media file: the directory it lives in and its filename.
+#[derive(Debug, Clone)]
+pub struct MediaEntry {
+    /// Parent directory path (e.g. `/data/media/subdir`).
+    pub dir_path: String,
+    /// Filename with extension (e.g. `interview.wav`).
+    pub filename: String,
+}
+
+impl MediaEntry {
+    /// Full path to the media file.
+    pub fn full_path(&self) -> String {
+        format!("{}/{}", self.dir_path, self.filename)
+    }
+}
+
 /// Cached walk results: `(timestamp, entries)`.
-type CacheEntry = (Instant, Vec<(String, String)>); // (dirpath, filename)
+type CacheEntry = (Instant, Vec<MediaEntry>);
 
 /// Locates audio/video files across configured media roots and named
 /// media mappings.
@@ -64,10 +81,10 @@ impl MediaResolver {
         }
     }
 
-    /// Walk a directory tree and return `(dirpath, filename)` pairs for media files.
+    /// Walk a directory tree and return discovered media entries.
     ///
     /// Results are cached for `CACHE_TTL_SECS` seconds.
-    fn walk_media(&self, root_dir: &str) -> Vec<(String, String)> {
+    fn walk_media(&self, root_dir: &str) -> Vec<MediaEntry> {
         let now = Instant::now();
 
         // Check cache
@@ -82,22 +99,37 @@ impl MediaResolver {
         let mut entries = Vec::new();
         let root_path = Path::new(root_dir);
         if root_path.is_dir() {
-            for entry in walkdir::WalkDir::new(root_path)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
+            for entry in walkdir::WalkDir::new(root_path) {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        warn!(
+                            root = %root_dir,
+                            error = %error,
+                            "Skipping unreadable media walk entry"
+                        );
+                        continue;
+                    }
+                };
                 if entry.file_type().is_file() {
                     let filename = entry.file_name().to_string_lossy().to_string();
                     if is_media_extension(&filename) {
-                        let dirpath = entry
-                            .path()
-                            .parent()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        entries.push((dirpath, filename));
+                        let Some(parent) = entry.path().parent() else {
+                            warn!(
+                                path = %entry.path().display(),
+                                "Skipping media file without parent directory"
+                            );
+                            continue;
+                        };
+                        let dir_path = parent.to_string_lossy().to_string();
+                        entries.push(MediaEntry { dir_path, filename });
                     }
                 }
             }
+        } else if root_path.exists() {
+            warn!(root = %root_dir, "Configured media root is not a directory");
+        } else {
+            debug!(root = %root_dir, "Configured media root does not exist");
         }
 
         self.cache
@@ -132,19 +164,19 @@ impl MediaResolver {
             let entries = self.walk_media(root);
 
             // Pass 1: exact filename match
-            for (dirpath, f) in &entries {
-                if f == name {
-                    return Some(format!("{dirpath}/{f}"));
+            for entry in &entries {
+                if entry.filename == name {
+                    return Some(entry.full_path());
                 }
             }
 
             // Pass 2: stem match with known extensions (only if name isn't already exact)
             if !name_has_media_ext {
-                for (dirpath, f) in &entries {
-                    let fp = Path::new(f);
+                for entry in &entries {
+                    let fp = Path::new(&entry.filename);
                     let f_stem = fp.file_stem().unwrap_or_default().to_string_lossy();
-                    if f_stem == name_stem && is_media_extension(f) {
-                        return Some(format!("{dirpath}/{f}"));
+                    if f_stem == name_stem && is_media_extension(&entry.filename) {
+                        return Some(entry.full_path());
                     }
                 }
             }
@@ -233,7 +265,7 @@ impl MediaResolver {
         }
 
         let entries = self.walk_media(&search_dir.to_string_lossy());
-        let mut names: Vec<String> = entries.into_iter().map(|(_, f)| f).collect();
+        let mut names: Vec<String> = entries.into_iter().map(|e| e.filename).collect();
         names.sort();
         names.dedup();
         names
@@ -263,8 +295,8 @@ impl MediaResolver {
             };
 
             let entries = self.walk_media(&search_dir);
-            for (_, f) in entries {
-                found.push(f);
+            for entry in entries {
+                found.push(entry.filename);
             }
         }
 

@@ -1,5 +1,7 @@
 # Server Mode
 
+**Last modified:** 2026-03-21 08:20 EDT
+
 Batchalign includes a built-in HTTP server managed by `batchalign3 serve ...`.
 The CLI is always a client: it either talks to an explicit remote server
 (`--server`) or to a local daemon.
@@ -90,6 +92,10 @@ OTLP tracing can be enabled by setting `BATCHALIGN_OTLP_ENDPOINT`
 
 Reference example files live in `examples/server.yaml` and
 `examples/launchd.plist`.
+
+`server.yaml` uses a strict schema. Unknown keys are rejected at startup
+instead of being silently ignored, so stale config like `warmup: false` must
+be updated to the current `warmup_commands: []` form.
 
 ## Remote use
 

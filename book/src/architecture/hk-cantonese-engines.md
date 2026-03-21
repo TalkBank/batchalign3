@@ -1,7 +1,7 @@
 # HK/Cantonese Engines: Migration and Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last modified:** 2026-03-21 07:16 EDT
 
 ## Overview
 
@@ -69,12 +69,12 @@ and document-facing semantics.
 
 ### Available Engines
 
-| Engine | Task | Module | Dependencies |
-|--------|------|--------|-------------|
-| `tencent` | ASR | `_tencent_asr.py`, `_tencent_api.py` | `pip install "batchalign3[hk-tencent]"` + credentials |
-| `aliyun` | ASR | `_aliyun_asr.py` | `pip install "batchalign3[hk-aliyun]"` + credentials |
-| `funaudio` | ASR | `_funaudio_asr.py`, `_funaudio_common.py` | `pip install "batchalign3[hk-funaudio]"` |
-| `wav2vec_canto` | FA | `_cantonese_fa.py` | `pip install "batchalign3[hk-cantonese-fa]"` |
+| Engine | Task | Module | Runtime requirements |
+|--------|------|--------|----------------------|
+| `tencent` | ASR | `_tencent_asr.py`, `_tencent_api.py` | Base package install + Tencent credentials |
+| `aliyun` | ASR | `_aliyun_asr.py` | Base package install + Aliyun credentials |
+| `funaudio` | ASR | `_funaudio_asr.py`, `_funaudio_common.py` | Base package install |
+| `wav2vec_canto` | FA | `_cantonese_fa.py` | Base package install |
 
 ### Credential Configuration
 
@@ -108,9 +108,9 @@ The plugin system (`batchalign.plugins`, `PluginDescriptor`, `InferenceProvider`
    isolation, and import errors created support burden.
 3. **Enum dispatch is simpler** — `AsrEngine::Tencent` in Rust and
    `AsrEngine.TENCENT` in Python are type-safe, discoverable, and testable.
-4. **Optional extras solve the dependency problem** — `pip install
-   "batchalign3[hk-tencent]"` is equivalent to installing a separate package
-   but without the discovery machinery.
+4. **Built-in runtime dependencies solve the packaging problem** — HK/Cantonese
+   engines now live in the same package/runtime surface as the rest of
+   `batchalign3`.
 
 The plugin system was deleted entirely: `plugins.py`, `PluginDescriptor`,
 `InferenceProvider`, `discover_plugins()`, and all plugin test infrastructure.

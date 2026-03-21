@@ -12,29 +12,27 @@
 
 use std::path::Path;
 
-use crate::api::LanguageCode3;
-use crate::params::{CachePolicy, MorphosyntaxParams};
+use crate::api::{ChatText, LanguageCode3};
+use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
-use batchalign_chat_ops::compare::{
-    clear_comparison, compare, format_metrics_csv, inject_comparison,
-};
-use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, MwtDict, TokenizationMode};
-use batchalign_chat_ops::parse::parse_lenient;
-use batchalign_chat_ops::serialize::to_chat_string;
-use tracing::{info, warn};
+use batchalign_chat_ops::morphosyntax::MwtDict;
 
 use crate::error::ServerError;
+use crate::workflow::ReferenceProjectionWorkflow;
+pub(crate) use crate::workflow::compare::CompareMaterializedOutputs;
+use crate::workflow::compare::{CompareWorkflow, CompareWorkflowRequest};
+use crate::workflow::text_batch::TextBatchFileInput;
 
 /// Process a single CHAT file through the compare pipeline.
 ///
-/// Returns `(annotated_chat_text, metrics_csv)`.
+/// Returns the released compare outputs for the current main-annotated workflow
+/// materialization.
 ///
 /// Steps:
 /// 1. Run morphosyntax on `main_text` (so it has %mor/%gra).
 /// 2. Parse gold file.
-/// 3. Compare main vs gold via DP alignment.
-/// 4. Inject `%xsrep` tiers.
-/// 5. Serialize and return metrics CSV.
+/// 3. Build the comparison bundle from main vs gold.
+/// 4. Materialize the current main-annotated output.
 pub(crate) async fn process_compare(
     main_text: &str,
     gold_text: &str,
@@ -42,55 +40,17 @@ pub(crate) async fn process_compare(
     services: PipelineServices<'_>,
     cache_policy: CachePolicy,
     mwt: &MwtDict,
-) -> Result<(String, String), ServerError> {
-    // 1. Run morphosyntax on main
-    let mor_params = MorphosyntaxParams {
-        lang,
-        tokenization_mode: TokenizationMode::Preserve,
-        cache_policy,
-        multilingual_policy: MultilingualPolicy::ProcessAll,
-        mwt,
-    };
-    let morphotagged =
-        crate::morphosyntax::process_morphosyntax(main_text, services, &mor_params).await?;
-
-    // 2. Parse both files
-    let (mut main_file, main_errors) = parse_lenient(&morphotagged);
-    if !main_errors.is_empty() {
-        warn!(
-            num_errors = main_errors.len(),
-            "Parse errors in morphotagged main (continuing)"
-        );
-    }
-
-    let (gold_file, gold_errors) = parse_lenient(gold_text);
-    if !gold_errors.is_empty() {
-        warn!(
-            num_errors = gold_errors.len(),
-            "Parse errors in gold file (continuing)"
-        );
-    }
-
-    // 3. Clear any existing %xsrep and run comparison
-    clear_comparison(&mut main_file);
-    let result = compare(&main_file, &gold_file);
-
-    info!(
-        matches = result.metrics.matches,
-        insertions = result.metrics.insertions,
-        deletions = result.metrics.deletions,
-        wer = %format!("{:.4}", result.metrics.wer),
-        "Compare alignment complete"
-    );
-
-    // 4. Inject %xsrep tiers
-    inject_comparison(&mut main_file, &result);
-
-    // 5. Serialize
-    let chat_output = to_chat_string(&main_file);
-    let csv_output = format_metrics_csv(&result.metrics);
-
-    Ok((chat_output, csv_output))
+) -> Result<CompareMaterializedOutputs, ServerError> {
+    CompareWorkflow::released()
+        .run(CompareWorkflowRequest {
+            main_text: ChatText::from(main_text),
+            gold_text: ChatText::from(gold_text),
+            lang,
+            services,
+            cache_policy,
+            mwt,
+        })
+        .await
 }
 
 /// Derive the gold file path from a main file path.
@@ -117,19 +77,21 @@ pub fn is_gold_file(filename: &str) -> bool {
 /// 1. Skip `.gold.cha` files
 /// 2. Look up the companion gold file
 /// 3. Run morphosyntax + compare
-/// 4. Return `(filename, Ok((chat_text, csv_text)) | Err(error_msg))`
+/// 4. Return `(filename, Ok(outputs) | Err(error_msg))`
 #[allow(dead_code)]
 pub(crate) async fn process_compare_batch(
-    files: &[(String, String)],
+    files: &[TextBatchFileInput],
     lang: &LanguageCode3,
     services: PipelineServices<'_>,
     cache_policy: CachePolicy,
     mwt: &MwtDict,
     read_gold_fn: &dyn Fn(&str) -> Option<String>,
-) -> Vec<(String, Result<(String, String), String>)> {
+) -> Vec<(String, Result<CompareMaterializedOutputs, String>)> {
     let mut results = Vec::with_capacity(files.len());
 
-    for (filename, chat_text) in files {
+    for file in files {
+        let filename = file.filename.as_ref();
+        let chat_text = file.chat_text.as_ref();
         // Skip gold files — they're companions, not inputs
         if is_gold_file(filename) {
             continue;
@@ -140,7 +102,7 @@ pub(crate) async fn process_compare_batch(
             Some(text) => text,
             None => {
                 results.push((
-                    filename.clone(),
+                    file.filename.to_string(),
                     Err(format!(
                         "No gold .cha file found for comparison. \
                          main: {filename}, expected: {gold_filename}"
@@ -152,10 +114,10 @@ pub(crate) async fn process_compare_batch(
 
         match process_compare(chat_text, &gold_text, lang, services, cache_policy, mwt).await {
             Ok(result) => {
-                results.push((filename.clone(), Ok(result)));
+                results.push((file.filename.to_string(), Ok(result)));
             }
             Err(e) => {
-                results.push((filename.clone(), Err(e.to_string())));
+                results.push((file.filename.to_string(), Err(e.to_string())));
             }
         }
     }

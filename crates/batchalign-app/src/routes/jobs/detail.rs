@@ -108,7 +108,7 @@ pub(crate) async fn get_results(
     for r in &detail.results {
         let content = if r.error.is_none() {
             let path = output_dir.join(&*r.filename);
-            tokio::fs::read_to_string(&path).await.unwrap_or_default()
+            read_result_content(&path).await?
         } else {
             String::new()
         };
@@ -211,7 +211,7 @@ pub(crate) async fn get_single_result(
 
     let content = if !detail.paths_mode {
         let path = detail.staging_dir.join("output").join(&*out_filename);
-        tokio::fs::read_to_string(&path).await.unwrap_or_default()
+        read_result_content(&path).await?
     } else {
         String::new()
     };
@@ -222,4 +222,13 @@ pub(crate) async fn get_single_result(
         content_type,
         error: None,
     }))
+}
+
+async fn read_result_content(path: &std::path::Path) -> Result<String, ServerError> {
+    tokio::fs::read_to_string(path).await.map_err(|error| {
+        ServerError::Io(std::io::Error::new(
+            error.kind(),
+            format!("failed to read result file {}: {error}", path.display()),
+        ))
+    })
 }

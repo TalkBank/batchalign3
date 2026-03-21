@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use crate::api::LanguageCode3;
+use async_trait::async_trait;
+
+use crate::api::{ChatText, LanguageCode3};
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
 use crate::worker::pool::WorkerPool;
 use crate::worker::text_request_v2::{PreparedTextRequestIdsV2, build_coref_request_v2};
@@ -29,6 +31,11 @@ use tracing::{info, warn};
 
 use crate::error::ServerError;
 use crate::infer_retry::dispatch_execute_v2_with_retry;
+use crate::workflow::text_batch::{
+    TextBatchFileInput, TextBatchFileResults, TextBatchOperation, TextBatchWorkflow,
+    TextBatchWorkflowRequest, TextPerFileWorkflowRequest, wrap_legacy_batch_results,
+};
+use crate::workflow::PerFileWorkflow;
 
 /// Check whether a parsed CHAT file declares English as one of its languages.
 ///
@@ -43,6 +50,43 @@ fn file_has_english(
     langs.iter().any(|l| l.as_str() == "eng")
 }
 
+/// Typed workflow operation for coref.
+pub(crate) struct CorefOperation;
+
+/// Trait-oriented workflow wrapper for coref.
+pub(crate) type CorefWorkflow = TextBatchWorkflow<CorefOperation>;
+
+#[async_trait]
+impl TextBatchOperation for CorefOperation {
+    type Shared<'a>
+        = &'a WorkerPool
+    where
+        Self: 'a;
+
+    type Params<'a>
+        = ()
+    where
+        Self: 'a;
+
+    async fn run_single(
+        chat_text: ChatText<'_>,
+        lang: &LanguageCode3,
+        pool: Self::Shared<'_>,
+        _params: Self::Params<'_>,
+    ) -> Result<String, ServerError> {
+        run_coref_impl(chat_text.as_ref(), lang, pool).await
+    }
+
+    async fn run_batch(
+        files: &[TextBatchFileInput],
+        lang: &LanguageCode3,
+        pool: Self::Shared<'_>,
+        _params: Self::Params<'_>,
+    ) -> TextBatchFileResults {
+        run_coref_batch_impl(files, lang, pool).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-file coref processing
 // ---------------------------------------------------------------------------
@@ -52,6 +96,23 @@ fn file_has_english(
 /// Returns the serialized CHAT text with `%xcoref` tiers injected.
 /// Non-English files are returned as-is (checked via per-file `@Languages`).
 pub async fn process_coref(
+    chat_text: &str,
+    lang: &LanguageCode3,
+    pool: &WorkerPool,
+) -> Result<String, ServerError> {
+    PerFileWorkflow::run(
+        &CorefWorkflow::new(),
+        TextPerFileWorkflowRequest {
+            chat_text: ChatText::from(chat_text),
+            lang,
+            shared: pool,
+            params: (),
+        },
+    )
+    .await
+}
+
+async fn run_coref_impl(
     chat_text: &str,
     lang: &LanguageCode3,
     pool: &WorkerPool,
@@ -99,7 +160,7 @@ pub async fn process_coref(
     let mut coref_responses = infer_batch(
         pool,
         std::slice::from_ref(&coref_item),
-        &LanguageCode3::from("eng"),
+        &LanguageCode3::eng(),
     )
     .await?;
     let coref_response = coref_responses.pop().unwrap_or(CorefResponse {
@@ -142,18 +203,34 @@ pub async fn process_coref(
 /// in a single batched `execute_v2` call.
 ///
 /// Returns `(filename, Ok(output_text) | Err(error_msg))` for each file.
-pub async fn process_coref_batch(
-    files: &[(String, String)], // (filename, chat_text)
+pub(crate) async fn process_coref_batch(
+    files: &[TextBatchFileInput],
     lang: &LanguageCode3,
     pool: &WorkerPool,
-) -> Vec<(String, Result<String, String>)> {
+) -> TextBatchFileResults {
+    CorefWorkflow::new()
+        .run_batch_files(TextBatchWorkflowRequest {
+            files,
+            lang,
+            shared: pool,
+            params: (),
+        })
+        .await
+}
+
+async fn run_coref_batch_impl(
+    files: &[TextBatchFileInput],
+    lang: &LanguageCode3,
+    pool: &WorkerPool,
+) -> TextBatchFileResults {
     let mut results: Vec<(String, Result<String, String>)> = Vec::with_capacity(files.len());
 
     // 1. Parse all files
     let mut parsed_files: Vec<batchalign_chat_ops::ChatFile> = Vec::with_capacity(files.len());
     let mut parse_error_counts: Vec<usize> = Vec::with_capacity(files.len());
-    for (filename, chat_text) in files {
-        let (chat_file, parse_errors) = parse_lenient(chat_text);
+    for file in files {
+        let filename = file.filename.as_ref();
+        let (chat_file, parse_errors) = parse_lenient(file.chat_text.as_ref());
         if !parse_errors.is_empty() {
             warn!(
                 filename = %filename,
@@ -224,18 +301,18 @@ pub async fn process_coref_batch(
             "Dispatching coref execute_v2 batch"
         );
 
-        match infer_batch(pool, &batch_items, &LanguageCode3::from("eng")).await {
+        match infer_batch(pool, &batch_items, &LanguageCode3::eng()).await {
             Ok(responses) => responses,
             Err(e) => {
                 warn!(error = %e, "Batch coref execute_v2 failed for all files");
                 // Return all files serialized without coref
-                for (file_idx, (filename, _)) in files.iter().enumerate() {
+                for (file_idx, file) in files.iter().enumerate() {
                     results.push((
-                        filename.clone(),
+                        file.filename.to_string(),
                         Ok(to_chat_string(&parsed_files[file_idx])),
                     ));
                 }
-                return results;
+                return wrap_legacy_batch_results(results);
             }
         }
     };
@@ -260,10 +337,11 @@ pub async fn process_coref_batch(
     }
 
     // 5. Serialize all files
-    for (file_idx, (filename, _)) in files.iter().enumerate() {
+    for (file_idx, file) in files.iter().enumerate() {
+        let filename = file.filename.as_ref();
         // Skip files that failed pre-validation
         if let Some(ref err) = validation_errors[file_idx] {
-            results.push((filename.clone(), Err(err.clone())));
+            results.push((file.filename.to_string(), Err(err.clone())));
             continue;
         }
 
@@ -274,12 +352,12 @@ pub async fn process_coref_batch(
         }
 
         results.push((
-            filename.clone(),
+            file.filename.to_string(),
             Ok(to_chat_string(&parsed_files[file_idx])),
         ));
     }
 
-    results
+    wrap_legacy_batch_results(results)
 }
 
 // ---------------------------------------------------------------------------
@@ -374,14 +452,14 @@ mod tests {
     fn test_file_has_english_with_eng_languages() {
         let chat = include_str!("../../../test-fixtures/eng_hello_world.cha");
         let (chat_file, _) = parse_lenient(chat);
-        assert!(file_has_english(&chat_file, &LanguageCode3::from("eng")));
+        assert!(file_has_english(&chat_file, &LanguageCode3::eng()));
     }
 
     #[test]
     fn test_file_has_english_with_spa_languages() {
         let chat = include_str!("../../../test-fixtures/spa_chi_hola_mundo.cha");
         let (chat_file, _) = parse_lenient(chat);
-        assert!(!file_has_english(&chat_file, &LanguageCode3::from("spa")));
+        assert!(!file_has_english(&chat_file, &LanguageCode3::spa()));
     }
 
     #[test]
@@ -391,7 +469,7 @@ mod tests {
         let chat = include_str!("../../../test-fixtures/spa_chi_hola_mundo.cha");
         let (chat_file, _) = parse_lenient(chat);
         // Even with fallback_lang="eng", the file declares spa — not English
-        assert!(!file_has_english(&chat_file, &LanguageCode3::from("eng")));
+        assert!(!file_has_english(&chat_file, &LanguageCode3::eng()));
     }
 
     #[test]
@@ -400,7 +478,7 @@ mod tests {
         // The per-file check should see "eng" and return true.
         let chat = include_str!("../../../test-fixtures/eng_hello_world.cha");
         let (chat_file, _) = parse_lenient(chat);
-        assert!(file_has_english(&chat_file, &LanguageCode3::from("spa")));
+        assert!(file_has_english(&chat_file, &LanguageCode3::spa()));
     }
 
     #[test]
@@ -409,9 +487,9 @@ mod tests {
         let chat = include_str!("../../../test-fixtures/eng_hello_world_no_languages.cha");
         let (chat_file, _) = parse_lenient(chat);
         // Fallback is "eng" — should be English
-        assert!(file_has_english(&chat_file, &LanguageCode3::from("eng")));
+        assert!(file_has_english(&chat_file, &LanguageCode3::eng()));
         // Fallback is "spa" — should NOT be English
-        assert!(!file_has_english(&chat_file, &LanguageCode3::from("spa")));
+        assert!(!file_has_english(&chat_file, &LanguageCode3::spa()));
     }
 
     #[test]
@@ -419,6 +497,6 @@ mod tests {
         // File declares both eng and spa — should be considered English
         let chat = include_str!("../../../test-fixtures/eng_spa_bilingual_hello_world.cha");
         let (chat_file, _) = parse_lenient(chat);
-        assert!(file_has_english(&chat_file, &LanguageCode3::from("eng")));
+        assert!(file_has_english(&chat_file, &LanguageCode3::eng()));
     }
 }

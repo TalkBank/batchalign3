@@ -25,17 +25,7 @@ pub fn run_prep(args: &ModelsPrepArgs) -> Result<(), CliError> {
         )));
     }
 
-    let cha_files: Vec<PathBuf> = WalkDir::new(input)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("cha"))
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
+    let cha_files = collect_chat_files(input)?;
 
     if cha_files.is_empty() {
         return Err(CliError::Io(std::io::Error::new(
@@ -48,17 +38,7 @@ pub fn run_prep(args: &ModelsPrepArgs) -> Result<(), CliError> {
 
     let (train_lines, val_lines) = if let Some(val_dir) = &args.val_dir {
         let val_path = Path::new(val_dir);
-        let val_files: Vec<PathBuf> = WalkDir::new(val_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cha"))
-            })
-            .map(|e| e.path().to_path_buf())
-            .collect();
+        let val_files = collect_chat_files(val_path)?;
         let val_utts = extract_utterances_from_files(&val_files, args.min_length)?;
         (utterances, val_utts)
     } else {
@@ -102,6 +82,29 @@ pub fn run_train(args: &ModelsTrainArgs) -> Result<(), CliError> {
     }
 
     std::process::exit(status.code().unwrap_or(1));
+}
+
+fn collect_chat_files(root: &Path) -> Result<Vec<PathBuf>, CliError> {
+    let mut files = Vec::new();
+    for entry in WalkDir::new(root) {
+        let entry = entry.map_err(|error| {
+            let detail = if let Some(path) = error.path() {
+                format!("walk model-prep input {}: {error}", path.display())
+            } else {
+                format!("walk model-prep input: {error}")
+            };
+            CliError::Io(std::io::Error::other(detail))
+        })?;
+        if entry.file_type().is_file()
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("cha"))
+        {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    Ok(files)
 }
 
 /// Parse CHAT files and extract utterance text using the Rust AST.

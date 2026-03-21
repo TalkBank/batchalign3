@@ -8,7 +8,6 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use tracing::warn;
 
 use crate::AppState;
 use crate::error::ServerError;
@@ -41,7 +40,6 @@ pub fn router() -> Router<Arc<AppState>> {
 /// it detects semantic errors (e.g., alignment mismatches, monotonicity
 /// violations). This endpoint scans the reports directory by mtime so the
 /// dashboard can surface recent failures without requiring database queries.
-/// Missing or unreadable files are silently skipped.
 #[utoipa::path(
     get,
     path = "/bug-reports",
@@ -50,32 +48,40 @@ pub fn router() -> Router<Arc<AppState>> {
         ("limit" = usize, Query, description = "Maximum number of reports to return")
     ),
     responses(
-        (status = 200, description = "Bug report documents (newest first)")
+        (status = 200, description = "Bug report documents (newest first)"),
+        (status = 500, description = "Bug report storage could not be read", body = crate::openapi::ErrorResponse)
     )
 )]
 pub(crate) async fn list_bug_reports(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
-) -> Json<Vec<serde_json::Value>> {
+) -> Result<Json<Vec<serde_json::Value>>, ServerError> {
     let dir = &state.environment.paths.bug_reports_dir;
 
-    let entries = match tokio::fs::read_dir(dir).await {
-        Ok(entries) => entries,
-        Err(_) => return Json(Vec::new()),
-    };
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|error| bug_report_io_error("read bug reports directory", dir, error))?;
 
     // Collect .json files with metadata for sorting
     let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-    let mut entries = entries;
-    while let Ok(Some(entry)) = entries.next_entry().await {
+    loop {
+        let entry = entries
+            .next_entry()
+            .await
+            .map_err(|error| bug_report_io_error("scan bug reports directory", dir, error))?;
+        let Some(entry) = entry else {
+            break;
+        };
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "json") {
             let mtime = entry
                 .metadata()
                 .await
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .unwrap_or(std::time::UNIX_EPOCH);
+                .map_err(|error| bug_report_io_error("read bug report metadata", &path, error))?
+                .modified()
+                .map_err(|error| {
+                    bug_report_io_error("read bug report modified time", &path, error)
+                })?;
             files.push((mtime, path));
         }
     }
@@ -86,20 +92,11 @@ pub(crate) async fn list_bug_reports(
 
     let mut reports = Vec::new();
     for (_mtime, path) in &files {
-        match tokio::fs::read_to_string(path).await {
-            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(value) => reports.push(value),
-                Err(e) => {
-                    warn!(path = %path.display(), error = %e, "Invalid bug report JSON");
-                }
-            },
-            Err(e) => {
-                warn!(path = %path.display(), error = %e, "Failed to read bug report");
-            }
-        }
+        let report = read_bug_report(path).await?;
+        reports.push(report);
     }
 
-    Json(reports)
+    Ok(Json(reports))
 }
 
 /// Return a single bug report by its ID (filename stem).
@@ -117,7 +114,8 @@ pub(crate) async fn list_bug_reports(
     ),
     responses(
         (status = 200, description = "Bug report JSON document"),
-        (status = 404, description = "Bug report not found", body = crate::openapi::ErrorResponse)
+        (status = 404, description = "Bug report not found", body = crate::openapi::ErrorResponse),
+        (status = 500, description = "Bug report storage could not be read", body = crate::openapi::ErrorResponse)
     )
 )]
 pub(crate) async fn get_bug_report(
@@ -127,12 +125,40 @@ pub(crate) async fn get_bug_report(
     let path =
         std::path::Path::new(&state.environment.paths.bug_reports_dir).join(format!("{id}.json"));
 
-    let content = tokio::fs::read_to_string(&path)
+    let report = match read_bug_report(&path).await {
+        Ok(report) => report,
+        Err(ServerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ServerError::FileNotFound(format!(
+                "Bug report {id} not found"
+            )));
+        }
+        Err(error) => return Err(error),
+    };
+
+    Ok(Json(report))
+}
+
+async fn read_bug_report(path: &std::path::Path) -> Result<serde_json::Value, ServerError> {
+    let content = tokio::fs::read_to_string(path)
         .await
-        .map_err(|_| ServerError::FileNotFound(format!("Bug report {id} not found")))?;
+        .map_err(|error| bug_report_io_error("read bug report", path, error))?;
 
-    let value: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| ServerError::Validation(format!("Invalid bug report JSON: {e}")))?;
+    serde_json::from_str(&content).map_err(|error| {
+        ServerError::Persistence(format!(
+            "invalid bug report JSON at {}: {error}",
+            path.display()
+        ))
+    })
+}
 
-    Ok(Json(value))
+fn bug_report_io_error(
+    action: &str,
+    path: impl AsRef<std::path::Path>,
+    error: std::io::Error,
+) -> ServerError {
+    let path = path.as_ref();
+    ServerError::Io(std::io::Error::new(
+        error.kind(),
+        format!("{action} {}: {error}", path.display()),
+    ))
 }

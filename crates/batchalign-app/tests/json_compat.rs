@@ -5,13 +5,14 @@
 //! Rust and Python must agree on.
 
 use batchalign_app::api::*;
+use batchalign_app::api::{LanguageCode3, LanguageSpec, WorkerLanguage};
 use batchalign_app::config::ServerConfig;
 use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 use std::collections::BTreeMap;
 
 use batchalign_app::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, InferTask,
-    WorkerCapabilities, WorkerHealthResponse, WorkerPid,
+    WorkerCapabilities, WorkerHealthResponse, WorkerHealthStatus, WorkerPid,
 };
 
 // ---------------------------------------------------------------------------
@@ -22,7 +23,7 @@ use batchalign_app::worker::{
 fn snapshot_job_submission_minimal() {
     let sub = JobSubmission {
         command: "morphotag".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
@@ -49,7 +50,7 @@ fn snapshot_job_submission_minimal() {
 fn snapshot_job_submission_with_files() {
     let sub = JobSubmission {
         command: "align".into(),
-        lang: "spa".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::spa()),
         num_speakers: NumSpeakers(2),
         files: vec![FilePayload {
             filename: "01DM_18.cha".into(),
@@ -84,7 +85,7 @@ fn snapshot_job_submission_with_files() {
 fn snapshot_job_submission_paths_mode() {
     let sub = JobSubmission {
         command: "morphotag".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
@@ -134,7 +135,7 @@ fn snapshot_job_info() {
                 merge_abbrev: false.into(),
             },
         ),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         source_dir: "/data/corpus".into(),
         total_files: 10,
         completed_files: 3,
@@ -215,7 +216,7 @@ fn snapshot_job_list_item() {
         job_id: "abc-123".into(),
         status: JobStatus::Completed,
         command: "morphotag".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         source_dir: "/data/corpus".into(),
         total_files: 10,
         completed_files: 10,
@@ -286,7 +287,7 @@ fn snapshot_server_config_full() {
     let cfg = ServerConfig {
         media_roots: vec!["/data/media".into(), "/data/media2".into()],
         media_mappings: mappings,
-        default_lang: "spa".into(),
+        default_lang: LanguageCode3::spa(),
         max_concurrent_jobs: 4,
         port: 9000,
         host: "0.0.0.0".into(),
@@ -310,9 +311,9 @@ fn snapshot_server_config_full() {
 #[test]
 fn snapshot_worker_health() {
     let health = WorkerHealthResponse {
-        status: "ok".into(),
+        status: WorkerHealthStatus::Ok,
         command: "infer:morphosyntax".into(),
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         pid: WorkerPid(12345),
         uptime_s: DurationSeconds(120.5),
     };
@@ -428,7 +429,7 @@ fn infer_ipc_roundtrip() {
     // Simulate what Rust sends to a Python worker
     let req = InferRequest {
         task: InferTask::Morphosyntax,
-        lang: "eng".into(),
+        lang: LanguageCode3::eng(),
         payload: serde_json::json!({
             "words": ["the", "dog", "runs"],
             "terminator": ".",
@@ -460,7 +461,7 @@ fn infer_ipc_roundtrip() {
 fn batch_infer_ipc_roundtrip() {
     let req = BatchInferRequest {
         task: InferTask::Morphosyntax,
-        lang: "eng".into(),
+        lang: LanguageCode3::eng(),
         items: vec![
             serde_json::json!({"words": ["hello"], "terminator": "."}),
             serde_json::json!({"words": ["world"], "terminator": "."}),

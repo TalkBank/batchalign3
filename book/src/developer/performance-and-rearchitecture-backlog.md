@@ -1,7 +1,7 @@
 # Performance and Re-Architecture Backlog
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last modified:** 2026-03-21 07:16 EDT
 
 This is a running developer-facing backlog for opportunities spotted during
 architecture work, code audits, and routine refactors.
@@ -66,138 +66,63 @@ Potential directions:
 - isolate environment-sensitive suites so concurrency and timeout issues are
   diagnosed as harness problems rather than product regressions
 
-## Release Blockers
+### D. Collapse tooling sprawl into explicit layers
 
-### 1. Split worker-dispatch identity from user language identity
+Developer automation is still spread across `Makefile`, shell scripts, Python
+ helpers, and a few Rust bins. The first `xtask` slice now exists, but the
+ broader tooling shape is still transitional.
 
-Current evidence:
+Potential directions:
 
-- `LanguageCode3::from_worker_lang()` accepts arbitrary strings
-- FA dispatch uses `""` as a worker key sentinel
-- runner pre-scaling uses `"auto"` as a worker key sentinel
+- use `xtask` for typed repo-local orchestration and affected-check policy
+- keep shell/Python/Node only where the external ecosystem is the real owner
+- promote long-lived semantic generators/analyzers into first-class Rust tool
+  crates instead of ad hoc scripts
+- delete duplicate task implementations so one tool path remains the source of
+  truth
 
-Required direction:
+### E. Narrow macro usage to stable boilerplate only
 
-- introduce a separate worker-target/domain type for pool keys and transport
-  routing
-- keep `LanguageCode3` strict and user/domain-facing
-- remove empty-string and `"auto"` overloads from the validated language type
+The codebase has good macro uses and bad macro uses. The good uses compress
+ stable mechanical boilerplate. The bad uses blur domain decisions that should
+ stay explicit in normal Rust types.
 
-### 2. Make recovery parsing explicitly corruptible
+Potential directions:
 
-Current evidence:
+- keep one canonical macro source for shared newtypes instead of duplicating
+  macro layers inside app crates
+- keep semantic proc macros where they encode real model invariants
+- avoid macro-generated wrappers for values that require validation or
+  sentinel semantics
+- audit blanket trait generation such as permissive `Default`, broad `From`,
+  and implicit coercions on newtypes
 
-- `store/queries/recovery.rs` coerces invalid persisted state into ordinary
-  failure state
+### F. Keep shrinking the PyO3 native boundary
 
-Required direction:
+The `pyo3` crate is thinner than before, but it is still too close to being an
+application boundary instead of a native adapter. One real cut already landed:
+`extract_timed_tiers` no longer pulls in `talkbank-transform`; it now uses
+`talkbank-parser` plus `talkbank-model` validation directly. The remaining work
+is still substantial.
 
-- deserialize persisted job/file state through typed enums/result wrappers
-- surface corrupt rows as a dedicated recovery/corruption state
-- preserve raw offending values for diagnosis instead of normalizing them away
+Potential directions:
 
-### 3. Give shared GPU workers real owned lifecycle supervision
+- keep removing crates that `pyo3` only touches through one-off helpers
+- split worker-execution helpers from general CHAT/document APIs so Python
+  bindings do not need to compile every runtime surface together
+- avoid growing new workflow logic inside `pyo3`; push that logic down into
+  shared Rust crates first and bind the result second
+- treat `pyo3` feature flags as architectural boundaries, not as a dumping
+  ground for unrelated optional code
+- keep Python extraction wrappers and other FFI-only adapters out of
+  `talkbank-model` and other shared domain crates
 
-Current evidence:
+Recent progress:
 
-- `SharedGpuWorker` does not retain the `Child` handle it claims to own
-
-Required direction:
-
-- decide one owner for the worker child lifecycle
-- keep shutdown, health, stale-reap, and crash detection on that owned boundary
-- remove comment/type mismatches about who actually supervises the process
-
-## Type/Boundary Debt
-
-### 1. Stop using best-effort defaults at server truth boundaries
-
-Current evidence:
-
-- WS notifications default empty JSON on serialization failure
-- Rev.AI client defaults response bodies to `""`
-- media discovery defaults unreadable walk entries to "not found"
-
-Required direction:
-
-- convert these sites to explicit error/reporting paths
-- classify "lossy reporting" as correctness debt, not just observability debt
-
-### 2. Remove remaining "stringly runtime control" seams
-
-Current evidence:
-
-- persisted content-type recovery still matches raw strings
-- worker control paths still reason in terms of loosely named sentinels and
-  labels
-
-Required direction:
-
-- decode to semantic enums at the first boundary crossing
-- reserve plain strings for display/logging only
-
-## Concurrency/Lifecycle Debt
-
-### 1. Separate pool observability from pool mutation shortcuts
-
-Current evidence:
-
-- `worker_count()` / `has_available_worker()` use `try_lock()` and report
-  optimistic/approximate results under contention
-
-Required direction:
-
-- maintain explicit summary state or actor-owned counters
-- avoid turning lock contention into false absence
-
-### 2. Isolate stale/crashed-worker cleanup into one owned subsystem
-
-Current evidence:
-
-- stale cleanup, PID tracking, transport setup, and worker-key planning are
-  still spread across CLI, pool, and worker-handle code
-
-Required direction:
-
-- centralize worker liveness truth
-- keep PID files and daemon cleanup as implementation details of one lifecycle
-  owner
-
-## Test/Process Debt
-
-### 1. Add targeted regression tests for silent-failure classes
-
-Must-have cases:
-
-- corrupt persisted job/file status rows
-- WS serialization/send failure paths
-- unreadable directory entries during media walk
-- shared GPU worker child-lifecycle supervision
-- invalid/sentinel worker language keys
-- integration helpers selecting the wrong output artifact when the requested
-  path is missing (`crates/batchalign-app/tests/common/mod.rs`)
-
-### 2. Make heavy-runtime suites intentional instead of incidental
-
-Required direction:
-
-- keep ML-heavy/golden suites separate from structural correctness checks
-- make snapshot/golden regeneration ownership explicit
-- add smaller focused tests for the release-blocking boundary cases above
-
-## Deferred but Valid Radical Changes
-
-### 1. Split the registry actor into smaller state owners
-
-The current `JobRegistry` actor is materially better than open-coded mutex
-access, but it is still the central coordination point for submission,
-dispatch, lease handling, progress, cancellation, and completion.
-
-Longer-horizon direction:
-
-- split job scheduling, per-file state, and operator-facing projections into
-  narrower reducers/actors
-- stop using one central registry as the default shape of server truth
+- the embedded `cli_entry` path no longer compiles the standalone binary's
+  OTLP tracing stack or background update-check wiring; `batchalign-cli`
+  now exposes those only behind its `binary-entry` feature, and the PyO3
+  dependency path disables default features
 
 ## How to use this page
 

@@ -1,5 +1,8 @@
 //! Helper macros for declaring newtype wrappers.
 //!
+//! This is a local copy kept for `scheduling.rs` and any future batchalign-app
+//! types. The canonical copy lives in `batchalign-types`.
+//!
 //! All generated types use `#[serde(transparent)]` so the wire format is
 //! unchanged — JSON values remain bare strings or numbers.
 

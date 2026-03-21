@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api::{ContentType, FileName, FileProgressStage, JobId, UnixTimestamp};
+use crate::api::{ContentType, FileName, FileProgressStage, JobId, ReleasedCommand, UnixTimestamp};
 use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
 use crate::store::{
     AttemptFinishRecord, CompletedFileOutput, FileFailureRecord, FileProgressRecord,
@@ -251,13 +251,13 @@ pub(crate) enum FileStage {
 
 impl FileStage {
     /// Resolve the initial batch-infer stage for a top-level command.
-    pub(crate) fn for_batch_command(command: &str) -> Self {
+    pub(crate) fn for_batch_command(command: ReleasedCommand) -> Self {
         match command {
-            "morphotag" => Self::Analyzing,
-            "utseg" => Self::Segmenting,
-            "translate" => Self::Translating,
-            "coref" => Self::ResolvingCoreference,
-            "compare" => Self::Comparing,
+            ReleasedCommand::Morphotag => Self::Analyzing,
+            ReleasedCommand::Utseg => Self::Segmenting,
+            ReleasedCommand::Translate => Self::Translating,
+            ReleasedCommand::Coref => Self::ResolvingCoreference,
+            ReleasedCommand::Compare => Self::Comparing,
             _ => Self::Processing,
         }
     }
@@ -666,6 +666,7 @@ mod tests {
     use crate::ws::BROADCAST_CAPACITY;
 
     use super::*;
+    use crate::api::{LanguageCode3, LanguageSpec};
 
     fn test_config() -> crate::config::ServerConfig {
         crate::config::ServerConfig {
@@ -688,7 +689,7 @@ mod tests {
             },
             dispatch: JobDispatchConfig {
                 command: "morphotag".into(),
-                lang: "eng".into(),
+                lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Morphotag(MorphotagOptions {
                     common: CommonOptions::default(),
@@ -915,24 +916,27 @@ mod tests {
     #[test]
     fn file_stage_for_batch_command_is_stable() {
         assert_eq!(
-            FileStage::for_batch_command("morphotag"),
+            FileStage::for_batch_command(ReleasedCommand::Morphotag),
             FileStage::Analyzing
         );
-        assert_eq!(FileStage::for_batch_command("utseg"), FileStage::Segmenting);
         assert_eq!(
-            FileStage::for_batch_command("translate"),
+            FileStage::for_batch_command(ReleasedCommand::Utseg),
+            FileStage::Segmenting
+        );
+        assert_eq!(
+            FileStage::for_batch_command(ReleasedCommand::Translate),
             FileStage::Translating
         );
         assert_eq!(
-            FileStage::for_batch_command("coref"),
+            FileStage::for_batch_command(ReleasedCommand::Coref),
             FileStage::ResolvingCoreference
         );
         assert_eq!(
-            FileStage::for_batch_command("compare"),
+            FileStage::for_batch_command(ReleasedCommand::Compare),
             FileStage::Comparing
         );
         assert_eq!(
-            FileStage::for_batch_command("unknown"),
+            FileStage::for_batch_command(ReleasedCommand::Align),
             FileStage::Processing
         );
         assert_eq!(FileStage::Writing.api_stage().label(), "Writing");

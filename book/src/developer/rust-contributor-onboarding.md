@@ -1,7 +1,7 @@
 # Rust Contributor Onboarding
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last modified:** 2026-03-21 07:16 EDT
 
 This page is the shortest path to productive work on the Rust side of Batchalign3.
 
@@ -32,19 +32,17 @@ cargo nextest run --workspace
 cargo nextest run --manifest-path pyo3/Cargo.toml
 ```
 
-If your work touches HK/Cantonese providers, sync those extras into the
-repo-managed `.venv` after `make sync`:
-
-```bash
-uv sync --group dev --extra hk
-```
+`make sync` is the normal setup path even for Cantonese/provider work. HK
+engines are part of the main package surface now, not a separate extra or
+plugin tier.
 
 Rebuild rule of thumb while iterating:
 
 - CLI/server-only changes: `cargo build -p batchalign-cli` or `make build-rust`
 - `batchalign-chat-ops` or `pyo3/` changes: `make build-python`
-- shared crate changes you want to validate through `./target/debug/batchalign3`:
-  rebuild the CLI too or use `cargo run -p batchalign-cli -- ...`
+- the fast contributor loop: run `cargo build -p batchalign-cli` once, then
+  `uv run batchalign3 ...` will use the repo CLI fallback in a source checkout
+  after a slim `make build-python`
 
 ## Where To Work
 

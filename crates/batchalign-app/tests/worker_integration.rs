@@ -9,7 +9,7 @@
 
 mod common;
 
-use batchalign_app::api::NumSpeakers;
+use batchalign_app::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
 use batchalign_app::worker::error::WorkerError;
 use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
 use batchalign_app::worker::pool::{PoolConfig, WorkerPool};
@@ -21,7 +21,17 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 
 macro_rules! require_python {
-    () => {
+    () => {{
+        // Memory guard: skip test entirely if insufficient RAM to safely spawn workers.
+        // This prevents kernel OOM panics that have crashed Franklin's machine repeatedly.
+        let available_mb = batchalign_app::worker::memory_guard::available_memory_mb();
+        if available_mb < 4096 {
+            eprintln!(
+                "SKIP: insufficient memory ({available_mb} MB available, 4096 MB required). \
+                 Worker tests need at least 4 GB free RAM."
+            );
+            return;
+        }
         match resolve_python() {
             Some(path) => path,
             None => {
@@ -29,13 +39,13 @@ macro_rules! require_python {
                 return;
             }
         }
-    };
+    }};
 }
 
 fn infer_request(payload: Value) -> InferRequest {
     InferRequest {
         task: InferTask::Morphosyntax,
-        lang: "eng".into(),
+        lang: LanguageCode3::eng(),
         payload,
     }
 }
@@ -43,7 +53,7 @@ fn infer_request(payload: Value) -> InferRequest {
 fn batch_request(task: InferTask, items: Vec<Value>) -> BatchInferRequest {
     BatchInferRequest {
         task,
-        lang: "eng".into(),
+        lang: LanguageCode3::eng(),
         items,
         mwt: BTreeMap::new(),
     }
@@ -56,7 +66,7 @@ async fn spawn_test_echo_worker() {
         python_path: python,
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };
@@ -77,16 +87,16 @@ async fn health_check_works() {
         python_path: python,
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };
 
     let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     let health = handle.health_check().await.expect("health check failed");
-    assert_eq!(health.status, "ok");
+    assert_eq!(health.status, batchalign_app::worker::WorkerHealthStatus::Ok);
     assert_eq!(health.command, "profile:stanza");
-    assert_eq!(health.lang, "eng");
+    assert_eq!(health.lang, WorkerLanguage::from(LanguageCode3::eng()));
     assert!(*health.pid > 0);
 
     handle.shutdown().await.expect("shutdown failed");
@@ -99,7 +109,7 @@ async fn capabilities_test_echo() {
         python_path: python,
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };
@@ -122,7 +132,7 @@ async fn infer_echo_returns_payload() {
         python_path: python,
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };
@@ -146,7 +156,7 @@ async fn batch_infer_echo_returns_items() {
         python_path: python,
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };
@@ -186,7 +196,7 @@ async fn pool_dispatch_batch_infer_spawns_and_processes() {
     let item = json!({"words": ["hello", "pool"], "lang": "eng"});
     let response = pool
         .dispatch_batch_infer(
-            &"eng".into(),
+            &LanguageCode3::eng(),
             &batch_request(InferTask::Morphosyntax, vec![item.clone()]),
         )
         .await
@@ -223,7 +233,7 @@ async fn pool_reuses_existing_worker() {
         let item = json!({"request": i});
         let response = pool
             .dispatch_batch_infer(
-                &"eng".into(),
+                &LanguageCode3::eng(),
                 &batch_request(InferTask::Morphosyntax, vec![item.clone()]),
             )
             .await
@@ -255,14 +265,14 @@ async fn pool_multiple_task_groups() {
     let fa_item = json!({"task": "fa"});
     let r1 = pool
         .dispatch_batch_infer(
-            &"eng".into(),
+            &LanguageCode3::eng(),
             &batch_request(InferTask::Morphosyntax, vec![morph_item.clone()]),
         )
         .await
         .expect("dispatch 1 failed");
     let r2 = pool
         .dispatch_batch_infer(
-            &"eng".into(),
+            &LanguageCode3::eng(),
             &batch_request(InferTask::Fa, vec![fa_item.clone()]),
         )
         .await
@@ -291,8 +301,8 @@ async fn pool_warmup_uses_infer_targets() {
     });
 
     pool.warmup(&[
-        ("morphotag".to_string(), "eng".to_string()),
-        ("align".to_string(), "eng".to_string()),
+        batchalign_app::server::WarmupTarget { command: "morphotag".into(), lang: WorkerLanguage::from(LanguageCode3::eng()) },
+        batchalign_app::server::WarmupTarget { command: "align".into(), lang: WorkerLanguage::from(LanguageCode3::eng()) },
     ])
     .await;
 
@@ -331,7 +341,8 @@ async fn pool_pre_scale_respects_max_workers_per_key() {
         ..Default::default()
     });
 
-    pool.pre_scale(&"morphotag".into(), &"eng".into(), 4).await;
+    pool.pre_scale(&"morphotag".into(), WorkerLanguage::from(LanguageCode3::eng()), 4)
+        .await;
     let count = pool.worker_count();
     assert!(
         count <= 2,
@@ -377,7 +388,7 @@ async fn pool_serializes_worker_bootstrap_per_key() {
     let item1 = json!({"request": 1});
     let item2 = json!({"request": 2});
     let item3 = json!({"request": 3});
-    let lang: batchalign_app::api::LanguageCode3 = "eng".into();
+    let lang = LanguageCode3::eng();
     let request1 = batch_request(InferTask::Morphosyntax, vec![item1.clone()]);
     let request2 = batch_request(InferTask::Morphosyntax, vec![item2.clone()]);
     let request3 = batch_request(InferTask::Morphosyntax, vec![item3.clone()]);
@@ -417,7 +428,7 @@ async fn spawn_failure_bad_python_path() {
         python_path: "/nonexistent/python3".to_string(),
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
         ..Default::default()
@@ -453,7 +464,7 @@ async fn spawn_tolerates_non_json_stdout_preamble_before_ready() {
         python_path: fake_python.to_string_lossy().into_owned(),
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
         ..Default::default()
@@ -484,7 +495,7 @@ async fn spawn_failure_includes_worker_startup_stderr() {
         python_path: fake_python.to_string_lossy().into_owned(),
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
         ..Default::default()
@@ -529,7 +540,7 @@ async fn health_check_tolerates_non_protocol_stdout_between_requests() {
         python_path: fake_python.to_string_lossy().into_owned(),
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         ready_timeout_s: 5,
         ..Default::default()
@@ -537,9 +548,9 @@ async fn health_check_tolerates_non_protocol_stdout_between_requests() {
 
     let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     let health = handle.health_check().await.expect("health check failed");
-    assert_eq!(health.status, "ok");
+    assert_eq!(health.status, batchalign_app::worker::WorkerHealthStatus::Ok);
     assert_eq!(health.command, "profile:stanza");
-    assert_eq!(health.lang, "eng");
+    assert_eq!(health.lang, WorkerLanguage::from(LanguageCode3::eng()));
 
     handle.shutdown().await.expect("shutdown failed");
 }
@@ -565,13 +576,13 @@ async fn profile_groups_related_tasks_into_single_worker() {
     let morph_item = json!({"task": "morph"});
     let utseg_item = json!({"task": "utseg"});
     pool.dispatch_batch_infer(
-        &"eng".into(),
+        &LanguageCode3::eng(),
         &batch_request(InferTask::Morphosyntax, vec![morph_item]),
     )
     .await
     .expect("morphosyntax dispatch failed");
     pool.dispatch_batch_infer(
-        &"eng".into(),
+        &LanguageCode3::eng(),
         &batch_request(InferTask::Utseg, vec![utseg_item]),
     )
     .await
@@ -606,19 +617,19 @@ async fn each_profile_gets_its_own_worker() {
 
     // Dispatch one task from each profile via batch_infer.
     pool.dispatch_batch_infer(
-        &"eng".into(),
+        &LanguageCode3::eng(),
         &batch_request(InferTask::Morphosyntax, vec![json!({"p": "stanza"})]),
     )
     .await
     .expect("stanza dispatch failed");
     pool.dispatch_batch_infer(
-        &"eng".into(),
+        &LanguageCode3::eng(),
         &batch_request(InferTask::Translate, vec![json!({"p": "io"})]),
     )
     .await
     .expect("io dispatch failed");
     pool.dispatch_batch_infer(
-        &"eng".into(),
+        &LanguageCode3::eng(),
         &batch_request(InferTask::Fa, vec![json!({"p": "gpu"})]),
     )
     .await

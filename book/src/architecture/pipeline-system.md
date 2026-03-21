@@ -1,11 +1,23 @@
 # Pipeline System
 
 **Status:** Current
-**Last verified:** 2026-03-17
+**Last modified:** 2026-03-21 07:27 EDT
 
-The pipeline system processes CHAT files through per-command orchestrators
-that follow a parse → cache → infer → inject → validate → serialize
-lifecycle. Each command has a dedicated Rust orchestrator module.
+The pipeline system processes CHAT files through typed workflow families
+backed by Rust orchestrators. The concrete families are now explicit in code:
+per-file transform, cross-file batch transform, reference projection, and
+composite workflow. Each family still follows the same high-level lifecycle:
+parse → cache → infer → inject → validate → serialize.
+
+If you are adding new command semantics, start in
+[`crates/batchalign-app/src/workflow/mod.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/mod.rs).
+From there, jump immediately to
+[`crates/batchalign-app/src/workflow/registry.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/registry.rs)
+for the released command catalog and
+[`crates/batchalign-app/src/workflow/traits.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/traits.rs)
+for the workflow family contracts. The workflow family should
+determine where the typed bundle lives and how the result is materialized;
+`runner/` should stay focused on job lifecycle and queueing.
 
 ## Core Data Model
 
@@ -24,16 +36,44 @@ The low-level `speaker` infer task still exists for typed worker execution, but
 it is not a standalone CLI command. This matches batchalign2, where diarization
 was part of `transcribe_s`.
 
+```mermaid
+flowchart TD
+    registry["workflow/registry.rs\nreleased_command_workflows()"]
+    perfile["PerFileWorkflow\ntranscribe / transcribe_s / align / opensmile / avqi"]
+    batched["CrossFileBatchWorkflow\nmorphotag / utseg / translate / coref"]
+    projection["ReferenceProjectionWorkflow\ncompare"]
+    composite["CompositeWorkflow\nbenchmark = transcribe + compare"]
+    rust["Rust-owned orchestration\n(parse / cache / inject / validate)"]
+
+    registry --> perfile
+    registry --> batched
+    registry --> projection
+    registry --> composite
+    perfile --> rust
+    batched --> rust
+    projection --> rust
+    composite --> rust
+```
+
 ## Command Classification
 
-Commands are classified by input/output type:
+Commands are classified by input/output type and workflow family:
 
 - **Generation**: Creates CHAT from media (e.g., `transcribe`). Builds a
   `ChatFile` from ASR output via `build_chat()`.
-- **Processing** (default): Transforms existing CHAT in-place (e.g.,
-  `morphotag`, `align`, `translate`). Parses, mutates, serializes.
+- **Per-file processing**: Transforms existing CHAT in-place (e.g.,
+  `align`, `translate`). Parses, mutates, serializes.
+- **Cross-file batch processing**: Pools utterances across files in one GPU
+  batch (e.g., `morphotag`, `utseg`, `coref`).
+- **Reference projection**: Compares a main transcript against a gold
+  companion and materializes output views from a typed compare bundle.
+- **Composite**: Chains existing workflows without reimplementing them (e.g.,
+  `benchmark = transcribe + compare`).
 - **Analysis**: Produces metrics or non-CHAT output (e.g., `opensmile`,
-  `avqi`, `benchmark`). Returns structured results.
+  `avqi`). Returns structured results.
+
+The registry also places `transcribe_s` in the per-file family as the diarized
+transcribe variant.
 
 ## Processing Lifecycle
 
@@ -75,11 +115,12 @@ output).
 
 ## Batched Inference
 
-Text-only commands (morphotag, utseg, translate, coref) use
+Text-only commands (`morphotag`, `utseg`, `translate`, `coref`) use
 `dispatch_batched_infer()` to pool utterances across multiple files into a
 single worker `execute_v2` request backed by one prepared-text artifact. This
 improves throughput and model reuse compared to per-file dispatch without
-re-expanding the Python control plane.
+re-expanding the Python control plane. `compare` is separate now because it
+needs both a main transcript and a gold companion per file.
 
 The morphosyntax orchestrator uses three phases for cache interaction:
 
@@ -98,10 +139,13 @@ The `transcribe` command can chain multiple steps:
 ASR inference → post-processing → CHAT assembly → utseg → morphosyntax
 ```
 
-Each step is a separate orchestrator call (`process_transcribe` →
+Each step is a separate workflow call (`process_transcribe` →
 `process_utseg` → `process_morphosyntax`). Between steps, CHAT text is
 serialized and re-parsed, which is not wasteful — each step operates on a
-different version of the file.
+different version of the file. `benchmark` follows the same composition style
+at the workflow level by chaining transcribe then compare, while `compare`
+itself remains a reference-projection workflow with gold- and main-shaped
+materializers.
 
 ## Worker Concurrency
 

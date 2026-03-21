@@ -143,8 +143,9 @@ class _AliyunRunner:
             import nls
         except Exception as exc:
             raise ImportError(
-                "Aliyun engine requires batchalign3 extras: "
-                "pip install 'batchalign3[hk-aliyun]'"
+                "Aliyun engine dependencies are missing from this "
+                "environment. Reinstall batchalign3 or install the Aliyun "
+                "SDK packages."
             ) from exc
 
         self._load_file()
@@ -199,8 +200,9 @@ def _get_token(ak_id: str, ak_secret: str) -> str:
         from aliyunsdkcore.request import CommonRequest
     except Exception as exc:
         raise ImportError(
-            "Aliyun engine requires batchalign3 extras: "
-            "pip install 'batchalign3[hk-aliyun]'"
+            "Aliyun engine dependencies are missing from this "
+            "environment. Reinstall batchalign3 or install the Aliyun SDK "
+            "packages."
         ) from exc
 
     client = AcsClient(ak_id, ak_secret, "ap-southeast-1")

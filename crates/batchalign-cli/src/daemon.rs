@@ -50,10 +50,12 @@ fn runtime_layout() -> RuntimeLayout {
 }
 
 /// Return the configured daemon port (from server.yaml or the default).
-fn config_port(layout: &RuntimeLayout) -> u16 {
-    batchalign_app::config::load_config_from_layout(layout, None)
-        .unwrap_or_default()
-        .port
+fn config_port(layout: &RuntimeLayout) -> Result<u16, CliError> {
+    let (cfg, warnings) = batchalign_app::config::load_validated_config_from_layout(layout, None)?;
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(cfg.port)
 }
 
 // ---------------------------------------------------------------------------
@@ -276,12 +278,12 @@ async fn ensure_daemon_locked(
 ) -> Result<Option<String>, CliError> {
     let dir = layout.state_dir();
     if profile.check_manual_server()
-        && let Some(url) = detect_manual_server(layout).await
+        && let Some(url) = detect_manual_server(layout).await?
     {
         return Ok(Some(url));
     }
 
-    let port = config_port(layout);
+    let port = config_port(layout)?;
 
     if let Some(info) = read_daemon_info_for(profile, dir) {
         if is_process_alive(info.pid) {
@@ -297,8 +299,6 @@ async fn ensure_daemon_locked(
                     crate::build_hash(),
                 );
                 kill_process(info.pid);
-                // Brief wait for the port to be released
-                tokio::time::sleep(Duration::from_millis(500)).await;
                 cleanup_state_file_for(profile, dir);
                 return start_daemon(profile, layout, port, force_cpu, workers, timeout).await;
             }
@@ -311,7 +311,6 @@ async fn ensure_daemon_locked(
                     force_cpu,
                 );
                 kill_process(info.pid);
-                tokio::time::sleep(Duration::from_millis(500)).await;
                 cleanup_state_file_for(profile, dir);
                 return start_daemon(profile, layout, port, force_cpu, workers, timeout).await;
             }
@@ -321,35 +320,59 @@ async fn ensure_daemon_locked(
             }
 
             kill_process(info.pid);
-            tokio::time::sleep(Duration::from_millis(500)).await;
             cleanup_state_file_for(profile, dir);
             return start_daemon(profile, layout, port, force_cpu, workers, timeout).await;
         }
+        // Process is dead but state file exists -- stale PID file.
+        debug!(
+            profile = profile.label(),
+            pid = info.pid,
+            "Cleaning up stale daemon state file (process is dead)"
+        );
         cleanup_state_file_for(profile, dir);
     }
 
     start_daemon(profile, layout, port, force_cpu, workers, timeout).await
 }
 
-async fn detect_manual_server(layout: &RuntimeLayout) -> Option<String> {
+async fn detect_manual_server(layout: &RuntimeLayout) -> Result<Option<String>, CliError> {
     let pid_path = layout.server_pid_path();
-    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
-    let pid: u32 = pid_str.trim().parse().ok()?;
+    let pid_str = match std::fs::read_to_string(&pid_path) {
+        Ok(pid_str) => pid_str,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(CliError::Io(err)),
+    };
+    let pid: u32 = match pid_str.trim().parse() {
+        Ok(pid) => pid,
+        Err(_) => {
+            // Corrupt PID file -- clean it up rather than returning an error
+            // that would block the caller from starting a daemon.
+            debug!(path = %pid_path.display(), "Removing corrupt server PID file");
+            let _ = std::fs::remove_file(&pid_path);
+            return Ok(None);
+        }
+    };
 
     if !is_process_alive(pid) {
-        return None;
+        // Stale PID file from a crashed server -- clean it up.
+        debug!(pid, path = %pid_path.display(), "Removing stale server PID file (process is dead)");
+        let _ = std::fs::remove_file(&pid_path);
+        return Ok(None);
     }
 
-    let cfg = batchalign_app::config::load_config_from_layout(layout, None).unwrap_or_default();
+    let (cfg, warnings) = batchalign_app::config::load_validated_config_from_layout(layout, None)?;
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
     let port = cfg.port;
 
     if startup_health_check(port).await {
         // Warn if the manual server has a stale build hash
         check_manual_server_staleness(port).await;
         debug!(port, pid, "Reusing manual server");
-        Some(format!("http://127.0.0.1:{port}"))
+        Ok(Some(format!("http://127.0.0.1:{port}")))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -406,7 +429,7 @@ async fn start_daemon(
 
     let config_path = layout.config_path();
     if config_path.exists() {
-        cmd.args(["--config", config_path.to_str().unwrap_or_default()]);
+        cmd.arg("--config").arg(config_path);
     } else {
         // Local profile default: optimize for low idle memory/cold startup.
         // Deployments with explicit server.yaml keep their configured policy.
@@ -505,13 +528,16 @@ async fn wait_for_health(pid: u32, port: u16) -> bool {
 /// succeed in well under 1 second, so this gives fast failure detection
 /// while still tolerating brief startup latency.
 async fn startup_health_check(port: u16) -> bool {
-    let Some(client) = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .connect_timeout(Duration::from_secs(1))
         .build()
-        .ok()
-    else {
-        return false;
+    {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("warning: failed to build localhost health-check client: {error}");
+            return false;
+        }
     };
     client
         .get(format!("http://127.0.0.1:{port}/health"))
@@ -533,8 +559,30 @@ async fn health_check(port: u16) -> bool {
 
 fn read_daemon_info_for(profile: DaemonProfile, dir: &Path) -> Option<DaemonInfo> {
     let path = profile.state_file(dir);
-    let text = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&text).ok()
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            eprintln!(
+                "warning: failed to read daemon state at {}: {}",
+                path.display(),
+                error
+            );
+            return None;
+        }
+    };
+    match serde_json::from_str(&text) {
+        Ok(info) => Some(info),
+        Err(error) => {
+            eprintln!(
+                "warning: ignoring corrupt daemon state at {}: {}",
+                path.display(),
+                error
+            );
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
 }
 
 fn write_daemon_info_for(
@@ -544,14 +592,19 @@ fn write_daemon_info_for(
     port: u16,
     force_cpu: bool,
 ) -> Result<(), CliError> {
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| {
+            CliError::Io(std::io::Error::other(format!(
+                "system clock before unix epoch while writing daemon state: {error}"
+            )))
+        })?
+        .as_secs_f64();
     let info = DaemonInfo {
         pid,
         port,
         version: current_version(),
-        started_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64(),
+        started_at,
         build_hash: crate::build_hash().to_string(),
         force_cpu,
     };
@@ -580,18 +633,39 @@ fn is_process_alive(pid: u32) -> bool {
     }
 }
 
+/// Kill a daemon process: SIGTERM the process group, then the process
+/// directly, then wait up to 3 seconds and escalate to SIGKILL if still
+/// alive. Returns `true` if the process was signalled at all.
 fn kill_process(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        unsafe {
-            if libc::killpg(pid as i32, libc::SIGTERM) == 0 {
-                return true;
-            }
-            if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+        let pgid_ok =
+            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) == 0 };
+        let pid_ok =
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 };
+
+        if !pgid_ok && !pid_ok {
+            return false;
+        }
+
+        // Wait for the process to exit before returning so the port is
+        // released by the time the caller tries to rebind.
+        for _ in 0..6 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if !is_process_alive(pid) {
                 return true;
             }
         }
-        false
+
+        // Still alive after 3 seconds -- escalate to SIGKILL.
+        debug!(pid, "Process did not exit after SIGTERM, sending SIGKILL");
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        }
+        // Brief wait for SIGKILL to take effect.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        true
     }
     #[cfg(not(unix))]
     {
@@ -769,7 +843,7 @@ mod tests {
     fn config_port_returns_default() {
         let dir = tempfile::tempdir().unwrap();
         let layout = RuntimeLayout::from_state_dir(dir.path().join("state"));
-        let port = config_port(&layout);
+        let port = config_port(&layout).unwrap();
         assert!(port > 0);
     }
 }

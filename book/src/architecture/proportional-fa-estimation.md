@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-11
 **Status:** Implemented
-**Last verified:** 2026-03-12
+**Last updated:** 2026-03-21 15:30
 
 ---
 
@@ -127,7 +127,7 @@ The documented changes are now present in current code:
 - Grouping with proportional estimation is implemented in
   `crates/batchalign-chat-ops/src/fa/grouping.rs`.
 - The Rust server computes audio duration and passes it into FA orchestration in
-  `crates/batchalign-app/src/runner/dispatch/infer.rs`.
+  `crates/batchalign-app/src/runner/dispatch/fa_pipeline.rs`.
 - Tests cover untimed utterances with and without `total_audio_ms` in
   Rust unit tests (`crates/batchalign-chat-ops/src/fa/grouping.rs`).
 

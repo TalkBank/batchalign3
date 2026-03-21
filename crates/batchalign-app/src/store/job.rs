@@ -965,7 +965,7 @@ mod tests {
             },
             dispatch: JobDispatchConfig {
                 command: CommandName::from("morphotag"),
-                lang: LanguageSpec::Resolved(crate::api::LanguageCode3::from("eng")),
+                lang: LanguageSpec::Resolved(crate::api::LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Morphotag(crate::options::MorphotagOptions {
                     common: crate::options::CommonOptions::default(),

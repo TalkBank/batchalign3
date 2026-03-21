@@ -8,7 +8,9 @@
 
 use std::collections::HashMap;
 
-use crate::api::{EngineVersion, LanguageCode3};
+use async_trait::async_trait;
+
+use crate::api::{ChatText, EngineVersion, LanguageCode3};
 use crate::cache::{CacheBackend, UtteranceCache};
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
 use crate::worker::pool::WorkerPool;
@@ -29,9 +31,73 @@ use crate::infer_retry::dispatch_execute_v2_with_retry;
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::pipeline::text_infer::{CachedTextPipelineHooks, run_cached_text_pipeline};
+use crate::workflow::text_batch::{
+    TextBatchFileInput, TextBatchFileResults, TextBatchOperation, TextBatchWorkflow,
+    TextBatchWorkflowRequest, TextPerFileWorkflowRequest, wrap_legacy_batch_results,
+};
 
 /// Cache task name — matches Python's `utterance_segmentation`.
 const CACHE_TASK: CacheTaskName = CacheTaskName::UtteranceSegmentation;
+
+/// Command-specific parameters for the utseg workflow family.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UtsegWorkflowParams {
+    /// Cache policy used for utterance segmentation.
+    pub cache_policy: CachePolicy,
+}
+
+/// Typed workflow operation for utseg.
+pub(crate) struct UtsegOperation;
+
+/// Trait-oriented workflow wrapper for utseg.
+pub(crate) type UtsegWorkflow = TextBatchWorkflow<UtsegOperation>;
+
+#[async_trait]
+impl TextBatchOperation for UtsegOperation {
+    type Shared<'a>
+        = PipelineServices<'a>
+    where
+        Self: 'a;
+
+    type Params<'a>
+        = UtsegWorkflowParams
+    where
+        Self: 'a;
+
+    async fn run_single(
+        chat_text: ChatText<'_>,
+        lang: &LanguageCode3,
+        shared: Self::Shared<'_>,
+        params: Self::Params<'_>,
+    ) -> Result<String, ServerError> {
+        run_utseg_impl(
+            chat_text.as_ref(),
+            lang,
+            shared.pool,
+            shared.cache,
+            shared.engine_version,
+            params.cache_policy,
+        )
+        .await
+    }
+
+    async fn run_batch(
+        files: &[TextBatchFileInput],
+        lang: &LanguageCode3,
+        shared: Self::Shared<'_>,
+        params: Self::Params<'_>,
+    ) -> TextBatchFileResults {
+        run_utseg_batch_impl(
+            files,
+            lang,
+            shared.pool,
+            shared.cache,
+            shared.engine_version,
+            params.cache_policy,
+        )
+        .await
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Per-file utseg processing
@@ -41,6 +107,58 @@ const CACHE_TASK: CacheTaskName = CacheTaskName::UtteranceSegmentation;
 ///
 /// Returns the serialized CHAT text with utterances split as needed.
 pub async fn process_utseg(
+    chat_text: &str,
+    lang: &LanguageCode3,
+    pool: &WorkerPool,
+    cache: &UtteranceCache,
+    engine_version: &EngineVersion,
+    cache_policy: CachePolicy,
+) -> Result<String, ServerError> {
+    UtsegWorkflow::new()
+        .run_per_file(TextPerFileWorkflowRequest {
+            chat_text: ChatText::from(chat_text),
+            lang,
+            shared: PipelineServices {
+                pool,
+                cache,
+                engine_version,
+            },
+            params: UtsegWorkflowParams { cache_policy },
+        })
+        .await
+}
+
+// ---------------------------------------------------------------------------
+// Cross-file batch utseg processing
+// ---------------------------------------------------------------------------
+
+/// Process multiple CHAT files, pooling all cache misses into a single
+/// `batch_infer` call for maximum throughput.
+///
+/// Returns `(filename, Ok(output_text) | Err(error_msg))` for each file.
+pub(crate) async fn process_utseg_batch(
+    files: &[TextBatchFileInput],
+    lang: &LanguageCode3,
+    pool: &WorkerPool,
+    cache: &UtteranceCache,
+    engine_version: &EngineVersion,
+    cache_policy: CachePolicy,
+) -> TextBatchFileResults {
+    UtsegWorkflow::new()
+        .run_batch_files(TextBatchWorkflowRequest {
+            files,
+            lang,
+            shared: PipelineServices {
+                pool,
+                cache,
+                engine_version,
+            },
+            params: UtsegWorkflowParams { cache_policy },
+        })
+        .await
+}
+
+async fn run_utseg_impl(
     chat_text: &str,
     lang: &LanguageCode3,
     pool: &WorkerPool,
@@ -71,29 +189,22 @@ pub async fn process_utseg(
     .await
 }
 
-// ---------------------------------------------------------------------------
-// Cross-file batch utseg processing
-// ---------------------------------------------------------------------------
-
-/// Process multiple CHAT files, pooling all cache misses into a single
-/// `batch_infer` call for maximum throughput.
-///
-/// Returns `(filename, Ok(output_text) | Err(error_msg))` for each file.
-pub async fn process_utseg_batch(
-    files: &[(String, String)], // (filename, chat_text)
+async fn run_utseg_batch_impl(
+    files: &[TextBatchFileInput],
     lang: &LanguageCode3,
     pool: &WorkerPool,
     cache: &UtteranceCache,
     engine_version: &EngineVersion,
     cache_policy: CachePolicy,
-) -> Vec<(String, Result<String, String>)> {
+) -> TextBatchFileResults {
     let mut results: Vec<(String, Result<String, String>)> = Vec::with_capacity(files.len());
 
     // 1. Parse all files and collect payloads
     let mut parsed_files: Vec<ChatFile> = Vec::with_capacity(files.len());
     let mut parse_error_counts: Vec<usize> = Vec::with_capacity(files.len());
-    for (filename, chat_text) in files {
-        let (chat_file, parse_errors) = parse_lenient(chat_text);
+    for file in files {
+        let filename = file.filename.as_ref();
+        let (chat_file, parse_errors) = parse_lenient(file.chat_text.as_ref());
         if !parse_errors.is_empty() {
             warn!(
                 filename = %filename,
@@ -134,9 +245,9 @@ pub async fn process_utseg_batch(
             let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
             let error_summary = format!("utseg pre-validation failed: {}", msgs.join("; "));
             warn!(
-                filename = %files[file_idx].0,
+                filename = %files[file_idx].filename,
                 errors = %error_summary,
-                chat_text = %files[file_idx].1,
+                chat_text = %files[file_idx].chat_text,
                 "utseg pre-validation failed — dumping CHAT for diagnosis"
             );
             validation_errors[file_idx] = Some(error_summary);
@@ -188,13 +299,16 @@ pub async fn process_utseg_batch(
             Ok(responses) => responses,
             Err(e) => {
                 warn!(error = %e, "Batch infer failed for all files");
-                for (file_idx, (filename, _)) in files.iter().enumerate() {
+                for (file_idx, file) in files.iter().enumerate() {
                     if per_file_info
                         .get(file_idx)
                         .and_then(|f| f.as_ref())
                         .is_some()
                     {
-                        results.push((filename.clone(), Err(format!("Batch infer failed: {e}"))));
+                        results.push((
+                            file.filename.to_string(),
+                            Err(format!("Batch infer failed: {e}")),
+                        ));
                     } else {
                         // Apply cached assignments and serialize
                         let chat_file = &mut parsed_files[file_idx];
@@ -202,19 +316,20 @@ pub async fn process_utseg_batch(
                         if !cached.is_empty() {
                             apply_utseg_results(chat_file, cached);
                         }
-                        results.push((filename.clone(), Ok(to_chat_string(chat_file))));
+                        results.push((file.filename.to_string(), Ok(to_chat_string(chat_file))));
                     }
                 }
-                return results;
+                return wrap_legacy_batch_results(results);
             }
         }
     };
 
     // 4. Distribute responses back to files and apply
-    for (file_idx, (filename, _)) in files.iter().enumerate() {
+    for (file_idx, file) in files.iter().enumerate() {
+        let filename = file.filename.as_ref();
         // Skip files that failed pre-validation
         if let Some(ref err) = validation_errors[file_idx] {
-            results.push((filename.clone(), Err(err.clone())));
+            results.push((file.filename.to_string(), Err(err.clone())));
             continue;
         }
 
@@ -265,10 +380,10 @@ pub async fn process_utseg_batch(
             warn!(filename = %filename, errors = ?msgs, "utseg post-validation warnings (non-fatal)");
         }
 
-        results.push((filename.clone(), Ok(to_chat_string(chat_file))));
+        results.push((file.filename.to_string(), Ok(to_chat_string(chat_file))));
     }
 
-    results
+    wrap_legacy_batch_results(results)
 }
 
 // ---------------------------------------------------------------------------

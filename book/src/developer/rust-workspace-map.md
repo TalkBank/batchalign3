@@ -1,9 +1,10 @@
 # Rust Workspace Map
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last modified:** 2026-03-21 15:30 EDT
 
-Batchalign3 currently has two active Rust surfaces:
+Batchalign3 currently has three active Rust surfaces plus one repo-local
+automation surface:
 
 ## 1. Root Cargo Workspace
 
@@ -16,6 +17,9 @@ Active crates:
 | `batchalign-chat-ops` | shared CHAT extraction, injection, mapping, validation-adjacent operations |
 | `batchalign-app` | server routes, job lifecycle, worker orchestration, OpenAPI, persistence |
 | `batchalign-cli` | `batchalign3` binary, argument parsing, dispatch, daemon/log/cache commands |
+| `batchalign-types` | shared domain, protocol, and scheduling types |
+| `xtask` | repo-local automation and affected-check orchestration |
+| `batchalign-app/src/workflow/` | workflow-family implementations for `transcribe`, `align`, `morphotag`, `compare`, `benchmark` |
 
 Typical commands:
 
@@ -26,6 +30,7 @@ cargo check --workspace
 cargo nextest run --workspace
 cargo nextest run -p batchalign-cli --test cli
 cargo nextest run -p batchalign-app --test integration
+cargo xtask affected-rust packages
 ```
 
 ## 2. PyO3 Bridge
@@ -43,9 +48,22 @@ make build-python
 cargo nextest run --manifest-path pyo3/Cargo.toml
 ```
 
+## 3. Repo Automation
+
+`xtask/` is the home for repo-local developer automation:
+
+- affected-check selection
+- local verification presets
+- install/build smoke tests
+- repository policy checks that need typed access to workspace metadata
+
+Use `cargo xtask ...` when a task understands the repo graph better than a
+shell script does. Keep shell wrappers thin.
+
 ## Ownership Boundary
 
 - use the root workspace when the change affects CLI behavior, server APIs, job execution, logs, cache handling, or worker orchestration
+- use `crates/batchalign-app/src/workflow/` when the change affects command semantics, workflow composition, or output materialization
 - use `pyo3/` when the change affects the Python extension surface exposed as `batchalign_core`
 - remember that `batchalign-chat-ops` is shared by both surfaces: rebuild
   `batchalign_core` with `make build-python`, and if you plan to run the
@@ -60,7 +78,8 @@ cargo nextest run --manifest-path pyo3/Cargo.toml
 3. `crates/batchalign-app/src/runner/` — server-side task routing and dispatch shapes
 4. `crates/batchalign-app/src/routes/` — Axum HTTP routes
 5. `crates/batchalign-app/src/worker/` — worker pool and IPC
-6. `pyo3/src/lib.rs` — PyO3 module organization and entry points
+6. `crates/batchalign-app/src/workflow/` — workflow-family implementations and typed intermediate artifacts
+7. `pyo3/src/lib.rs` — PyO3 module organization and entry points
 
 See also: [Rust CLI and Server](rust-cli-and-server.md) for detailed dispatch
 documentation and the checklist for adding new commands.

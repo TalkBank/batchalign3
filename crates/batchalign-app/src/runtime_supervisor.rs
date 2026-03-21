@@ -31,6 +31,17 @@ pub struct ShutdownSummary {
     pub remaining_jobs: usize,
 }
 
+/// Error returned when the runtime supervisor cannot report shutdown status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ShutdownError {
+    /// The supervisor actor was already gone before the shutdown command could be sent.
+    #[error("runtime supervisor unavailable before shutdown command could be sent")]
+    Unavailable,
+    /// The supervisor accepted shutdown but dropped the reply channel before responding.
+    #[error("runtime supervisor dropped shutdown status before replying")]
+    ReplyDropped,
+}
+
 /// Cloneable handle for the runtime supervisor actor.
 ///
 /// Clones are cheap and all send commands into the same owned supervisor task.
@@ -89,23 +100,17 @@ impl RuntimeSupervisor {
     }
 
     /// Stop the queue task and wait for tracked jobs to finish.
-    pub async fn shutdown(&self, timeout: Duration) -> ShutdownSummary {
+    pub async fn shutdown(&self, timeout: Duration) -> Result<ShutdownSummary, ShutdownError> {
         let (reply, receiver) = oneshot::channel();
         if self
             .commands
             .send(SupervisorCommand::Shutdown { timeout, reply })
             .is_err()
         {
-            return ShutdownSummary {
-                timed_out: false,
-                remaining_jobs: 0,
-            };
+            return Err(ShutdownError::Unavailable);
         }
 
-        receiver.await.unwrap_or(ShutdownSummary {
-            timed_out: false,
-            remaining_jobs: 0,
-        })
+        receiver.await.map_err(|_| ShutdownError::ReplyDropped)
     }
 }
 
@@ -170,7 +175,10 @@ mod tests {
             completed_for_task.store(1, Ordering::SeqCst);
         });
 
-        let summary = supervisor.shutdown(Duration::from_secs(1)).await;
+        let summary = supervisor
+            .shutdown(Duration::from_secs(1))
+            .await
+            .expect("shutdown should succeed");
 
         assert!(!summary.timed_out);
         assert_eq!(summary.remaining_jobs, 0);
@@ -186,9 +194,48 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
 
-        let summary = supervisor.shutdown(Duration::from_millis(10)).await;
+        let summary = supervisor
+            .shutdown(Duration::from_millis(10))
+            .await
+            .expect("shutdown should succeed");
 
         assert!(summary.timed_out);
         assert!(summary.remaining_jobs >= 1);
+    }
+
+    /// Shutdown reports an explicit error instead of fabricating a clean summary
+    /// when the supervisor actor is already unavailable.
+    #[tokio::test]
+    async fn shutdown_reports_unavailable_supervisor() {
+        let (commands, receiver) = unbounded_channel();
+        drop(receiver);
+        let supervisor = RuntimeSupervisor { commands };
+
+        let error = supervisor
+            .shutdown(Duration::from_secs(1))
+            .await
+            .expect_err("shutdown should fail when supervisor is unavailable");
+
+        assert_eq!(error, ShutdownError::Unavailable);
+    }
+
+    /// Shutdown reports an explicit error when the supervisor drops the reply
+    /// channel before sending a summary.
+    #[tokio::test]
+    async fn shutdown_reports_dropped_reply() {
+        let (commands, mut receiver) = unbounded_channel();
+        tokio::spawn(async move {
+            if let Some(SupervisorCommand::Shutdown { .. }) = receiver.recv().await {
+                // Drop the reply without sending a summary.
+            }
+        });
+        let supervisor = RuntimeSupervisor { commands };
+
+        let error = supervisor
+            .shutdown(Duration::from_secs(1))
+            .await
+            .expect_err("shutdown should fail when reply is dropped");
+
+        assert_eq!(error, ShutdownError::ReplyDropped);
     }
 }

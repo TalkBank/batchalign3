@@ -6,27 +6,27 @@
 
 pub(crate) mod debug_dumper;
 mod dispatch;
+mod policy;
 pub(crate) mod util;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::api::{
-    CommandName, ContentType, EngineVersion, FileName, JobId, LanguageCode3, RevAiJobId,
-    UnixTimestamp,
-};
+use crate::api::{ContentType, EngineVersion, FileName, JobId, RevAiJobId, UnixTimestamp};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
 use crate::revai::{RevAiPreflightPlan, preflight_submit_audio_paths};
 use crate::scheduling::{DurationMs, FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::worker::InferTask;
 use crate::worker::pool::WorkerPool;
+use crate::worker::target::task_name as infer_task_name;
 use tracing::{error, info, warn};
 
 use crate::api::JobStatus;
 use crate::queue::QueueBackend;
 use crate::store::{JobStore, LeaseRenewalOutcome, RunnerJobSnapshot, memory_gate, unix_now};
+use crate::workflow::{RunnerDispatchKind, command_runner_dispatch_kind};
 
 use dispatch::{
     BatchedInferDispatchPlan, BenchmarkDispatchPlan, BenchmarkDispatchRuntime, FaDispatchPlan,
@@ -35,63 +35,11 @@ use dispatch::{
     dispatch_benchmark_infer, dispatch_fa_infer, dispatch_media_analysis_v2,
     dispatch_transcribe_infer,
 };
+use policy::{command_requires_infer, infer_task_for_command, result_filename_for_command};
 use util::{
     FileRunTracker, FileStage, apply_result_filename, collect_preflight_audio_paths,
     compute_job_workers, force_terminal_file_states, preflight_validate_media, should_preflight,
 };
-
-fn infer_task_for_command(command: &CommandName) -> Option<InferTask> {
-    match command.as_ref() {
-        "morphotag" => Some(InferTask::Morphosyntax),
-        "utseg" => Some(InferTask::Utseg),
-        "translate" => Some(InferTask::Translate),
-        "coref" => Some(InferTask::Coref),
-        "align" => Some(InferTask::Fa),
-        "transcribe" => Some(InferTask::Asr),
-        "transcribe_s" => Some(InferTask::Asr),
-        "opensmile" => Some(InferTask::Opensmile),
-        "avqi" => Some(InferTask::Avqi),
-        "compare" => Some(InferTask::Morphosyntax),
-        _ => None,
-    }
-}
-
-fn infer_task_name(task: InferTask) -> &'static str {
-    match task {
-        InferTask::Morphosyntax => "morphosyntax",
-        InferTask::Utseg => "utseg",
-        InferTask::Translate => "translate",
-        InferTask::Coref => "coref",
-        InferTask::Fa => "fa",
-        InferTask::Asr => "asr",
-        InferTask::Opensmile => "opensmile",
-        InferTask::Avqi => "avqi",
-        InferTask::Speaker => "speaker",
-    }
-}
-
-fn command_requires_infer(command: &CommandName, _all_chat: bool) -> bool {
-    match command.as_ref() {
-        // Text-only commands must always stay on the server-side infer path.
-        "morphotag" | "utseg" | "translate" | "coref" | "compare" => true,
-        // openSMILE and AVQI now run through typed V2 with Rust-owned media prep.
-        "opensmile" | "avqi" => true,
-        // Align is now fully Rust-owned on the released surface.
-        "align" => true,
-        _ => false,
-    }
-}
-
-fn result_filename_for_command(command: &CommandName, filename: &str) -> String {
-    if matches!(command.as_ref(), "transcribe" | "transcribe_s") {
-        std::path::Path::new(filename)
-            .with_extension("cha")
-            .to_string_lossy()
-            .to_string()
-    } else {
-        filename.to_string()
-    }
-}
 
 /// Shared dependencies needed to build per-job runner tasks.
 #[derive(Clone)]
@@ -182,7 +130,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
 
     // Read command + lang for the memory gate check.
     let gate_command = job.dispatch.command.clone();
-    let gate_lang_resolved = job.dispatch.lang.as_resolved().cloned();
+    let gate_lang = job.dispatch.lang.to_worker_language();
 
     // Memory gate — if pressure persists, defer the queued job back into the
     // local queue backend instead of sleeping inside the runner task.
@@ -198,7 +146,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         &context,
         Some(pool),
         Some(&gate_command),
-        gate_lang_resolved.as_ref(),
+        Some(gate_lang),
         store.config().memory_gate_mb.0,
         Some(store.config()),
     )
@@ -289,16 +237,11 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // from the job options are passed so the pre-scaled worker matches the
     // exact key that dispatch will look up.
     if *num_workers > 1 {
-        let pre_scale_lang = job
-            .dispatch
-            .lang
-            .as_resolved()
-            .cloned()
-            .unwrap_or_else(|| LanguageCode3::from_worker_lang("auto"));
+        let pre_scale_lang = job.dispatch.lang.to_worker_language();
         let job_engine_overrides = job.dispatch.options.common().engine_overrides_json();
         pool.pre_scale_with_overrides(
             &command,
-            &pre_scale_lang,
+            pre_scale_lang,
             num_workers.0,
             &job_engine_overrides,
         )
@@ -382,11 +325,19 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // Special case: transcribe/transcribe_s with server-side ASR orchestration.
     // These commands take audio input (not CHAT), so they do not go through the
     // standard `use_infer` path which requires all_chat=true.
-    let use_transcribe_infer = (command == "transcribe" || command == "transcribe_s")
-        && infer_tasks.contains(&InferTask::Asr);
-    let use_benchmark_infer = command == "benchmark" && infer_tasks.contains(&InferTask::Asr);
-    let use_media_analysis_infer = (command == "opensmile" || command == "avqi")
-        && infer_task.is_some_and(|task| infer_tasks.contains(&task));
+    let runner_dispatch_kind = command_runner_dispatch_kind(&command);
+    let use_transcribe_infer = matches!(
+        runner_dispatch_kind,
+        Some(RunnerDispatchKind::TranscribeAudioInfer)
+    ) && infer_tasks.contains(&InferTask::Asr);
+    let use_benchmark_infer = matches!(
+        runner_dispatch_kind,
+        Some(RunnerDispatchKind::BenchmarkAudioInfer)
+    ) && infer_tasks.contains(&InferTask::Asr);
+    let use_media_analysis_infer = matches!(
+        runner_dispatch_kind,
+        Some(RunnerDispatchKind::MediaAnalysisV2)
+    ) && infer_task.is_some_and(|task| infer_tasks.contains(&task));
 
     if test_echo_mode {
         dispatch_test_echo_files(&job, store, &file_list).await;
@@ -721,7 +672,10 @@ mod tests {
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
-    use crate::api::{CommandName, FileName, JobId, JobStatus, NumSpeakers, UnixTimestamp};
+    use crate::api::{
+        CommandName, FileName, JobId, JobStatus, LanguageCode3, LanguageSpec, NumSpeakers,
+        UnixTimestamp,
+    };
     use crate::db::JobDB;
     use crate::options::{CommandOptions, CommonOptions, OpensmileOptions};
     use crate::scheduling::{AttemptOutcome, FailureCategory, WorkUnitKind};
@@ -754,7 +708,7 @@ mod tests {
             },
             dispatch: JobDispatchConfig {
                 command: "opensmile".into(),
-                lang: "eng".into(),
+                lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Opensmile(OpensmileOptions {
                     common: CommonOptions::default(),
@@ -831,6 +785,10 @@ mod tests {
             Some(InferTask::Asr)
         );
         assert_eq!(
+            infer_task_for_command(&CommandName::from("compare")),
+            Some(InferTask::Morphosyntax)
+        );
+        assert_eq!(
             infer_task_for_command(&CommandName::from("opensmile")),
             Some(InferTask::Opensmile)
         );
@@ -840,7 +798,7 @@ mod tests {
         );
         assert_eq!(
             infer_task_for_command(&CommandName::from("benchmark")),
-            None
+            Some(InferTask::Asr)
         );
     }
 

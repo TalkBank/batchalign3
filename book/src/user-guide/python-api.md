@@ -1,5 +1,7 @@
 # Python API
 
+**Last modified:** 2026-03-21 08:20 EDT
+
 The current public Python surface is centered on two modules:
 
 - `batchalign.pipeline_api` — thin CHAT-aware facade over Rust-owned document execution

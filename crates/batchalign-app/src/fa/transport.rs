@@ -5,8 +5,9 @@
 //! depending on the concrete worker-protocol V2 request-building details.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::api::{DurationMs, LanguageCode3};
+use crate::api::{DurationMs, WorkerLanguage};
 use crate::error::ServerError;
 use crate::pipeline::PipelineServices;
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
@@ -16,6 +17,8 @@ use crate::worker::request_builder_v2::{
 };
 use batchalign_chat_ops::fa::{FaEngineType, FaGroup, FaInferItem, FaTimingMode, WordTiming};
 use tracing::warn;
+
+static NEXT_FA_REQUEST_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared FA worker batch input independent of the concrete worker transport.
 pub(crate) struct FaWorkerBatch<'a> {
@@ -27,6 +30,8 @@ pub(crate) struct FaWorkerBatch<'a> {
     pub miss_indices: &'a [usize],
     /// Source audio path for the current file.
     pub audio_path: &'a Path,
+    /// Worker-runtime language hint for FA model bootstrap.
+    pub worker_lang: WorkerLanguage,
     /// FA backend selected by the Rust control plane.
     pub engine: FaEngineType,
     /// Timing mode selected by the Rust control plane.
@@ -75,6 +80,7 @@ async fn infer_groups_v2(
     services: PipelineServices<'_>,
     batch: FaWorkerBatch<'_>,
 ) -> Result<Vec<FaWorkerGroupResult>, ServerError> {
+    let request_namespace = NEXT_FA_REQUEST_NAMESPACE.fetch_add(1, Ordering::Relaxed);
     let artifacts = PreparedArtifactRuntimeV2::new("fa_v2").map_err(|error| {
         ServerError::Validation(format!("failed to create FA V2 artifact runtime: {error}"))
     })?;
@@ -82,7 +88,7 @@ async fn infer_groups_v2(
     let mut parsed_results = Vec::with_capacity(batch.miss_indices.len());
     for group_index in batch.miss_indices.iter().copied() {
         let infer_item = build_fa_infer_item(&batch, group_index);
-        let request_ids = build_fa_request_ids(group_index);
+        let request_ids = build_fa_request_ids(request_namespace, group_index);
         let request = build_forced_alignment_request_v2(
             artifacts.store(),
             ForcedAlignmentBuildInputV2 {
@@ -100,7 +106,7 @@ async fn infer_groups_v2(
 
         let response = services
             .pool
-            .dispatch_execute_v2(&LanguageCode3::from_worker_lang(""), &request)
+            .dispatch_execute_v2(&batch.worker_lang, &request)
             .await
             .map_err(ServerError::Worker)?;
 
@@ -151,12 +157,16 @@ fn build_fa_infer_item(batch: &FaWorkerBatch<'_>, group_index: usize) -> FaInfer
     }
 }
 
-/// Build stable request and artifact ids for one FA V2 request.
-fn build_fa_request_ids(group_index: usize) -> PreparedFaRequestIdsV2 {
+/// Build unique request and artifact ids for one FA V2 request.
+///
+/// The request namespace is allocated once per `infer_groups_v2` call so two
+/// concurrent files cannot collide on `fa-v2-request-0`, `fa-v2-request-1`,
+/// and so on while sharing the same GPU worker.
+fn build_fa_request_ids(request_namespace: u64, group_index: usize) -> PreparedFaRequestIdsV2 {
     PreparedFaRequestIdsV2::new(
-        format!("fa-v2-request-{group_index}"),
-        format!("fa-v2-payload-{group_index}"),
-        format!("fa-v2-audio-{group_index}"),
+        format!("fa-v2-request-{request_namespace}-{group_index}"),
+        format!("fa-v2-payload-{request_namespace}-{group_index}"),
+        format!("fa-v2-audio-{request_namespace}-{group_index}"),
     )
 }
 
@@ -189,6 +199,7 @@ mod tests {
             groups: &groups,
             miss_indices: &[0],
             audio_path: Path::new("/tmp/input.wav"),
+            worker_lang: WorkerLanguage::from(crate::api::LanguageCode3::eng()),
             engine: FaEngineType::WhisperFa,
             timing_mode: FaTimingMode::WithPauses,
         };
@@ -208,10 +219,20 @@ mod tests {
     }
 
     #[test]
-    fn builds_stable_v2_request_ids_from_group_index() {
-        let ids = build_fa_request_ids(7);
-        assert_eq!(&*ids.request_id, "fa-v2-request-7");
-        assert_eq!(&*ids.payload_ref_id, "fa-v2-payload-7");
-        assert_eq!(&*ids.audio_ref_id, "fa-v2-audio-7");
+    fn builds_namespaced_v2_request_ids_from_group_index() {
+        let ids = build_fa_request_ids(42, 7);
+        assert_eq!(&*ids.request_id, "fa-v2-request-42-7");
+        assert_eq!(&*ids.payload_ref_id, "fa-v2-payload-42-7");
+        assert_eq!(&*ids.audio_ref_id, "fa-v2-audio-42-7");
+    }
+
+    #[test]
+    fn namespaces_v2_request_ids_across_concurrent_files() {
+        let first = build_fa_request_ids(1, 0);
+        let second = build_fa_request_ids(2, 0);
+
+        assert_ne!(first.request_id, second.request_id);
+        assert_ne!(first.payload_ref_id, second.payload_ref_id);
+        assert_ne!(first.audio_ref_id, second.audio_ref_id);
     }
 }

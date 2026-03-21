@@ -1,7 +1,7 @@
 # Server Dispatch Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-21 15:30
 
 This page describes the implemented `batchalign3` runtime:
 
@@ -247,8 +247,9 @@ flowchart LR
 | Python worker | `batchalign/worker/` | worker entry point, model loading, capabilities, infer/execute dispatch |
 | Python inference | `batchalign/inference/` | engine-specific inference backends |
 
-Older names such as the nested Rust workspace, `batchalign-server`, and
-`batchalign-types` are historical and are not the current public repo layout.
+Older names such as the nested Rust workspace and `batchalign-server` are
+historical. `batchalign-types` is an active crate that holds shared domain
+newtypes and worker protocol types (see the workspace `Cargo.toml`).
 
 ## Dispatch resolution
 
@@ -475,8 +476,8 @@ sync after every restart.
 | `crates/batchalign-app/src/types/config.rs` | `ServerConfig`, defaults, validation, state dir |
 | `crates/batchalign-app/src/runner/` | job runner, dispatch shape selection |
 | `crates/batchalign-app/src/runner/dispatch/` | batched infer, FA infer, transcribe infer, per-file process |
-| `crates/batchalign-app/src/morphosyntax.rs` | morphosyntax orchestrator (parse→cache→infer→inject) |
-| `crates/batchalign-app/src/fa.rs` | forced alignment orchestrator |
+| `crates/batchalign-app/src/morphosyntax/` | morphosyntax orchestrator (parse→cache→infer→inject) |
+| `crates/batchalign-app/src/fa/` | forced alignment orchestrator |
 | `crates/batchalign-app/src/transcribe.rs` | transcribe orchestrator (ASR→postprocess→CHAT assembly) |
 | `crates/batchalign-app/src/utseg.rs` | utseg orchestrator |
 | `crates/batchalign-app/src/translate.rs` | translation orchestrator |

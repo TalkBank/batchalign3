@@ -3,6 +3,7 @@
 use pyo3::prelude::*;
 
 use crate::ParsedChat;
+use crate::pytypes::{PythonAsrWordsJson, PythonLanguageId};
 use crate::speaker_ops::{add_utterance_timing_inner, reassign_speakers_inner};
 
 #[pymethods]
@@ -12,14 +13,11 @@ impl ParsedChat {
     fn py_reassign_speakers(
         &mut self,
         py: Python<'_>,
-        segments_json: talkbank_model::model::Provenance<
-            talkbank_model::model::AsrWordsJson,
-            String,
-        >,
-        lang: talkbank_model::PythonLanguageId,
+        segments_json: PythonAsrWordsJson,
+        lang: PythonLanguageId,
     ) -> PyResult<()> {
-        let seg_json = segments_json.data;
-        let lang_str = lang.data;
+        let seg_json = segments_json.into_data();
+        let lang_str = lang.into_data();
         let old_file = std::mem::replace(
             &mut self.inner,
             talkbank_model::model::ChatFile::new(Vec::new()),
@@ -47,9 +45,9 @@ impl ParsedChat {
     fn py_add_utterance_timing(
         &mut self,
         py: Python<'_>,
-        asr_words_json: talkbank_model::PythonAsrWordsJson,
+        asr_words_json: PythonAsrWordsJson,
     ) -> PyResult<()> {
-        let asr_json = asr_words_json.data;
+        let asr_json = asr_words_json.into_data();
         let inner = &mut self.inner;
         py.detach(|| add_utterance_timing_inner(inner, &asr_json).map_err(|e| e.to_string()))
             .map_err(pyo3::exceptions::PyValueError::new_err)

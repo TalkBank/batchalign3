@@ -33,7 +33,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::AppState;
 use crate::error::ServerError;
@@ -108,6 +108,36 @@ fn supported_command_list(capabilities: &[String]) -> Vec<String> {
     set.into_iter().collect()
 }
 
+fn path_mode_filename_from_source(source_path: &str) -> Result<FileName, ServerError> {
+    let file_name = std::path::Path::new(source_path)
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            ServerError::Validation(format!(
+                "paths_mode source path has no filename component: {source_path}"
+            ))
+        })?;
+    Ok(FileName::from(file_name.to_string_lossy().to_string()))
+}
+
+async fn ensure_dir(path: &std::path::Path, context: &str) -> Result<(), ServerError> {
+    tokio::fs::create_dir_all(path).await.map_err(|error| {
+        ServerError::Io(std::io::Error::new(
+            error.kind(),
+            format!("{context} {}: {error}", path.display()),
+        ))
+    })
+}
+
+async fn write_staged_file(path: &std::path::Path, content: &str) -> Result<(), ServerError> {
+    tokio::fs::write(path, content).await.map_err(|error| {
+        ServerError::Io(std::io::Error::new(
+            error.kind(),
+            format!("staging input file {}: {error}", path.display()),
+        ))
+    })
+}
+
 /// Accept a new processing job and begin execution.
 ///
 /// Validates the command against built-in tasks and worker-advertised capabilities,
@@ -161,16 +191,8 @@ pub(crate) async fn submit_job(
                 submission
                     .source_paths
                     .iter()
-                    .map(|sp| {
-                        FileName::from(
-                            std::path::Path::new(sp)
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string(),
-                        )
-                    })
-                    .collect()
+                    .map(|sp| path_mode_filename_from_source(sp))
+                    .collect::<Result<Vec<_>, _>>()?
             };
             let has_chat: Vec<bool> = submission
                 .source_paths
@@ -179,7 +201,11 @@ pub(crate) async fn submit_job(
                 .collect();
 
             let staging_dir = format!("{}/{job_id}", state.environment.paths.jobs_dir);
-            let _ = tokio::fs::create_dir_all(&staging_dir).await;
+            ensure_dir(
+                std::path::Path::new(&staging_dir),
+                "creating paths-mode staging dir",
+            )
+            .await?;
 
             (
                 filenames,
@@ -199,8 +225,16 @@ pub(crate) async fn submit_job(
 
             let staging_dir = format!("{}/{job_id}", state.environment.paths.jobs_dir);
             let input_dir = format!("{staging_dir}/input");
-            let _ = tokio::fs::create_dir_all(&input_dir).await;
-            let _ = tokio::fs::create_dir_all(format!("{staging_dir}/output")).await;
+            ensure_dir(
+                std::path::Path::new(&input_dir),
+                "creating content-mode input dir",
+            )
+            .await?;
+            ensure_dir(
+                std::path::Path::new(&format!("{staging_dir}/output")),
+                "creating content-mode output dir",
+            )
+            .await?;
 
             let mut filenames: Vec<FileName> = Vec::new();
             let mut has_chat = Vec::new();
@@ -210,11 +244,9 @@ pub(crate) async fn submit_job(
                 has_chat.push(true);
                 let dest = format!("{input_dir}/{}", fp.filename);
                 if let Some(parent) = std::path::Path::new(&dest).parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
+                    ensure_dir(parent, "creating staged input parent dir").await?;
                 }
-                if let Err(e) = tokio::fs::write(&dest, &fp.content).await {
-                    warn!(filename = %fp.filename, error = %e, "Failed to stage input file");
-                }
+                write_staged_file(std::path::Path::new(&dest), &fp.content).await?;
             }
             for media_name in &submission.media_files {
                 filenames.push(FileName::from(media_name.as_str()));

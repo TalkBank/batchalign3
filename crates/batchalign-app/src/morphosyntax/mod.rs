@@ -31,10 +31,19 @@ mod worker;
 
 use std::collections::HashMap;
 
+use crate::api::ChatText;
 use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::pipeline::morphosyntax::run_morphosyntax_pipeline;
+use crate::workflow::text_batch::{
+    TextBatchFileInput, TextBatchFileResults, TextWorkflowFileError,
+};
+use crate::workflow::morphosyntax::{
+    MorphosyntaxBatchWorkflow, MorphosyntaxBatchWorkflowRequest, MorphosyntaxWorkflow,
+    MorphosyntaxWorkflowRequest,
+};
+use crate::workflow::{CrossFileBatchWorkflow, PerFileWorkflow};
 use batchalign_chat_ops::morphosyntax::{
     BatchItemWithPosition, cache_key, clear_morphosyntax_selective, collect_payloads,
     declared_languages, extract_strings, inject_results, validate_mor_alignment,
@@ -45,7 +54,7 @@ use batchalign_chat_ops::validate::{ValidityLevel, validate_output, validate_to_
 use batchalign_chat_ops::{CacheKey, CacheTaskName, LanguageCode};
 use tracing::{info, warn};
 
-pub(crate) use batch::{inject_cache_hits, partition_by_cache, process_morphosyntax_batch};
+pub(crate) use batch::{inject_cache_hits, partition_by_cache, run_morphosyntax_batch_impl};
 pub(crate) use worker::{cache_put_entries, infer_batch};
 
 /// Cache task name — matches Python's `morphosyntax_v4`.
@@ -72,6 +81,20 @@ pub(crate) async fn process_morphosyntax(
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
 ) -> Result<String, ServerError> {
+    MorphosyntaxWorkflow
+        .run(MorphosyntaxWorkflowRequest {
+            chat_text: ChatText::from(chat_text),
+            services,
+            params,
+        })
+        .await
+}
+
+pub(crate) async fn run_morphosyntax_impl(
+    chat_text: &str,
+    services: PipelineServices<'_>,
+    params: &MorphosyntaxParams<'_>,
+) -> Result<String, ServerError> {
     run_morphosyntax_pipeline(
         chat_text,
         params.lang,
@@ -82,6 +105,32 @@ pub(crate) async fn process_morphosyntax(
         params.mwt,
     )
     .await
+}
+
+/// Process multiple CHAT files through the cross-file batch morphosyntax workflow.
+pub(crate) async fn process_morphosyntax_batch(
+    files: &[TextBatchFileInput],
+    services: PipelineServices<'_>,
+    params: &MorphosyntaxParams<'_>,
+) -> TextBatchFileResults {
+    MorphosyntaxBatchWorkflow
+        .run(MorphosyntaxBatchWorkflowRequest {
+            files,
+            services,
+            params,
+        })
+        .await
+        .unwrap_or_else(|error| {
+            files
+                .iter()
+                .map(|file| {
+                    crate::workflow::text_batch::TextBatchFileResult::err(
+                        file.filename.clone(),
+                        TextWorkflowFileError::new(error.to_string()),
+                    )
+                })
+                .collect()
+        })
 }
 
 // ---------------------------------------------------------------------------

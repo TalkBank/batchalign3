@@ -29,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::{
     CommandName, ContentType, FileName, FileProgressStage, FileStatusEntry, FileStatusKind,
-    JobStatus, LanguageCode3, NodeId, UnixTimestamp,
+    JobStatus, NodeId, UnixTimestamp, WorkerLanguage,
 };
 use crate::config::ServerConfig;
 use crate::scheduling::FailureCategory;
@@ -374,7 +374,7 @@ pub(crate) async fn memory_gate(
     context: &str,
     pool: Option<&crate::worker::pool::WorkerPool>,
     command: Option<&CommandName>,
-    lang: Option<&LanguageCode3>,
+    lang: Option<WorkerLanguage>,
     critical_mb: u64,
     config: Option<&ServerConfig>,
 ) -> Result<Option<u64>, ServerError> {
@@ -396,7 +396,7 @@ pub(crate) async fn memory_gate(
     // If the pool already has idle workers for this (command, lang), skip the
     // memory check — those workers are already loaded and will be reused.
     if let (Some(pool), Some(cmd), Some(lang)) = (pool, command, lang)
-        && pool.has_idle_workers(cmd, lang)
+        && pool.has_idle_workers(cmd, &lang)
     {
         info!(
             command = %cmd,
@@ -499,9 +499,11 @@ pub(crate) fn unix_now() -> UnixTimestamp {
 /// Convert a Unix timestamp to ISO 8601 string.
 pub fn ts_iso(ts: UnixTimestamp) -> String {
     use chrono::{DateTime, Utc};
-    let secs = ts.0 as i64;
-    let nsecs = ((ts.0 - secs as f64) * 1_000_000_000.0) as u32;
-    DateTime::<Utc>::from_timestamp(secs, nsecs)
+    if !ts.0.is_finite() {
+        return format!("invalid-unix-timestamp({})", ts.0);
+    }
+
+    DateTime::<Utc>::from_timestamp_millis((ts.0 * 1000.0).round() as i64)
         .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default()
+        .unwrap_or_else(|| format!("invalid-unix-timestamp({})", ts.0))
 }

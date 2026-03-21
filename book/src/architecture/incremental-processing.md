@@ -1,7 +1,7 @@
 # Incremental Processing
 
 **Status:** Current
-**Last verified:** 2026-03-13
+**Last updated:** 2026-03-21 15:30
 
 Incremental processing allows batchalign to reprocess only the utterances that
 changed after a user edits a CHAT file, preserving cached dependent tiers
@@ -127,7 +127,7 @@ re-aligned when that group cannot be reconstructed from preserved timing. But
 stable groups no longer have to go back through audio alignment just because
 the file contains edits elsewhere.
 
-### Layer 3: Dispatch Integration (`runner/dispatch/infer.rs`)
+### Layer 3: Dispatch Integration (`runner/dispatch/`)
 
 The dispatch layer reads optional `before_paths` from the job and routes to
 incremental variants when a "before" file is available:
@@ -263,6 +263,6 @@ For FA with 8 groups where 1 contains a changed utterance:
 | `diff/types.rs` | chat-ops | `UtteranceDelta`, `DiffSummary` |
 | `diff/classify.rs` | chat-ops | `diff_chat()` algorithm |
 | `diff/preserve.rs` | chat-ops | `copy_dependent_tiers()` |
-| `morphosyntax.rs` | app | `process_morphosyntax_incremental()` |
-| `fa.rs` | app | `process_fa_incremental()` |
-| `runner/dispatch/infer.rs` | app | Dispatch routing for incremental paths |
+| `morphosyntax/` | app | `process_morphosyntax_incremental()` |
+| `fa/` | app | `process_fa_incremental()` |
+| `runner/dispatch/infer_batched.rs`, `fa_pipeline.rs` | app | Dispatch routing for incremental paths |

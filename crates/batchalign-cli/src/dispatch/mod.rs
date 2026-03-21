@@ -9,8 +9,9 @@ mod helpers;
 mod paths;
 mod single;
 
-use batchalign_app::config::{RuntimeLayout, load_config_from_layout};
+use batchalign_app::config::{RuntimeLayout, load_validated_config_from_layout};
 use batchalign_app::options::CommandOptions;
+use batchalign_app::{ReleasedCommand, released_command_uses_local_audio};
 use tracing::debug;
 
 use crate::client::{self, BatchalignClient, server_label};
@@ -23,6 +24,45 @@ use single::dispatch_single_server;
 // ---------------------------------------------------------------------------
 // Top-level dispatch router
 // ---------------------------------------------------------------------------
+
+/// Named dispatch request for one CLI processing invocation.
+#[derive(Debug)]
+pub struct DispatchRequest<'a> {
+    /// Canonical processing command name.
+    pub command: ReleasedCommand,
+    /// Primary language for the command.
+    pub lang: &'a str,
+    /// Requested number of speakers.
+    pub num_speakers: u32,
+    /// File extensions to discover.
+    pub extensions: &'static [&'static str],
+    /// Explicit remote server URL, if any.
+    pub server_arg: Option<&'a str>,
+    /// Input paths supplied on the CLI.
+    pub inputs: &'a [String],
+    /// Optional output directory.
+    pub out_dir: Option<&'a str>,
+    /// Typed command options for submission.
+    pub options: Option<CommandOptions>,
+    /// Optional TalkBank bank name.
+    pub bank: Option<&'a str>,
+    /// Optional bank subdirectory.
+    pub subdir: Option<&'a str>,
+    /// Optional lexicon path.
+    pub lexicon: Option<&'a str>,
+    /// Whether to use the TUI.
+    pub use_tui: bool,
+    /// Whether to auto-open the dashboard.
+    pub open_dashboard: bool,
+    /// Whether to force CPU execution for local daemons.
+    pub force_cpu: bool,
+    /// Optional before-path input for incremental workflows.
+    pub before: Option<&'a str>,
+    /// Optional explicit worker count.
+    pub workers: Option<usize>,
+    /// Optional daemon startup timeout.
+    pub timeout: Option<u64>,
+}
 
 /// Route a processing command to the appropriate server(s).
 ///
@@ -40,45 +80,33 @@ use single::dispatch_single_server;
 ///
 /// # Parameters
 ///
-/// - `command`: the processing command name (e.g. `"morphotag"`, `"align"`).
-/// - `lang`: ISO 639-3 language code (e.g. `"eng"`).
-/// - `num_speakers`: expected number of speakers (used for diarization).
-/// - `extensions`: file extensions to discover (e.g. `&["cha"]`, `&["wav", "mp3"]`).
-/// - `server_arg`: explicit `--server` URL, if provided.
-/// - `inputs`: input paths (files or directories) from the command line.
-/// - `out_dir`: optional output directory; `None` means in-place processing.
-/// - `options`: typed command options. `None` for non-processing commands.
-/// - `bank`: optional `--bank` name for TalkBank corpus filtering (requires `--server`).
-/// - `subdir`: optional `--subdir` within a bank.
-/// - `lexicon`: optional lexicon path.
-/// - `use_tui`: if `true`, renders a full-screen ratatui TUI instead of progress bars.
-/// - `open_dashboard`: if `true`, auto-launches the submitted job URL in a
-///   browser on supported platforms after submission.
+/// Takes one [`DispatchRequest`] describing the command profile, input/output
+/// paths, typed options, and UI/runtime toggles for this CLI invocation.
 ///
 /// # Errors
 ///
 /// Returns [`CliError`] on I/O failures, HTTP errors, job failures, or if
 /// no server can be resolved.
-#[allow(clippy::too_many_arguments)]
-pub async fn dispatch(
-    command: &str,
-    lang: &str,
-    num_speakers: u32,
-    extensions: &[&str],
-    server_arg: Option<&str>,
-    inputs: &[String],
-    out_dir: Option<&str>,
-    options: Option<CommandOptions>,
-    bank: Option<&str>,
-    subdir: Option<&str>,
-    lexicon: Option<&str>,
-    use_tui: bool,
-    open_dashboard: bool,
-    force_cpu: bool,
-    before: Option<&str>,
-    workers: Option<usize>,
-    timeout: Option<u64>,
-) -> Result<(), CliError> {
+pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
+    let DispatchRequest {
+        command,
+        lang,
+        num_speakers,
+        extensions,
+        server_arg,
+        inputs,
+        out_dir,
+        options,
+        bank,
+        subdir,
+        lexicon,
+        use_tui,
+        open_dashboard,
+        force_cpu,
+        before,
+        workers,
+        timeout,
+    } = request;
     let client = BatchalignClient::new();
     let layout = RuntimeLayout::from_env();
     let daemon_log_path = layout.state_dir().join("daemon.log");
@@ -91,7 +119,7 @@ pub async fn dispatch(
 
     // 1. Explicit --server
     if let Some(server) = server_arg {
-        if command_uses_local_audio(command) {
+        if released_command_uses_local_audio(command) {
             eprintln!(
                 "warning: {command} uses local audio — ignoring --server and using local daemon."
             );
@@ -164,7 +192,10 @@ pub async fn dispatch(
     }
 
     // 2. Auto-daemon
-    let cfg = load_config_from_layout(&layout, None).unwrap_or_default();
+    let (cfg, warnings) = load_validated_config_from_layout(&layout, None)?;
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
     if cfg.auto_daemon {
         match resolve_local_daemon_for_command(&client, command, force_cpu, workers, timeout).await
         {
@@ -209,7 +240,7 @@ pub async fn dispatch(
 
 async fn resolve_local_daemon_for_command(
     client: &BatchalignClient,
-    command: &str,
+    command: ReleasedCommand,
     force_cpu: bool,
     workers: Option<usize>,
     timeout: Option<u64>,
@@ -220,7 +251,7 @@ async fn resolve_local_daemon_for_command(
             return Ok(Some(url));
         }
 
-        let can_use_sidecar = command_uses_local_audio(command);
+        let can_use_sidecar = released_command_uses_local_audio(command);
         if can_use_sidecar {
             eprintln!("warning: main daemon lacks '{command}', trying sidecar daemon.");
             if let Some(sidecar_url) =
@@ -235,7 +266,7 @@ async fn resolve_local_daemon_for_command(
                  Check worker dependencies."
             );
         }
-    } else if command_uses_local_audio(command)
+    } else if released_command_uses_local_audio(command)
         && let Some(sidecar_url) =
             daemon::ensure_sidecar_daemon(force_cpu, workers, timeout).await?
         && daemon_supports_command(client, &sidecar_url, command).await
@@ -246,25 +277,22 @@ async fn resolve_local_daemon_for_command(
     Ok(None)
 }
 
-async fn daemon_supports_command(client: &BatchalignClient, url: &str, command: &str) -> bool {
+async fn daemon_supports_command(
+    client: &BatchalignClient,
+    url: &str,
+    command: ReleasedCommand,
+) -> bool {
     match client.health_check(url).await {
         Ok(health) => server_supports_command(&health.capabilities, command),
         Err(_) => false,
     }
 }
 
-fn server_supports_command(capabilities: &[String], command: &str) -> bool {
+fn server_supports_command(capabilities: &[String], command: ReleasedCommand) -> bool {
     capabilities.is_empty()
         || capabilities
             .iter()
-            .any(|c| c == command || c == "test-echo")
-}
-
-fn command_uses_local_audio(command: &str) -> bool {
-    matches!(
-        command,
-        "transcribe" | "transcribe_s" | "benchmark" | "avqi"
-    )
+            .any(|c| c == command.as_str() || c == "test-echo")
 }
 
 /// Warn (but don't block) if the server's build hash differs from the CLI's.
@@ -287,12 +315,14 @@ fn warn_stale_server(server_url: &str, health: &batchalign_app::api::HealthRespo
 
 #[cfg(test)]
 mod tests {
-    use super::command_uses_local_audio;
+    use batchalign_app::{ReleasedCommand, released_command_uses_local_audio};
 
     #[test]
     fn benchmark_is_treated_as_local_audio_command() {
-        assert!(command_uses_local_audio("benchmark"));
-        assert!(command_uses_local_audio("transcribe"));
-        assert!(!command_uses_local_audio("morphotag"));
+        assert!(released_command_uses_local_audio(ReleasedCommand::Benchmark));
+        assert!(released_command_uses_local_audio(ReleasedCommand::Transcribe));
+        assert!(!released_command_uses_local_audio(
+            ReleasedCommand::Morphotag
+        ));
     }
 }

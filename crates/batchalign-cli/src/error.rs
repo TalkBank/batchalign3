@@ -40,6 +40,11 @@ pub enum CliError {
     #[error("file list is empty")]
     FileListEmpty,
 
+    /// A CLI argument value failed validation (e.g. invalid language code).
+    /// Exit code: [`EXIT_USAGE`](Self::EXIT_USAGE) (2).
+    #[error("{0}")]
+    InvalidArgument(String),
+
     /// The server at `url` did not respond to a health check or connection
     /// attempt. This covers DNS failures, refused connections, and TLS errors.
     /// Exit code: [`EXIT_NETWORK`](Self::EXIT_NETWORK) (4).
@@ -203,6 +208,7 @@ impl CliError {
             | Self::InputMissing(_)
             | Self::FileListMissing(_)
             | Self::FileListEmpty
+            | Self::InvalidArgument(_)
             | Self::PathTraversal(_) => Self::EXIT_USAGE,
             Self::Config(_) | Self::DaemonStartFailed => Self::EXIT_CONFIG,
             Self::ServerUnreachable { .. } | Self::Http(_) => Self::EXIT_NETWORK,

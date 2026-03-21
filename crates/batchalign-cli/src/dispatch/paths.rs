@@ -4,7 +4,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use batchalign_app::api::{FileStatusKind, JobSubmission};
+use batchalign_app::ReleasedCommand;
+use batchalign_app::api::{FileStatusKind, JobSubmission, LanguageSpec};
 use batchalign_app::options::CommandOptions;
 
 use crate::client::{self, BatchalignClient, MAX_POLL_FAILURES, POLL_MAX, POLL_MIN, POLL_STEP};
@@ -14,7 +15,8 @@ use crate::progress::{BatchProgress, ProgressSink};
 use crate::tui::TuiProgress;
 
 use super::helpers::{
-    filter_files_for_command, finish_terminal_job, inject_lexicon, maybe_open_dashboard,
+    FileErrorDetail, filter_files_for_command, finish_terminal_job, inject_lexicon,
+    maybe_open_dashboard,
 };
 
 /// Dispatch via local daemon using paths mode.
@@ -25,7 +27,7 @@ use super::helpers::{
 pub(super) async fn dispatch_paths_mode(
     client: &BatchalignClient,
     server_url: &str,
-    command: &str,
+    command: ReleasedCommand,
     lang: &str,
     num_speakers: u32,
     extensions: &[&str],
@@ -46,13 +48,18 @@ pub(super) async fn dispatch_paths_mode(
     })?;
 
     // Discover files
-    let (files, outputs) = crate::discover::discover_server_inputs(inputs, out_dir, extensions);
+    let (files, outputs) = crate::discover::discover_server_inputs(inputs, out_dir, extensions)?;
     let (files, outputs) = filter_files_for_command(command, files, outputs);
 
     if let Some(od) = out_dir {
         for inp in inputs {
             if Path::new(inp).is_dir() {
-                copy_nonmatching(Path::new(inp), Path::new(od), extensions, command);
+                copy_nonmatching(
+                    Path::new(inp),
+                    Path::new(od),
+                    extensions,
+                    command,
+                )?;
             }
         }
     }
@@ -64,36 +71,54 @@ pub(super) async fn dispatch_paths_mode(
 
     eprintln!("Found {} file(s) to process.\n", files.len());
 
-    let (server_names, _) = build_server_names(&files, &outputs, inputs);
+    let (server_names, _) = build_server_names(&files, &outputs, inputs)?;
 
     let source_paths: Vec<String> = files
         .iter()
-        .filter_map(|f| std::fs::canonicalize(f).ok())
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
+        .map(|f| {
+            std::fs::canonicalize(f)
+                .map_err(CliError::Io)
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .collect::<Result<_, _>>()?;
     let output_paths: Vec<String> = outputs
         .iter()
-        .filter_map(|f| {
-            if let Some(parent) = f.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            std::fs::canonicalize(f.parent()?)
-                .ok()
-                .map(|p| p.join(f.file_name().unwrap_or_default()))
+        .map(|f| {
+            let parent = f.parent().ok_or_else(|| {
+                CliError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("output path has no parent directory: {}", f.display()),
+                ))
+            })?;
+            std::fs::create_dir_all(parent).map_err(CliError::Io)?;
+            let canonical_parent = std::fs::canonicalize(parent).map_err(CliError::Io)?;
+            let file_name = f.file_name().ok_or_else(|| {
+                CliError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("output path has no filename: {}", f.display()),
+                ))
+            })?;
+            Ok(canonical_parent
+                .join(file_name)
+                .to_string_lossy()
+                .to_string())
         })
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
+        .collect::<Result<_, CliError>>()?;
 
-    let base_dir = infer_base_dir(inputs);
+    let base_dir = infer_base_dir(inputs)?;
 
-    let (mapping_key, mapping_subdir) = if let Some(bk) = bank {
-        (bk.to_string(), subdir.unwrap_or("").to_string())
+    let mapping = if let Some(bk) = bank {
+        client::MediaMapping {
+            key: bk.to_string(),
+            subdir: subdir.unwrap_or("").to_string(),
+        }
     } else {
         match client.health_check(server_url).await {
-            Ok(h) => client::detect_media_mapping(&base_dir, &h.media_mapping_keys),
-            Err(_) => (String::new(), String::new()),
+            Ok(h) => client::detect_media_mapping(&base_dir, &h.media_mapping_keys)?,
+            Err(_) => client::MediaMapping::default(),
         }
     };
+    let (mapping_key, mapping_subdir) = (mapping.key, mapping.subdir);
 
     let mut opts = options.cloned().unwrap_or_else(|| {
         CommandOptions::Morphotag(batchalign_app::options::MorphotagOptions {
@@ -115,27 +140,31 @@ pub(super) async fn dispatch_paths_mode(
         let before_path = Path::new(before_arg);
         if before_path.is_dir() {
             // Match each source file to its counterpart in the before directory
-            files
-                .iter()
-                .filter_map(|src| {
-                    let src_path = Path::new(src);
-                    let filename = src_path.file_name()?;
-                    let candidate = before_path.join(filename);
-                    if candidate.exists() {
+            let mut matches = Vec::new();
+            for src in &files {
+                let src_path = Path::new(src);
+                let Some(filename) = src_path.file_name() else {
+                    return Err(CliError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("input path has no filename: {}", src_path.display()),
+                    )));
+                };
+                let candidate = before_path.join(filename);
+                if candidate.exists() {
+                    matches.push(
                         std::fs::canonicalize(&candidate)
-                            .ok()
-                            .map(|p| p.to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+                            .map_err(CliError::Io)?
+                            .to_string_lossy()
+                            .to_string(),
+                    );
+                }
+            }
+            matches
         } else if before_path.is_file() && files.len() == 1 {
             // Single file: before_arg is the before file itself
             std::fs::canonicalize(before_path)
-                .ok()
-                .map(|p| vec![p.to_string_lossy().to_string()])
-                .unwrap_or_default()
+                .map_err(CliError::Io)
+                .map(|p| vec![p.to_string_lossy().to_string()])?
         } else {
             eprintln!("warning: --before path is not a valid file or directory, ignoring");
             Vec::new()
@@ -145,8 +174,10 @@ pub(super) async fn dispatch_paths_mode(
     };
 
     let submission = JobSubmission {
-        command: command.into(),
-        lang: lang.into(),
+        command: command.as_wire_name().into(),
+        lang: LanguageSpec::try_from(lang).map_err(|e| {
+            CliError::InvalidArgument(format!("invalid language: {e}"))
+        })?,
         num_speakers: num_speakers.into(),
         files: vec![],
         media_files: vec![],
@@ -176,7 +207,8 @@ pub(super) async fn dispatch_paths_mode(
     // Poll for completion — files are written directly by daemon
     if !info.status.is_terminal() {
         if use_tui && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-            let (tui_progress, tui_runtime) = TuiProgress::new(total_files as u64, command);
+            let (tui_progress, tui_runtime) =
+                TuiProgress::new(total_files as u64, command.as_wire_name());
             let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
 
             let cc = client.clone();
@@ -198,7 +230,7 @@ pub(super) async fn dispatch_paths_mode(
                 job_id,
                 total_files as u64,
                 &effective_out,
-                command,
+                command.as_wire_name(),
                 &tui_progress,
             );
 
@@ -210,14 +242,14 @@ pub(super) async fn dispatch_paths_mode(
                 _ = &mut tui_handle => {}
             }
         } else {
-            let progress = BatchProgress::new(total_files as u64, command);
+            let progress = BatchProgress::new(total_files as u64, command.as_wire_name());
             poll_paths_mode(
                 client,
                 server_url,
                 job_id,
                 total_files as u64,
                 &effective_out,
-                command,
+                command.as_wire_name(),
                 &progress,
             )
             .await?;
@@ -239,7 +271,7 @@ pub(super) async fn poll_paths_mode(
     _command: &str,
     progress: &dyn ProgressSink,
 ) -> Result<(), CliError> {
-    let mut error_details: Vec<(String, String)> = Vec::new();
+    let mut error_details: Vec<FileErrorDetail> = Vec::new();
     let mut done_count: u64 = 0;
     let mut seen_files: HashSet<String> = HashSet::new();
     let mut consecutive_failures: u32 = 0;
@@ -270,7 +302,7 @@ pub(super) async fn poll_paths_mode(
                             .clone()
                             .unwrap_or_else(|| "unknown error".into());
                         progress.log_error(fn_, &error_msg);
-                        error_details.push((fn_.to_string(), error_msg));
+                        error_details.push(FileErrorDetail::new(fn_.clone(), error_msg));
                     }
                 }
 

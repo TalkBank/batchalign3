@@ -56,8 +56,8 @@ class FunAudioRecognizer:
                 from funasr import AutoModel
         except Exception as exc:
             raise ImportError(
-                "FunAudio engines require batchalign3 extras: "
-                "pip install 'batchalign3[hk-funaudio]'"
+                "FunAudio engine dependency 'funasr' is missing from this "
+                "environment. Reinstall batchalign3 or install funasr."
             ) from exc
 
         with redirect_stdout(io.StringIO()):

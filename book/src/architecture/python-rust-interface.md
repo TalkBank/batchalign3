@@ -1,7 +1,7 @@
 # Python/Rust Interface Reference
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last modified:** 2026-03-21 07:16 EDT
 
 This document describes the `batchalign_core` PyO3 module — the Rust extension
 that Python code uses for all CHAT manipulation.
@@ -17,6 +17,25 @@ that Python code uses for all CHAT manipulation.
 
 Python never touches raw CHAT text. All parsing, mutation, validation, and
 serialization happens in Rust through these entry points.
+
+The current dependency boundary is intentionally narrower than before: the
+PyO3 crate now relies on `talkbank-parser` plus `talkbank-model` validation
+directly for timed-tier extraction instead of depending on
+`talkbank-transform` for that path.
+It also now owns its Python extraction wrappers locally in `pyo3/src/pytypes.rs`
+instead of asking `talkbank-model` to compile PyO3-specific `FromPyObject`
+glue.
+The PyO3 CLI bridge also now depends on `batchalign-cli` with
+`default-features = false`, so the extension no longer compiles the
+standalone binary's OTLP tracing stack or background update-check path just to
+expose `cli_main()`. The CLI bootstrap details (`clap` parsing, Tokio runtime
+creation, embedded stderr tracing) now also live in `batchalign-cli` rather
+than in `pyo3/src/cli_entry.rs`, so the extension only forwards `sys.argv` to a
+single Rust-owned embedded entry function.
+That split is what makes the contributor loop fast: a slim editable build can
+surface the installed `batchalign3` command without pulling the full standalone
+binary stack, while release-oriented builds still exercise the full package
+surface.
 
 ## Two Runtime Paths
 
@@ -332,7 +351,7 @@ metadata.rs               — metadata extraction
 py_json_bridge.rs         — JSON serialization bridge
 provider_pipeline.rs      — Rust-owned Python pipeline executor
 revai/                    — Rev.AI HTTP client
-cli_entry.rs              — console_scripts entry point
+cli_entry.rs              — native CLI bridge used by `batchalign/_cli.py`
 ```
 
 ## Incremental Processing Note

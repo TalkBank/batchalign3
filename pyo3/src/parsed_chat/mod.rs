@@ -19,6 +19,7 @@ use crate::parse::{
     errors_to_json, parse_tier_domain, parse_lenient_with_warnings, parse_strict_pure,
     strip_timing_on_chat_file,
 };
+use crate::pytypes::{PythonAsrWordsJson, PythonChatText, PythonTierDomain, PythonTranscriptJson};
 
 impl ParsedChat {
     /// Apply one fallible mutation transactionally.
@@ -46,8 +47,8 @@ impl ParsedChat {
     /// Parse CHAT text strictly (tree-sitter, no error recovery).
     #[staticmethod]
     #[pyo3(name = "parse")]
-    fn py_parse(py: Python<'_>, chat_text: talkbank_model::PythonChatText) -> PyResult<Self> {
-        let text = chat_text.data;
+    fn py_parse(py: Python<'_>, chat_text: PythonChatText) -> PyResult<Self> {
+        let text = chat_text.into_data();
         py.detach(|| parse_strict_pure(&text))
             .map(|cf| ParsedChat {
                 inner: cf,
@@ -61,9 +62,9 @@ impl ParsedChat {
     #[pyo3(name = "parse_lenient")]
     fn py_parse_lenient(
         py: Python<'_>,
-        chat_text: talkbank_model::PythonChatText,
+        chat_text: PythonChatText,
     ) -> PyResult<Self> {
-        let text = chat_text.data;
+        let text = chat_text.into_data();
         py.detach(|| parse_lenient_with_warnings(&text))
             .map(|(cf, warnings)| ParsedChat {
                 inner: cf,
@@ -77,7 +78,7 @@ impl ParsedChat {
     #[pyo3(name = "build")]
     fn py_build(
         py: Python<'_>,
-        transcript_json: talkbank_model::PythonTranscriptJson,
+        transcript_json: PythonTranscriptJson,
     ) -> PyResult<Self> {
         let result = py.detach(|| build_chat_inner(transcript_json));
         result
@@ -248,9 +249,9 @@ impl ParsedChat {
     fn py_extract_nlp_words(
         &self,
         py: Python<'_>,
-        domain: talkbank_model::PythonTierDomain,
+        domain: PythonTierDomain,
     ) -> PyResult<String> {
-        let domain_name = domain.data;
+        let domain_name = domain.into_data();
         let domain = parse_tier_domain(&domain_name)?;
         let inner = &self.inner;
         Ok(py.detach(|| {
@@ -326,9 +327,9 @@ impl ParsedChat {
     fn py_add_dependent_tiers(
         &mut self,
         py: Python<'_>,
-        tiers_json: talkbank_model::model::Provenance<talkbank_model::model::AsrWordsJson, String>,
+        tiers_json: PythonAsrWordsJson,
     ) -> PyResult<()> {
-        let t_json = tiers_json.data;
+        let t_json = tiers_json.into_data();
         let inner = &mut self.inner;
         py.detach(|| {
             crate::tier_ops::add_dependent_tiers_inner(inner, &t_json).map_err(|e| e.to_string())

@@ -1,0 +1,35 @@
+//! Command-routing policy helpers for the job runner.
+//!
+//! Keep these small and declarative. `runner/mod.rs` should read as job
+//! lifecycle orchestration, not as a mixed bag of routing tables and filename
+//! conventions.
+
+use crate::api::CommandName;
+use crate::worker::InferTask;
+use crate::workflow::{
+    RunnerDispatchKind, command_runner_dispatch_kind, command_workflow_descriptor,
+    result_filename_for_command_name,
+};
+
+/// Return the primary infer task backing one released command.
+pub(crate) fn infer_task_for_command(command: &CommandName) -> Option<InferTask> {
+    command_workflow_descriptor(command).map(|descriptor| descriptor.infer_task)
+}
+
+/// Return `true` when the released command must use a Rust-owned infer-backed
+/// dispatch path instead of a pure content relay.
+pub(crate) fn command_requires_infer(command: &CommandName, _all_chat: bool) -> bool {
+    matches!(
+        command_runner_dispatch_kind(command),
+        Some(
+            RunnerDispatchKind::BatchedTextInfer
+                | RunnerDispatchKind::ForcedAlignment
+                | RunnerDispatchKind::MediaAnalysisV2
+        )
+    )
+}
+
+/// Derive the result filename for one released command.
+pub(crate) fn result_filename_for_command(command: &CommandName, filename: &str) -> String {
+    result_filename_for_command_name(command.as_ref(), filename)
+}

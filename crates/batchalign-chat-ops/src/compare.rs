@@ -65,14 +65,23 @@ pub struct CompareMetrics {
     pub total_main_words: usize,
 }
 
-/// Full comparison result.
+/// Full comparison bundle.
+///
+/// This is the internal workflow artifact produced by transcript comparison.
+/// It can later support multiple materialization paths (main-annotated output,
+/// gold-projected output, metrics sidecars, debugging views) without forcing
+/// the compare stage itself to decide the final output shape.
 #[derive(Debug, Clone)]
-pub struct CompareResult {
+pub struct ComparisonBundle {
     /// Per-utterance comparison annotations.
     pub utterances: Vec<UtteranceComparison>,
     /// Aggregate metrics.
     pub metrics: CompareMetrics,
 }
+
+/// Compatibility alias retained while the compare pipeline is refactored toward
+/// workflow bundles plus explicit materializers.
+pub type CompareResult = ComparisonBundle;
 
 /// Punctuation and fillers to exclude from comparison (matching BA2 behavior).
 fn is_punct_or_filler(word: &str) -> bool {
@@ -110,7 +119,7 @@ fn conform_with_mapping(words: &[String]) -> (Vec<String>, Vec<usize>) {
 /// `conform_words`, then aligned with the Hirschberg DP aligner.
 ///
 /// Returns per-utterance comparison annotations and aggregate metrics.
-pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> CompareResult {
+pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> ComparisonBundle {
     // 1. Extract words from both files
     let main_utts = extract::extract_words(main_file, TierDomain::Mor);
     let gold_utts = extract::extract_words(gold_file, TierDomain::Mor);
@@ -246,7 +255,7 @@ pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> Comp
     // Suppress unused variable warnings
     let _ = (gold_cursor, gold_map);
 
-    CompareResult {
+    ComparisonBundle {
         utterances,
         metrics,
     }
@@ -317,7 +326,7 @@ pub fn format_metrics_csv(metrics: &CompareMetrics) -> String {
 /// the formatted comparison annotations.
 ///
 /// Uses `replace_or_add_tier` to ensure idempotent injection.
-pub fn inject_comparison(chat_file: &mut crate::ChatFile, result: &CompareResult) {
+pub fn inject_comparison(chat_file: &mut crate::ChatFile, result: &ComparisonBundle) {
     // Build a map from utterance_index to the formatted xsrep string
     let mut utt_line_indices: Vec<usize> = Vec::new();
     for (line_idx, line) in chat_file.lines.iter().enumerate() {

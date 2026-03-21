@@ -7,6 +7,7 @@ use talkbank_model::model::Line;
 use crate::build::build_chat_inner;
 use crate::metadata::serialize_extracted_words;
 use crate::parse::{parse_tier_domain, parse_lenient_pure, parse_strict_pure};
+use crate::pytypes::PythonTranscriptJson;
 use crate::tier_ops::add_dependent_tiers_inner;
 
 #[derive(serde::Serialize)]
@@ -178,7 +179,7 @@ pub(crate) fn py_dp_align(
 #[pyfunction]
 pub(crate) fn build_chat(
     py: Python<'_>,
-    transcript_json: talkbank_model::PythonTranscriptJson,
+    transcript_json: PythonTranscriptJson,
 ) -> PyResult<String> {
     py.detach(|| build_chat_inner(transcript_json).map(|cf| cf.to_chat_string()))
         .map_err(pyo3::exceptions::PyValueError::new_err)
@@ -247,9 +248,11 @@ pub(crate) fn extract_timed_tiers(
             talkbank_model::ParseValidateOptions::default()
         };
         let errors = talkbank_model::ErrorCollector::new();
-        let chat_file =
-            talkbank_transform::parse_and_validate_streaming(chat_text, options, &errors)
-                .map_err(|e| format!("Pipeline error: {e}"))?;
+        let mut chat_file = talkbank_parser::parse_chat_file_streaming(chat_text, &errors);
+        // Preserve the previous streaming/recovery behavior: validation may
+        // annotate alignment state, but parse/validation errors do not abort
+        // extraction unless the caller chooses to inspect them separately.
+        let _ = talkbank_model::validate_chat_file_with_options(&mut chat_file, &options);
 
         let mut tiers: indexmap::IndexMap<String, Vec<TimedEntry>> = indexmap::IndexMap::new();
 

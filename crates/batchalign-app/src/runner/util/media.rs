@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::api::CommandName;
+use crate::api::{CommandName, ReleasedCommand};
 use crate::options::{CommandOptions, UtrEngine};
 use crate::store::{PendingJobFile, RunnerJobSnapshot};
 
@@ -17,18 +17,20 @@ pub(in crate::runner) fn should_preflight(
     command: &CommandName,
     typed_options: Option<&CommandOptions>,
 ) -> bool {
-    match (command.as_ref(), typed_options) {
+    match (ReleasedCommand::try_from(command).ok(), typed_options) {
         (
-            "transcribe" | "transcribe_s",
+            Some(ReleasedCommand::Transcribe | ReleasedCommand::TranscribeS),
             Some(CommandOptions::Transcribe(t) | CommandOptions::TranscribeS(t)),
         ) => t.effective_asr_engine().is_revai(),
-        ("transcribe" | "transcribe_s", None) => true, // rev is default
-        ("benchmark", Some(CommandOptions::Benchmark(b))) => b.effective_asr_engine().is_revai(),
-        ("benchmark", None) => true,
-        ("align", Some(CommandOptions::Align(a))) => {
+        (Some(ReleasedCommand::Transcribe | ReleasedCommand::TranscribeS), None) => true,
+        (Some(ReleasedCommand::Benchmark), Some(CommandOptions::Benchmark(b))) => {
+            b.effective_asr_engine().is_revai()
+        }
+        (Some(ReleasedCommand::Benchmark), None) => true,
+        (Some(ReleasedCommand::Align), Some(CommandOptions::Align(a))) => {
             matches!(a.utr_engine, Some(UtrEngine::RevAi))
         }
-        ("align", None) => true, // rev_utr is default
+        (Some(ReleasedCommand::Align), None) => true,
         _ => false,
     }
 }
@@ -116,8 +118,8 @@ pub(in crate::runner) async fn collect_preflight_audio_paths(
     job: &RunnerJobSnapshot,
     file_list: &[PendingJobFile],
 ) -> Vec<PathBuf> {
-    match command.as_ref() {
-        "align" => collect_align_preflight_audio_paths(job, file_list).await,
+    match ReleasedCommand::try_from(command).ok() {
+        Some(ReleasedCommand::Align) => collect_align_preflight_audio_paths(job, file_list).await,
         _ => file_list
             .iter()
             .filter(|file| !file.has_chat)

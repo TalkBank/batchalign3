@@ -7,6 +7,7 @@
 
 use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, MwtDict, TokenizationMode};
 
+use crate::api::ReleasedCommand;
 use crate::params::{CacheOverrides, CachePolicy};
 use crate::store::RunnerJobSnapshot;
 use crate::transcribe::{AsrBackend, TranscribeOptions};
@@ -212,13 +213,13 @@ pub(in crate::runner) enum MediaAnalysisDispatchPlan {
 impl MediaAnalysisDispatchPlan {
     /// Build the media-analysis plan from the persisted job snapshot.
     pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Option<Self> {
-        match job.dispatch.command.as_ref() {
-            "opensmile" => {
+        match ReleasedCommand::try_from(&job.dispatch.command).ok()? {
+            ReleasedCommand::Opensmile => {
                 let OpensmileDispatchParams { feature_set } =
                     extract_opensmile_dispatch_params(&job.dispatch.options)?;
                 Some(Self::Opensmile { feature_set })
             }
-            "avqi" => Some(Self::Avqi),
+            ReleasedCommand::Avqi => Some(Self::Avqi),
             _ => None,
         }
     }
@@ -303,7 +304,7 @@ mod tests {
             },
             dispatch: RunnerDispatchConfig {
                 command,
-                lang: crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng")),
+                lang: crate::api::LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(3),
                 options,
                 runtime_state,
@@ -394,7 +395,7 @@ mod tests {
         );
         assert_eq!(
             plan.base_options.lang,
-            crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng"))
+            crate::api::LanguageSpec::Resolved(LanguageCode3::eng())
         );
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(!plan.base_options.with_utseg);
@@ -428,7 +429,7 @@ mod tests {
         );
         assert_eq!(
             plan.base_options.lang,
-            crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng"))
+            crate::api::LanguageSpec::Resolved(LanguageCode3::eng())
         );
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(plan.base_options.with_utseg);

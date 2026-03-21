@@ -1,7 +1,7 @@
 # Morphosyntax Pipeline
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-21 15:30
 
 ## 1. Overview
 
@@ -33,7 +33,7 @@ flowchart TD
 ### Data Flow
 
 ```
-Rust: batchalign-app/src/morphosyntax.rs::process_morphosyntax()
+Rust: batchalign-app/src/morphosyntax/::process_morphosyntax()
   │
   ├── Parse CHAT (Rust AST, parsed once per file)
   │

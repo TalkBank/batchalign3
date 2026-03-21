@@ -1,0 +1,11 @@
+[alias]
+xtask = "run -q -p xtask --"
+
+# SAFETY: ML integration tests spawn Python workers that each consume 2-15 GB RAM.
+# Running them in parallel causes kernel OOM panics on 64 GB machines.
+# Default to 1 test thread. Use `cargo test -- --test-threads=N` to override.
+# See docs/postmortems/ for crash history.
+#
+# Tests marked #[ignore] require: cargo test -- --ignored --test-threads=1
+[env]
+RUST_TEST_THREADS = "1"

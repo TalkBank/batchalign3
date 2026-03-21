@@ -10,6 +10,7 @@
 mod common;
 
 use batchalign_app::api::{FilePayload, JobInfo, JobSubmission, NumSpeakers};
+use batchalign_app::api::{LanguageCode3, LanguageSpec};
 use batchalign_app::options::{CommandOptions, CommonOptions, TranscribeOptions};
 use batchalign_cli::args::{JobsArgs, ServeStatusArgs};
 use batchalign_cli::client::BatchalignClient;
@@ -20,7 +21,7 @@ use common::{poll_job_done, require_python, start_test_server};
 fn test_submission(files: Vec<FilePayload>) -> JobSubmission {
     JobSubmission {
         command: "transcribe".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
@@ -228,25 +229,25 @@ async fn dispatch_no_server() {
     let inputs = vec![input_dir.to_string_lossy().to_string()];
 
     // No server, auto_daemon=false → prints error message, returns Ok(())
-    let result = batchalign_cli::dispatch::dispatch(
-        "morphotag",
-        "eng",
-        1,
-        &["cha"],
-        None,
-        &inputs,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        false,
-        false,
-        None,
-        None,
-        None,
-    )
+    let result = batchalign_cli::dispatch::dispatch(batchalign_cli::dispatch::DispatchRequest {
+        command: batchalign_app::ReleasedCommand::Morphotag,
+        lang: "eng",
+        num_speakers: 1,
+        extensions: &["cha"],
+        server_arg: None,
+        inputs: &inputs,
+        out_dir: None,
+        options: None,
+        bank: None,
+        subdir: None,
+        lexicon: None,
+        use_tui: false,
+        open_dashboard: false,
+        force_cpu: false,
+        before: None,
+        workers: None,
+        timeout: None,
+    })
     .await;
 
     unsafe {

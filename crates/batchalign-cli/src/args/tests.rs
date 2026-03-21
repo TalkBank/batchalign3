@@ -1,4 +1,5 @@
 use super::*;
+use batchalign_app::api::ReleasedCommand;
 use batchalign_app::options::{
     AsrEngineName, CommandOptions, CustomEngineName, FaEngineName, UtrEngine as AppUtrEngine,
 };
@@ -949,7 +950,7 @@ fn build_options_transcribe_diarize() {
 fn build_options_transcribe_diarize_matches_batchalign2_baseline_defaults() {
     let cli = Cli::parse_from(["batchalign3", "transcribe", "--diarize", "audio/"]);
     let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    let (command, lang, num_speakers, extensions) = CommonOpts::command_meta(&cli.command);
+    let profile = CommonOpts::command_profile(&cli.command);
 
     match opts {
         CommandOptions::TranscribeS(t) => {
@@ -962,10 +963,10 @@ fn build_options_transcribe_diarize_matches_batchalign2_baseline_defaults() {
         other => panic!("expected TranscribeS, got {other:?}"),
     }
 
-    assert_eq!(command, "transcribe_s");
-    assert_eq!(lang, "eng");
-    assert_eq!(num_speakers, 2);
-    assert_eq!(extensions, &["mp3", "mp4", "wav"]);
+    assert_eq!(profile.command, ReleasedCommand::TranscribeS);
+    assert_eq!(profile.lang, "eng");
+    assert_eq!(profile.num_speakers, 2);
+    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
 }
 
 #[test]
@@ -1526,70 +1527,70 @@ fn build_options_no_lazy_audio_wins_when_both_flags_present() {
 }
 
 // -----------------------------------------------------------------------
-// command_meta
+// command_profile
 // -----------------------------------------------------------------------
 
 #[test]
-fn command_meta_align() {
+fn command_profile_align() {
     let cli = Cli::parse_from(["batchalign3", "align", "corpus/"]);
-    let (cmd, lang, ns, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "align");
-    assert_eq!(lang, "eng");
-    assert_eq!(ns, 1);
-    assert_eq!(exts, &["cha"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Align);
+    assert_eq!(profile.lang, "eng");
+    assert_eq!(profile.num_speakers, 1);
+    assert_eq!(profile.extensions, &["cha"]);
 }
 
 #[test]
-fn command_meta_transcribe_no_diarize() {
+fn command_profile_transcribe_no_diarize() {
     let cli = Cli::parse_from(["batchalign3", "transcribe", "audio/"]);
-    let (cmd, lang, ns, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "transcribe");
-    assert_eq!(lang, "eng");
-    assert_eq!(ns, 2);
-    assert_eq!(exts, &["mp3", "mp4", "wav"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Transcribe);
+    assert_eq!(profile.lang, "eng");
+    assert_eq!(profile.num_speakers, 2);
+    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
 }
 
 #[test]
-fn command_meta_transcribe_diarize() {
+fn command_profile_transcribe_diarize() {
     let cli = Cli::parse_from(["batchalign3", "transcribe", "--diarize", "audio/"]);
-    let (cmd, _, _, _) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "transcribe_s");
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::TranscribeS);
 }
 
 #[test]
-fn command_meta_translate() {
+fn command_profile_translate() {
     let cli = Cli::parse_from(["batchalign3", "translate", "corpus/"]);
-    let (cmd, _, _, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "translate");
-    assert_eq!(exts, &["cha"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Translate);
+    assert_eq!(profile.extensions, &["cha"]);
 }
 
 #[test]
-fn command_meta_morphotag() {
+fn command_profile_morphotag() {
     let cli = Cli::parse_from(["batchalign3", "morphotag", "corpus/"]);
-    let (cmd, _, _, _) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "morphotag");
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Morphotag);
 }
 
 #[test]
-fn command_meta_coref() {
+fn command_profile_coref() {
     let cli = Cli::parse_from(["batchalign3", "coref", "corpus/"]);
-    let (cmd, _, _, _) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "coref");
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Coref);
 }
 
 #[test]
-fn command_meta_compare() {
+fn command_profile_compare() {
     let cli = Cli::parse_from(["batchalign3", "compare", "corpus/"]);
-    let (cmd, lang, ns, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "compare");
-    assert_eq!(lang, "eng");
-    assert_eq!(ns, 2);
-    assert_eq!(exts, &["cha"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Compare);
+    assert_eq!(profile.lang, "eng");
+    assert_eq!(profile.num_speakers, 2);
+    assert_eq!(profile.extensions, &["cha"]);
 }
 
 #[test]
-fn command_meta_compare_with_lang() {
+fn command_profile_compare_with_lang() {
     let cli = Cli::parse_from([
         "batchalign3",
         "compare",
@@ -1599,15 +1600,15 @@ fn command_meta_compare_with_lang() {
         "3",
         "corpus/",
     ]);
-    let (cmd, lang, ns, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "compare");
-    assert_eq!(lang, "spa");
-    assert_eq!(ns, 3);
-    assert_eq!(exts, &["cha"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Compare);
+    assert_eq!(profile.lang, "spa");
+    assert_eq!(profile.num_speakers, 3);
+    assert_eq!(profile.extensions, &["cha"]);
 }
 
 #[test]
-fn command_meta_utseg() {
+fn command_profile_utseg() {
     let cli = Cli::parse_from([
         "batchalign3",
         "utseg",
@@ -1617,39 +1618,39 @@ fn command_meta_utseg() {
         "3",
         "corpus/",
     ]);
-    let (cmd, lang, ns, _) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "utseg");
-    assert_eq!(lang, "spa");
-    assert_eq!(ns, 3);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Utseg);
+    assert_eq!(profile.lang, "spa");
+    assert_eq!(profile.num_speakers, 3);
 }
 
 #[test]
-fn command_meta_benchmark() {
+fn command_profile_benchmark() {
     let cli = Cli::parse_from(["batchalign3", "benchmark", "audio/"]);
-    let (cmd, lang, ns, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "benchmark");
-    assert_eq!(lang, "eng");
-    assert_eq!(ns, 2);
-    assert_eq!(exts, &["mp3", "mp4", "wav"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Benchmark);
+    assert_eq!(profile.lang, "eng");
+    assert_eq!(profile.num_speakers, 2);
+    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
 }
 
 #[test]
-fn command_meta_opensmile() {
+fn command_profile_opensmile() {
     let cli = Cli::parse_from(["batchalign3", "opensmile", "in/", "out/"]);
-    let (cmd, lang, _, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "opensmile");
-    assert_eq!(lang, "eng");
-    assert_eq!(exts, &["mp3", "mp4", "wav"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Opensmile);
+    assert_eq!(profile.lang, "eng");
+    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
 }
 
 #[test]
-fn command_meta_avqi() {
+fn command_profile_avqi() {
     let cli = Cli::parse_from(["batchalign3", "avqi", "in/", "out/", "--lang", "yue"]);
-    let (cmd, lang, ns, exts) = CommonOpts::command_meta(&cli.command);
-    assert_eq!(cmd, "avqi");
-    assert_eq!(lang, "yue");
-    assert_eq!(ns, 1);
-    assert_eq!(exts, &["mp3", "mp4", "wav"]);
+    let profile = CommonOpts::command_profile(&cli.command);
+    assert_eq!(profile.command, ReleasedCommand::Avqi);
+    assert_eq!(profile.lang, "yue");
+    assert_eq!(profile.num_speakers, 1);
+    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
 }
 
 // -----------------------------------------------------------------------

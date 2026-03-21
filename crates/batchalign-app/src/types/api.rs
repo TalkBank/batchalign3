@@ -55,7 +55,7 @@ mod tests {
         let json = r#"{"command": "morphotag", "options": {"command": "morphotag"}}"#;
         let sub: JobSubmission = serde_json::from_str(json).unwrap();
         assert_eq!(sub.command, "morphotag");
-        assert_eq!(sub.lang, LanguageSpec::Resolved(LanguageCode3::from("eng")));
+        assert_eq!(sub.lang, LanguageSpec::Resolved(LanguageCode3::eng()));
         assert_eq!(sub.num_speakers, 1);
         assert!(sub.files.is_empty());
         assert!(!sub.paths_mode);
@@ -75,7 +75,7 @@ mod tests {
 
         let mut sub = JobSubmission {
             command: "morphotag".into(),
-            lang: "eng".into(),
+            lang: LanguageSpec::Resolved(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             files: vec![],
             media_files: vec![],
@@ -268,7 +268,7 @@ mod tests {
                 skipmultilang: false,
                 merge_abbrev: false.into(),
             }),
-            lang: "eng".into(),
+            lang: LanguageSpec::Resolved(LanguageCode3::eng()),
             source_dir: "/data/corpus".into(),
             total_files: 10,
             completed_files: 3,

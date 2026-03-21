@@ -33,7 +33,9 @@ pub(in crate::runner) fn classify_server_error(error: &ServerError) -> FailureCa
         ServerError::Validation(_) => FailureCategory::Validation,
         ServerError::MemoryPressure(_) => FailureCategory::MemoryPressure,
         ServerError::Io(_) => FailureCategory::System,
-        ServerError::Database(_) | ServerError::Migration(_) => FailureCategory::System,
+        ServerError::Database(_) | ServerError::Migration(_) | ServerError::Persistence(_) => {
+            FailureCategory::System
+        }
         ServerError::JobNotFound(_)
         | ServerError::JobConflict { .. }
         | ServerError::JobNotTerminal(_)

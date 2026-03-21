@@ -22,7 +22,9 @@ port: 8000
 
 # Pre-load morphotag and align pipelines on startup (main thread).
 # Prevents MPS deadlock on first request from a background thread.
-warmup: true
+warmup_commands:
+  - morphotag
+  - align
 
 # Per-IP request limits for protected job endpoints.
 # rate_limit_per_second: 120

@@ -93,7 +93,7 @@ pub(in crate::runner) async fn dispatch_fa_infer(
     plan: FaDispatchPlan,
 ) {
     let job_id = &job.identity.job_id;
-    let fallback_lang = LanguageCode3::from("eng");
+    let fallback_lang = LanguageCode3::eng();
     let job_lang = job.dispatch.lang.resolve_or(&fallback_lang);
     let fa_params = plan.options.fa_params;
     let should_merge_abbrev = plan.options.merge_abbrev.should_merge();
@@ -471,14 +471,22 @@ async fn process_one_fa_file(
                 bt,
                 &chat_text,
                 &audio,
+                lang,
                 services,
                 &fa_params,
                 Some(&progress_tx),
             )
             .await
         } else {
-            crate::fa::process_fa(&chat_text, &audio, services, &fa_params, Some(&progress_tx))
-                .await
+            crate::fa::process_fa(
+                &chat_text,
+                &audio,
+                lang,
+                services,
+                &fa_params,
+                Some(&progress_tx),
+            )
+            .await
         };
 
         match fa_result {

@@ -1,7 +1,7 @@
 # Command Flowcharts
 
 **Status:** Current
-**Last updated:** 2026-03-19
+**Last modified:** 2026-03-21 07:16 EDT
 
 Option-driven flowcharts for every batchalign processing command. Each
 diagram shows how CLI flags route through different code paths at runtime.
@@ -371,15 +371,18 @@ flowchart TD
 
 ## compare
 
-Compares two CHAT files. Reuses the Rust compare pipeline plus morphosyntax V2
-inference where needed.
+Reference-projection workflow. It builds a typed comparison bundle from main
+and gold CHAT files, runs morphosyntax where needed, and materializes
+compare-specific outputs.
 
 ```mermaid
 flowchart TD
     start([compare invoked]) --> parse[Parse all files → ASTs]
-    parse --> morph[process_morphosyntax as needed\nexecute_v2(task="morphosyntax")]
-    morph --> compare[DP-align transcript vs gold\ncompute metrics + %xsrep tiers]
-    compare --> inject[Inject comparison results]
+    parse --> bundle[Build typed comparison bundle\nmain + gold + projection state]
+    bundle --> morph[process_morphosyntax as needed\nexecute_v2(task="morphosyntax")]
+    morph --> compare[DP-align main vs gold\ninside the comparison bundle]
+    compare --> materialize[Materialize %xsrep tiers\nand compare metrics]
+    materialize --> inject[Inject comparison results]
     inject --> merge_check{--merge-abbrev?}
     merge_check -->|Yes| merge[merge_abbreviations]
     merge_check -->|No| serialize
@@ -433,14 +436,14 @@ flowchart TD
 
 ## benchmark
 
-WER (Word Error Rate) evaluation between a gold CHAT transcript and a
-Rust-generated hypothesis CHAT transcript.
+Composite workflow that runs transcribe, then compare, and materializes both
+the hypothesis CHAT and the CSV metrics.
 
 ```mermaid
 flowchart TD
     start([benchmark invoked]) --> resolve[Resolve audio file + companion gold .cha]
-    resolve --> transcribe[Rust benchmark orchestrator\nRun transcribe pipeline via ASR worker]
-    transcribe --> compare[Rust compare pipeline\nDP alignment + WER metrics]
+    resolve --> transcribe[Rust transcribe workflow\nProduce hypothesis CHAT]
+    transcribe --> compare[Rust compare workflow\nDP alignment + WER metrics]
     compare --> merge_check{--merge-abbrev?}
     merge_check -->|Yes| merge[Merge abbreviations in hypothesis CHAT output]
     merge_check -->|No| output

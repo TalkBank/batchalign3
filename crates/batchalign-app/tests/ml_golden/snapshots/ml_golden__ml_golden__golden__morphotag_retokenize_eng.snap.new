@@ -1,0 +1,14 @@
+---
+source: crates/batchalign-app/tests/ml_golden/golden.rs
+assertion_line: 636
+expression: output
+---
+@UTF8
+@Begin
+@Languages:	eng
+@Participants:	PAR Participant
+@ID:	eng|test|PAR|||||Participant|||
+*PAR:	gonna eat cookies .
+%mor:	adv|gonna verb|eat-Inf-S noun|cookie-Plur-Acc .
+%gra:	1|2|ADVMOD 2|0|ROOT 3|2|OBJ 4|2|PUNCT
+@End

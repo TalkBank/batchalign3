@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use batchalign_app::api::{
     FilePayload, FileResult, HealthResponse, JobInfo, JobListItem, JobResultResponse, JobStatus,
-    JobSubmission, MemoryMb, NumSpeakers,
+    JobSubmission, LanguageSpec, MemoryMb, NumSpeakers,
 };
 use batchalign_app::config::{RuntimeLayout, ServerConfig};
 use batchalign_app::options::CommandOptions;
@@ -271,7 +271,7 @@ pub async fn submit_and_complete(
 ) -> (JobInfo, Vec<FileResult>) {
     let submission = JobSubmission {
         command: command.into(),
-        lang: lang.into(),
+        lang: LanguageSpec::try_from(lang).expect("test lang must be a valid ISO 639-3 code or \"auto\""),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
@@ -527,12 +527,17 @@ async fn cleanup_session(session: ActiveSession) {
     } = session;
     server_task.abort();
     let _ = server_task.await;
-    let shutdown = state.shutdown_for_reuse(Duration::from_secs(5)).await;
-    if shutdown.timed_out || shutdown.remaining_jobs > 0 {
-        eprintln!(
-            "WARN: live fixture shutdown left {} tracked jobs (timed_out={})",
-            shutdown.remaining_jobs, shutdown.timed_out
-        );
+    match state.shutdown_for_reuse(Duration::from_secs(5)).await {
+        Ok(shutdown) if shutdown.timed_out || shutdown.remaining_jobs > 0 => {
+            eprintln!(
+                "WARN: live fixture shutdown left {} tracked jobs (timed_out={})",
+                shutdown.remaining_jobs, shutdown.timed_out
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("WARN: live fixture shutdown failed to report runtime status: {error}");
+        }
     }
     drop(state);
     tokio::task::yield_now().await;
@@ -679,7 +684,7 @@ pub async fn submit_paths_and_complete(
 
     let submission = JobSubmission {
         command: command.into(),
-        lang: lang.into(),
+        lang: LanguageSpec::try_from(lang).expect("test lang must be a valid ISO 639-3 code or \"auto\""),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
@@ -730,31 +735,38 @@ pub async fn submit_paths_and_complete(
     // Note: the server's apply_result_filename replaces the output path's filename
     // with the input filename's basename. So output_path="/out/foo.cha" with
     // input "test.cha" writes to "/out/test.cha", not "/out/foo.cha".
-    // We scan the output directory for .cha files as a fallback.
+    // Tests should assert that exact derived path, not silently scavenge a
+    // different artifact from the directory.
     let outputs: Vec<String> = if final_info.status == JobStatus::Completed {
-        output_paths
+        source_paths
             .iter()
-            .map(|p| {
-                // Try the exact path first.
-                if let Ok(content) = std::fs::read_to_string(p) {
+            .zip(output_paths.iter())
+            .map(|(source_path, output_path)| {
+                let expected_path = expected_paths_mode_result_path(source_path, output_path);
+
+                if let Ok(content) = std::fs::read_to_string(&expected_path) {
                     return content;
                 }
-                // Fallback: scan the output directory for any .cha file.
-                let dir = std::path::Path::new(p)
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."));
-                if let Ok(entries) = std::fs::read_dir(dir) {
+
+                let mut nearby_outputs = Vec::new();
+                if let Some(dir) = expected_path.parent()
+                    && let Ok(entries) = std::fs::read_dir(dir)
+                {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.extension().is_some_and(|e| e == "cha" || e == "csv")
-                            && let Ok(content) = std::fs::read_to_string(&path)
-                        {
-                            eprintln!("NOTE: output found at {} (not {})", path.display(), p);
-                            return content;
+                        if path.extension().is_some_and(|e| e == "cha" || e == "csv") {
+                            nearby_outputs.push(path.display().to_string());
                         }
                     }
                 }
-                panic!("Failed to read output file {p} or find alternatives in directory")
+
+                panic!(
+                    "Failed to read expected output file {} for source {} and requested output {}; nearby outputs: {:?}",
+                    expected_path.display(),
+                    source_path,
+                    output_path,
+                    nearby_outputs
+                )
             })
             .collect()
     } else {
@@ -763,6 +775,20 @@ pub async fn submit_paths_and_complete(
     };
 
     (final_info, outputs)
+}
+
+fn expected_paths_mode_result_path(source_path: &str, output_path: &str) -> PathBuf {
+    let source_name = PathBuf::from(source_path)
+        .file_name()
+        .unwrap_or_else(|| {
+            panic!("source path has no filename for paths-mode output derivation: {source_path}")
+        })
+        .to_owned();
+
+    PathBuf::from(output_path)
+        .parent()
+        .map(|dir| dir.join(&source_name))
+        .unwrap_or_else(|| source_name.into())
 }
 
 /// Read the Rev.AI API key from environment variables.

@@ -23,7 +23,7 @@
 use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
 
-use crate::api::{LanguageCode3, NumSpeakers};
+use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
 use crate::revai::load_revai_api_key;
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::{
@@ -116,8 +116,8 @@ pub struct WorkerConfig {
     pub python_path: String,
     /// Worker profile describing which task group this worker owns.
     pub profile: WorkerProfile,
-    /// 3-letter ISO language code.
-    pub lang: LanguageCode3,
+    /// Worker-runtime language string.
+    pub lang: WorkerLanguage,
     /// Number of speakers.
     pub num_speakers: NumSpeakers,
     /// Engine overrides as JSON string (empty = none).
@@ -148,7 +148,7 @@ impl Default for WorkerConfig {
         Self {
             python_path: resolve_python_executable(),
             profile: WorkerProfile::Stanza,
-            lang: LanguageCode3::from("eng"),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
             test_echo: false,
@@ -179,7 +179,7 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
         cmd.arg("--profile").arg(config.profile.name());
     }
 
-    cmd.arg("--lang").arg(&*config.lang);
+    cmd.arg("--lang").arg(config.lang.as_worker_arg());
     cmd.arg("--num-speakers")
         .arg(config.num_speakers.0.to_string());
 
@@ -240,6 +240,11 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
 ///
 /// Returns `(pid, port)` on success after waiting for the ready signal.
 pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, u16), WorkerError> {
+    // Memory guard — same as WorkerHandle::spawn().
+    let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(0)
+        .await
+        .map_err(|e| WorkerError::SpawnFailed(format!("memory guard: {e}")))?;
+
     let mut cmd = StdCommand::new(&config.python_path);
     cmd.arg("-c")
         .arg("import sys; sys.argv = ['batchalign-worker'] + sys.argv[1:]; from batchalign.worker import main; main()")
@@ -248,7 +253,7 @@ pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, 
         .arg("--profile")
         .arg(config.profile.name())
         .arg("--lang")
-        .arg(&*config.lang)
+        .arg(config.lang.as_worker_arg())
         .arg("--num-speakers")
         .arg(config.num_speakers.0.to_string())
         .arg("--host")
@@ -446,6 +451,14 @@ pub(crate) struct WorkerHandleParts {
 impl WorkerHandle {
     /// Spawn a new Python worker and wait for it to become ready.
     pub async fn spawn(config: WorkerConfig) -> Result<Self, WorkerError> {
+        // Memory guard: acquire a serialized spawn permit and check available RAM.
+        // This prevents the TOCTOU race where N concurrent spawns all see "enough"
+        // memory before any model is loaded, then collectively exceed physical RAM.
+        // See docs/memory-safety.md for the full crash history and design rationale.
+        let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(0)
+            .await
+            .map_err(|e| WorkerError::SpawnFailed(format!("memory guard: {e}")))?;
+
         let mut cmd: Command = build_worker_command(&config).into();
 
         info!(
@@ -454,7 +467,8 @@ impl WorkerHandle {
             test_echo = config.test_echo,
             force_cpu = config.runtime.force_cpu,
             python = %config.python_path,
-            "Spawning worker"
+            available_memory_mb = crate::worker::memory_guard::available_memory_mb(),
+            "Spawning worker (memory guard passed)"
         );
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -763,10 +777,9 @@ impl WorkerHandle {
             }
         };
 
-        if resp.status != "ok" {
+        if !resp.status.is_ok() {
             return Err(WorkerError::HealthCheckFailed(format!(
-                "status={}",
-                resp.status
+                "status={}", resp.status
             )));
         }
 
@@ -962,7 +975,7 @@ impl WorkerHandle {
 
     /// The language this worker handles.
     pub fn lang(&self) -> &str {
-        &self.config.lang
+        self.config.lang.as_worker_arg()
     }
 
     /// The transport this worker uses.
@@ -1031,7 +1044,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{WorkerConfig, WorkerRuntimeConfig, build_worker_command};
-    use crate::api::{LanguageCode3, NumSpeakers};
+    use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
     use crate::worker::WorkerProfile;
     use crate::worker::provider_credentials::HkAsrCredentialSources;
 
@@ -1061,7 +1074,7 @@ mod tests {
         let args = command_args(&WorkerConfig {
             python_path: "python3".to_string(),
             profile: WorkerProfile::Gpu,
-            lang: LanguageCode3::from("eng"),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
             test_echo: false,
@@ -1079,7 +1092,7 @@ mod tests {
         let envs = command_envs(&WorkerConfig {
             python_path: "python3".to_string(),
             profile: WorkerProfile::Gpu,
-            lang: LanguageCode3::from("eng"),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
             test_echo: false,
@@ -1101,7 +1114,7 @@ mod tests {
             &WorkerConfig {
                 python_path: "python3".to_string(),
                 profile: WorkerProfile::Gpu,
-                lang: LanguageCode3::from("yue"),
+                lang: WorkerLanguage::from(LanguageCode3::yue()),
                 num_speakers: NumSpeakers(1),
                 engine_overrides: r#"{"asr":"tencent"}"#.to_string(),
                 test_echo: false,

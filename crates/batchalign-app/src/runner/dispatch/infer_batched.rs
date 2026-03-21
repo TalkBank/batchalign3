@@ -3,10 +3,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::api::{ContentType, FileName, LanguageCode3};
+use crate::api::{ContentType, FileName, LanguageCode3, ReleasedCommand};
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::{FailureCategory, WorkUnitKind};
+use crate::workflow::text_batch::{TextBatchFileInput, into_legacy_batch_results};
 use tracing::warn;
 
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
@@ -42,9 +43,15 @@ pub(in crate::runner) async fn dispatch_batched_infer(
     let job_id = &job.identity.job_id;
     let correlation_id = &*job.identity.correlation_id;
     let file_list = &job.pending_files;
-    let fallback_lang = LanguageCode3::from("eng");
+    let fallback_lang = LanguageCode3::eng();
     let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
-    let command = job.dispatch.command.as_ref();
+    let Ok(command) = ReleasedCommand::try_from(&job.dispatch.command) else {
+        warn!(
+            command = %job.dispatch.command,
+            "Unknown released command in dispatch_batched_infer"
+        );
+        return;
+    };
 
     let started_at = unix_now();
 
@@ -60,7 +67,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
     }
 
     // Read all CHAT file contents (and optional "before" texts for incremental)
-    let mut file_texts: Vec<(String, String)> = Vec::with_capacity(file_list.len());
+    let mut file_texts: Vec<TextBatchFileInput> = Vec::with_capacity(file_list.len());
     let mut before_texts: HashMap<String, String> = HashMap::new();
     let mut read_errors: Vec<(usize, String)> = Vec::new();
 
@@ -87,7 +94,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
         };
         match tokio::fs::read_to_string(&read_path).await {
             Ok(content) => {
-                file_texts.push((filename.to_string(), content));
+                file_texts.push(TextBatchFileInput::new(filename.to_string(), content));
                 // Read the corresponding "before" file if available
                 if let Some(bp) = before_path
                     && let Ok(before_content) = tokio::fs::read_to_string(&bp).await
@@ -111,11 +118,11 @@ pub(in crate::runner) async fn dispatch_batched_infer(
 
     // Publish the batch total so frontends can display "0/N" while inference runs.
     let total_files = file_texts.len() as i64;
-    for (filename_str, _) in &file_texts {
+    for file in &file_texts {
         set_file_progress(
             store,
             job_id,
-            filename_str,
+            file.filename.as_ref(),
             stage,
             Some(0),
             Some(total_files),
@@ -125,7 +132,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
 
     // Run the appropriate server-side orchestrator
     let results = match command {
-        "morphotag" => {
+        ReleasedCommand::Morphotag => {
             let mor_params = MorphosyntaxParams {
                 lang,
                 tokenization_mode,
@@ -136,7 +143,9 @@ pub(in crate::runner) async fn dispatch_batched_infer(
             // Use incremental processing when before texts are available
             if !before_texts.is_empty() {
                 let mut results = Vec::new();
-                for (filename, after_text) in &file_texts {
+                for file in &file_texts {
+                    let filename = file.filename.as_ref();
+                    let after_text = file.chat_text.as_ref();
                     let result = if let Some(before_text) = before_texts.get(filename) {
                         crate::morphosyntax::process_morphosyntax_incremental(
                             before_text,
@@ -151,16 +160,22 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                             .await
                             .map_err(|e| e.to_string())
                     };
-                    results.push((filename.clone(), result));
+                    results.push((file.filename.to_string(), result));
                 }
                 results
             } else {
-                crate::morphosyntax::process_morphosyntax_batch(&file_texts, services, &mor_params)
-                    .await
+                into_legacy_batch_results(
+                    crate::morphosyntax::process_morphosyntax_batch(
+                        &file_texts,
+                        services,
+                        &mor_params,
+                    )
+                    .await,
+                )
             }
         }
-        "utseg" => {
-            crate::utseg::process_utseg_batch(
+        ReleasedCommand::Utseg => {
+            into_legacy_batch_results(crate::utseg::process_utseg_batch(
                 &file_texts,
                 lang,
                 services.pool,
@@ -168,10 +183,10 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 services.engine_version,
                 cache_policy,
             )
-            .await
+            .await)
         }
-        "translate" => {
-            crate::translate::process_translate_batch(
+        ReleasedCommand::Translate => {
+            into_legacy_batch_results(crate::translate::process_translate_batch(
                 &file_texts,
                 lang,
                 services.pool,
@@ -179,10 +194,17 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 services.engine_version,
                 cache_policy,
             )
-            .await
+            .await)
         }
-        "coref" => crate::coref::process_coref_batch(&file_texts, lang, services.pool).await,
-        "compare" => {
+        ReleasedCommand::Coref => {
+            into_legacy_batch_results(crate::coref::process_coref_batch(
+                &file_texts,
+                lang,
+                services.pool,
+            )
+            .await)
+        }
+        ReleasedCommand::Compare => {
             dispatch_compare(
                 job,
                 store,
@@ -196,7 +218,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
             return; // compare handles its own result recording
         }
         _ => {
-            warn!(command = %command, "Unknown infer command in dispatch_batched_infer");
+            warn!(command = %command, "Unsupported batched infer command");
             return;
         }
     };

@@ -11,6 +11,7 @@ use crate::ParsedChat;
 use crate::morphosyntax_ops::{
     add_morphosyntax_batched_inner, add_morphosyntax_inner, extract_morphosyntax_strings_inner,
 };
+use crate::pytypes::PythonLanguageId;
 
 #[pymethods]
 impl ParsedChat {
@@ -21,13 +22,13 @@ impl ParsedChat {
     fn py_add_morphosyntax(
         &mut self,
         py: Python<'_>,
-        lang: talkbank_model::PythonLanguageId,
+        lang: PythonLanguageId,
         morphosyntax_fn: &Bound<'_, pyo3::PyAny>,
         progress_fn: Option<&Bound<'_, pyo3::PyAny>>,
         skipmultilang: bool,
         retokenize: bool,
     ) -> PyResult<()> {
-        let lang_str = lang.data;
+        let lang_str = lang.into_data();
         let policy = MultilingualPolicy::from_skip_flag(skipmultilang);
         self.apply_transactional_mutation(|chat_file| {
             add_morphosyntax_inner(
@@ -49,13 +50,13 @@ impl ParsedChat {
     fn py_add_morphosyntax_batched(
         &mut self,
         py: Python<'_>,
-        lang: talkbank_model::PythonLanguageId,
+        lang: PythonLanguageId,
         batch_fn: &Bound<'_, pyo3::PyAny>,
         progress_fn: Option<&Bound<'_, pyo3::PyAny>>,
         skipmultilang: bool,
         retokenize: bool,
     ) -> PyResult<()> {
-        let lang_str = lang.data;
+        let lang_str = lang.into_data();
         let policy = MultilingualPolicy::from_skip_flag(skipmultilang);
         self.apply_transactional_mutation(|chat_file| {
             add_morphosyntax_batched_inner(
@@ -78,10 +79,10 @@ impl ParsedChat {
     fn py_extract_morphosyntax_payloads(
         &self,
         py: Python<'_>,
-        lang: talkbank_model::PythonLanguageId,
+        lang: PythonLanguageId,
         skipmultilang: bool,
     ) -> PyResult<String> {
-        let lang_str = lang.data;
+        let lang_str = lang.into_data();
         let inner = &self.inner;
         let policy = MultilingualPolicy::from_skip_flag(skipmultilang);
         let empty_mwt = std::collections::BTreeMap::new();

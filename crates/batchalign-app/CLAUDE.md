@@ -1,7 +1,7 @@
 # batchalign-app — HTTP Server, Job Store, and NLP Orchestration
 
 **Status:** Current
-**Last updated:** 2026-03-16
+**Last modified:** 2026-03-21 15:30 EDT
 
 ## Overview
 
@@ -13,24 +13,28 @@ Python workers provide stateless NLP inference only).
 
 | Module | Purpose |
 |--------|---------|
-| `lib.rs` | `create_app()`, `AppState`, WebSocket handler, graceful shutdown |
+| `lib.rs` | `create_app()`, WebSocket handler, graceful shutdown |
+| `state.rs` | `AppState`, capability gate (`validate_infer_capability_gate()`) |
 | `cache/` | Tiered utterance cache: moka in-memory hot layer + SQLite cold backend (BLAKE3 keys) |
-| `store.rs` | `JobStore` composition, SQLite write-through, conflict detection, memory gating |
-| `store/registry.rs` | Owned `JobRegistry` actor for in-memory job projections and mutations |
-| `store/counters.rs` | Small `OperationalCounterStore` for health/metrics bookkeeping |
-| `runner.rs` | Per-job async task: dispatch routing (infer vs process), parallelism, preflight. Dispatch modules set progress labels at stage transitions; `runner/util.rs` has `set_file_progress()`, `ProgressSender`, and `spawn_progress_forwarder()` for sub-file progress |
-| `db.rs` | SQLite persistence (WAL), schema, recovery, TTL pruning |
+| `store/` | `JobStore` composition, `JobRegistry` actor, `OperationalCounterStore`, SQLite write-through, conflict detection, memory gating |
+| `runner/` | Per-job async task: dispatch routing, parallelism, preflight. `runner/policy.rs` has `infer_task_for_command()` and `command_requires_infer()`. `runner/util/` has progress helpers |
+| `runner/dispatch/` | Dispatch family implementations: `infer_batched.rs`, `fa_pipeline.rs`, `transcribe_pipeline.rs`, `benchmark_pipeline.rs`, `compare_pipeline.rs`, `media_analysis_v2.rs` |
+| `db/` | SQLite persistence (WAL): `schema.rs`, `insert.rs`, `query.rs`, `update.rs`, `recovery.rs` |
 | `error.rs` | Typed errors → HTTP status codes (404, 409, 500) |
-| `morphosyntax.rs` | Server-side morphosyntax orchestrator (parse→clear→collect→cache→infer→inject→serialize) |
+| `morphosyntax/` | Server-side morphosyntax orchestrator (parse→clear→collect→cache→infer→inject→serialize) |
+| `pipeline/` | `PipelineServices`, transcribe pipeline, text infer pipeline, morphosyntax batch |
 | `utseg.rs` | Utterance segmentation orchestrator |
 | `translate.rs` | Translation orchestrator (injects `%xtra`) |
 | `coref.rs` | Coreference resolution (document-level, sparse, English-only) |
-| `fa.rs` | Forced alignment (per-file, multi-group, audio-aware, DP alignment). UTR pre-pass in `dispatch/infer.rs::process_one_fa_file` |
+| `fa/` | Forced alignment orchestrator (per-file, multi-group, audio-aware, DP alignment, incremental FA) |
+| `workflow/` | Workflow-family registry, typed descriptors, traits, and per-command implementations |
+| `worker/` | Worker pool, IPC handle, V2 request builders and result types |
 | `media.rs` | Media file resolution with walk cache (60s TTL) |
 | `ws.rs` | WebSocket broadcast event types |
+| `websocket.rs` | WebSocket route and handler |
 | `hostname.rs` | Tailscale IP→hostname resolution |
-| `routes/` | HTTP endpoints: health, jobs (CRUD+SSE), media, dashboard, bug reports |
-| `types/` | Domain newtypes (`string_id!`/`numeric_id!` macros), API models, parameter structs, worker IPC types, scheduling types |
+| `routes/` | HTTP endpoints: health, jobs (CRUD+SSE), media, dashboard, bug reports, traces |
+| `types/` | API models, parameter structs, worker IPC types, scheduling types, and re-exports of shared domain newtypes from `batchalign-types` |
 
 ## Job Registry Concurrency Model
 
@@ -68,29 +72,25 @@ cargo clippy -p batchalign-app -- -D warnings
 | DELETE | `/jobs/{id}` | Permanent delete |
 | GET | `/health` | Version, capabilities, worker state |
 
-## Dispatch Routing (runner.rs)
+## Dispatch Routing (runner/)
 
-Three dispatch shapes:
-1. **Batched text infer** — morphotag, utseg, translate, coref: pool all utterances from all
-   files into one `batch_infer` call for GPU batch efficiency.
-2. **Per-file infer** — align (FA), transcribe: files processed concurrently via
-   `JoinSet` + `Semaphore(num_workers)`. Each file gets its own worker checkout.
-   For align: UTR pre-pass runs before FA grouping with ASR result caching
-   (see `dispatch/infer.rs::process_one_fa_file` and `run_utr_pass()`).
-   Fallback UTR retries timing recovery after FA failures. For mostly-timed
-   files (>50% timed, audio >60s), partial-window ASR runs only on untimed
-   regions.
-3. **Per-file process** — opensmile, avqi, benchmark: concurrent files via `JoinSet` +
-   `Semaphore(num_workers)`, simple worker IPC.
+Dispatch shapes (driven by `workflow/registry.rs`):
+1. **Batched text infer** (`runner/dispatch/infer_batched.rs`) — morphotag, utseg, translate, coref: pool all utterances from all files into one `batch_infer` call for GPU batch efficiency.
+2. **Per-file FA** (`runner/dispatch/fa_pipeline.rs`) — align: files processed concurrently via `JoinSet` + `Semaphore(num_workers)`. UTR pre-pass runs before FA grouping with ASR result caching. Fallback UTR retries timing recovery after FA failures. For mostly-timed files (>50% timed, audio >60s), partial-window ASR runs only on untimed regions.
+3. **Per-file transcribe** (`runner/dispatch/transcribe_pipeline.rs`) — transcribe, transcribe_s: per-file audio processing with optional diarization, utseg, and morphosyntax.
+4. **Per-file benchmark** (`runner/dispatch/benchmark_pipeline.rs`) — composite transcribe + compare.
+5. **Per-file compare** (`runner/dispatch/compare_pipeline.rs`) — gold-anchored projection.
+6. **Per-file media analysis** (`runner/dispatch/media_analysis_v2.rs`) — opensmile, avqi: concurrent files via `JoinSet` + `Semaphore(num_workers)`, worker `execute_v2`.
 
 **Post-validation is warn-only** — output is always serialized and written even if
 post-validation finds issues. This ensures output CHAT can be inspected for debugging.
 
 ## Type System
 
-Domain newtypes are defined in `types/` using `string_id!` and `numeric_id!` macros:
-- **`types/macros.rs`** — macro definitions (generates Deref, serde transparent, From, Borrow, etc.)
-- **`types/api.rs`** — `JobId`, `CommandName`, `LanguageCode3`, `FileName`, `EngineVersion`, `CorrelationId`, `NumSpeakers`, `UnixTimestamp`, etc.
+Domain newtypes are defined in `batchalign-types` using `string_id!` and `numeric_id!`:
+- **`../batchalign-types/src/macros.rs`** — macro definitions (generates Deref, serde transparent, From, Borrow, etc.)
+- **`../batchalign-types/src/domain/`** — `JobId`, `CommandName`, `ReleasedCommand`, `LanguageCode3`, `LanguageSpec`, `FileName`, `EngineVersion`, `CorrelationId`, `NumSpeakers`, `UnixTimestamp`, `DurationMs`, `MemoryMb`, etc.
+- **`../batchalign-types/src/scheduling.rs`** — `AttemptId`, `WorkUnitId`
 - **`types/params.rs`** — `CachePolicy`, `WorTierPolicy` enums; `MorphosyntaxParams`, `FaParams`, `AudioContext` structs
 - **`pipeline/mod.rs`** — `PipelineServices` (shared infrastructure refs: pool, cache, engine_version)
 

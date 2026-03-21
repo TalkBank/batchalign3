@@ -30,7 +30,7 @@ use batchalign_chat_ops::{CacheKey, ChatFile, Line, Utterance};
 use tracing::{info, warn};
 
 use super::transport::{FaWorkerBatch, FaWorkerTransport};
-use super::{CACHE_TASK, process_fa};
+use super::{CACHE_TASK, collect_final_timings, process_fa};
 
 /// Process a CHAT file through forced alignment incrementally.
 ///
@@ -43,6 +43,7 @@ pub(crate) async fn process_fa_incremental(
     before_text: &str,
     after_text: &str,
     audio: &AudioContext<'_>,
+    worker_lang: &crate::api::LanguageCode3,
     services: PipelineServices<'_>,
     fa_params: &FaParams,
     progress: Option<&ProgressSender>,
@@ -67,7 +68,15 @@ pub(crate) async fn process_fa_incremental(
     // preserve from the previous file, the incremental path has nothing to
     // reuse and should fall back to the regular full-file align path.
     if summary.unchanged == 0 && summary.speaker_changed == 0 && summary.timing_only == 0 {
-        return process_fa(after_text, audio, services, fa_params, progress).await;
+        return process_fa(
+            after_text,
+            audio,
+            worker_lang,
+            services,
+            fa_params,
+            progress,
+        )
+        .await;
     }
 
     // Group the "after" file's utterances
@@ -233,6 +242,7 @@ pub(crate) async fn process_fa_incremental(
                 groups: &groups,
                 miss_indices: &miss_indices,
                 audio_path: audio.audio_path,
+                worker_lang: worker_lang.into(),
                 engine: fa_params.engine,
                 timing_mode: fa_params.timing_mode,
             })
@@ -271,10 +281,7 @@ pub(crate) async fn process_fa_incremental(
     }
 
     // Apply all results
-    let final_timings: Vec<Vec<Option<WordTiming>>> = all_timings
-        .into_iter()
-        .map(|t| t.unwrap_or_default())
-        .collect();
+    let final_timings = collect_final_timings(all_timings, "incremental forced alignment")?;
 
     let pre_injection_timings: Vec<Vec<Option<TimingTrace>>> = final_timings
         .iter()

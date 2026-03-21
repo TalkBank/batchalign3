@@ -1,7 +1,7 @@
 # Data Flow Overview
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last modified:** 2026-03-21 15:30 EDT
 
 This document traces the complete data flow for every batchalign command,
 from CLI invocation through the Rust server to Python ML inference and back.
@@ -32,19 +32,28 @@ that dispatches work to a Rust server (local daemon or remote). The server
 owns CHAT parsing, caching, validation, and serialization. Python workers are
 stateless ML inference endpoints that never see CHAT text.
 
+The production data flow for all commands begins with the registry in
+[`crates/batchalign-app/src/workflow/registry.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/registry.rs),
+with the family contracts in
+[`crates/batchalign-app/src/workflow/traits.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/traits.rs).
+`workflow/mod.rs` is now the top-level map that points readers to those two
+roles.
+
 The production data flow for all commands:
 
 ```
 Rust CLI (dispatch/mod.rs)
   --> HTTP POST /jobs to Rust server
   --> Server runner (runner/mod.rs) spawns async job task
-  --> Dispatch routing selects one of five shapes:
-      1. dispatch_batched_infer()      — text-only commands
-      2. dispatch_fa_infer()           — forced alignment
-      3. dispatch_transcribe_infer()   — transcription from audio
-      4. dispatch_benchmark_infer()    — transcription + WER benchmarking
-      5. process_one_file()            — worker-owned media analysis
-  --> Per-command orchestrator runs the pipeline:
+  --> Dispatch routing consumes the workflow registry and then enters one of:
+      1. dispatch_batched_infer()        — morphotag / utseg / translate / coref
+      2. dispatch_fa_infer()             — forced alignment
+      3. dispatch_transcribe_infer()     — transcription from audio
+      4. dispatch_reference_projection() — compare / gold-anchored projection
+      5. dispatch_benchmark_infer()      — composite transcribe + compare
+      6. dispatch_media_analysis_v2()    — opensmile / avqi
+      7. process_one_file()              — worker-owned media analysis legacy path
+  --> Per-workflow orchestrator runs the pipeline:
       parse → cache check → typed worker IPC → inject → validate → serialize
   --> CLI polls /jobs/{id}/results and writes output files
 ```
@@ -95,11 +104,14 @@ CHAT files (`@Options: dummy`).
 ## Server Job Runner
 
 The job runner (`crates/batchalign-app/src/runner/mod.rs`) receives submitted
-jobs and routes them through five dispatch shapes based on command type.
+jobs and routes them through the workflow registry
+(`crates/batchalign-app/src/workflow/registry.rs`) and family-specific dispatch
+paths.
 
 ### Dispatch routing
 
-Two functions control routing:
+Two functions in `crates/batchalign-app/src/runner/policy.rs` control routing
+(they delegate to the workflow registry):
 
 - **`infer_task_for_command()`** maps each command to an `InferTask` enum
   variant (e.g., `"morphotag"` → `InferTask::Morphosyntax`)
@@ -132,16 +144,21 @@ Commands that **always require infer**: `morphotag`, `utseg`, `translate`,
 `coref`, `compare`, `opensmile`, and `avqi`. The `align` command requires
 infer only when all inputs are CHAT files (not raw audio).
 
-### Five dispatch shapes
+### Dispatch Families
 
-| Shape | Commands | Strategy |
+| Family | Commands | Strategy |
 |-------|----------|----------|
-| `dispatch_batched_infer` | morphotag, utseg, translate, coref, compare | Pool utterances across files into cross-file batches for worker `execute_v2` using one prepared-text artifact per task |
+| `dispatch_batched_infer` | morphotag, utseg, translate, coref | Pool utterances across files into cross-file batches for worker `execute_v2` using one prepared-text artifact per task |
 | `dispatch_fa_infer` | align | Per-file processing with per-group batching inside each file (each file has its own audio) |
 | `dispatch_transcribe_infer` | transcribe, transcribe_s | Per-file audio → ASR → optional speaker diarization → post-processing → CHAT assembly → optional utseg/morphotag pipeline |
-| `dispatch_benchmark_infer` | benchmark | Per-file audio → Rust transcribe pipeline → Rust compare pipeline → hypothesis CHAT + CSV metrics |
+| `dispatch_reference_projection` | compare | Gold-anchored projection workflow with a typed comparison bundle and compare-specific output materializers |
+| `dispatch_benchmark_infer` | benchmark | Per-file audio → Rust transcribe workflow → Rust compare workflow → hypothesis CHAT + CSV metrics |
 | `dispatch_media_analysis_v2` | opensmile, avqi | Per-file Rust-owned prepared-audio requests over worker `execute_v2` |
 | `process_one_file` | legacy compatibility only | Per-file worker IPC retained for non-release compatibility code, not for the current CLI surface |
+
+The registry in `workflow/registry.rs` is the source of truth for which released
+command maps to which family. The dispatch functions above are the runtime
+entry points that consume that registry.
 
 ---
 
@@ -189,7 +206,7 @@ widening the Python worker protocol.
 
 ### align
 
-**Orchestrator:** `crates/batchalign-app/src/fa.rs`
+**Orchestrator:** `crates/batchalign-app/src/fa/`
 **Worker:** `batchalign/inference/fa.py`
 **FA engines:** `whisper` (default), `wave2vec`
 
@@ -210,7 +227,7 @@ CHAT text + audio file
 
 ### morphotag
 
-**Orchestrator:** `crates/batchalign-app/src/morphosyntax.rs`
+**Orchestrator:** `crates/batchalign-app/src/morphosyntax/`
 **Worker:** `batchalign/worker/_text_v2.py` (uses `batchalign/inference/morphosyntax.py`)
 
 ```
@@ -294,11 +311,11 @@ because results depend on full document context.
 
 ```
 main CHAT text + gold CHAT text (FILE.gold.cha)
-  → Rust: run morphosyntax pipeline on main text (reuses process_morphosyntax())
-  → Rust: parse gold file
-  → Rust: DP-align main vs gold words
-  → Rust: inject %xsrep comparison tiers
-  → serialize annotated CHAT + CSV metrics
+  → Rust: build typed comparison bundle from main + gold
+  → Rust: run morphosyntax pipeline where needed
+  → Rust: DP-align main vs gold words inside the projection bundle
+  → Rust: materialize %xsrep / metrics outputs
+  → serialize projected CHAT + CSV metrics
 ```
 
 ---
@@ -342,8 +359,8 @@ No CHAT involvement. Requires local daemon (paired-file discovery).
 
 ```
 audio file + gold CHAT file
-  → Rust transcribe pipeline → hypothesis CHAT text
-  → Rust compare pipeline
+  → Rust transcribe workflow → hypothesis CHAT text
+  → Rust compare workflow
     → word normalization + Hirschberg DP alignment + WER computation
   → outputs: hypothesis .cha + .compare.csv
 ```
@@ -417,13 +434,14 @@ output).
 | File | Role |
 |------|------|
 | `crates/batchalign-cli/src/dispatch/mod.rs` | CLI dispatch router |
-| `crates/batchalign-app/src/runner/mod.rs` | Job runner, dispatch shape selection |
-| `crates/batchalign-app/src/runner/dispatch/` | Three dispatch shapes (batched infer, FA infer, transcribe infer, per-file process) |
-| `crates/batchalign-app/src/morphosyntax.rs` | Morphosyntax orchestrator |
+| `crates/batchalign-app/src/runner/` | Job runner (`mod.rs`), policy helpers (`policy.rs`), util |
+| `crates/batchalign-app/src/runner/dispatch/` | Dispatch family implementations (`infer_batched.rs`, `fa_pipeline.rs`, `transcribe_pipeline.rs`, `benchmark_pipeline.rs`, `compare_pipeline.rs`, `media_analysis_v2.rs`) |
+| `crates/batchalign-app/src/workflow/` | Workflow-family registry, descriptors, traits, per-command implementations |
+| `crates/batchalign-app/src/morphosyntax/` | Morphosyntax orchestrator |
 | `crates/batchalign-app/src/utseg.rs` | Utseg orchestrator |
 | `crates/batchalign-app/src/translate.rs` | Translation orchestrator |
 | `crates/batchalign-app/src/coref.rs` | Coreference orchestrator |
-| `crates/batchalign-app/src/fa.rs` | Forced alignment orchestrator |
+| `crates/batchalign-app/src/fa/` | Forced alignment orchestrator |
 | `crates/batchalign-app/src/transcribe.rs` | Transcribe orchestrator |
 | `crates/batchalign-app/src/compare.rs` | Compare orchestrator |
 | `crates/batchalign-app/src/cache/` | BLAKE3 + SQLite utterance cache |

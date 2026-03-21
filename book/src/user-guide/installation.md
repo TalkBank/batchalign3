@@ -1,7 +1,7 @@
 # Installation
 
 **Status:** Current
-**Last updated:** 2026-03-16
+**Last modified:** 2026-03-21 07:16 EDT
 
 Batchalign runs on **Windows, macOS, and Linux**. Pre-built wheels are available from PyPI for all three platforms (macOS ARM + Intel, Linux x86 + ARM, Windows x86).
 
@@ -125,20 +125,13 @@ Wheel files for all 5 supported platforms are built by the release CI. Once
 GitHub Releases is set up (see [installers README](https://github.com/TalkBank/batchalign3/blob/main/installers/README.md)),
 they will be downloadable from the releases page.
 
-## Optional extras
+## Built-in engines
+
+All built-in engines, including Cantonese/HK providers, are part of the base
+package:
 
 ```bash
-uv tool install "batchalign3[asr]"       # Whisper ASR engine
-uv tool install "batchalign3[hk]"        # HK/Cantonese engines
-uv tool install "batchalign3[all]"       # ASR + diarization + audio features
-uv tool install "batchalign3[all,hk]"   # Everything including HK/Cantonese
-```
-
-If you installed from a source checkout instead of a published wheel/tool, use
-the repo-managed `.venv` and sync the extras into that environment explicitly:
-
-```bash
-uv sync --group dev --extra hk
+uv tool install batchalign3
 ```
 
 ## Worker Python resolution
@@ -195,19 +188,30 @@ make sync
 make build
 ```
 
-The base `make sync` environment does not include optional HK/Cantonese engine
-extras. If you need those providers from a source checkout, follow it with a
-matching `uv sync --group dev --extra ...` command. `uv sync` is declarative
-about extras, so include the full extra set you still need on later syncs.
+The repo-managed `.venv` includes the same built-in engine families as the base
+package. `make sync` is sufficient for Cantonese/HK providers as well.
 
 That full dev build also rebuilds the embedded dashboard, so it requires
 Node.js + npm in addition to Rust and uv. If you only need the CLI and Python
 extension surfaces, use `make build-python` and `make build-rust` instead.
 
-`batchalign3` is a Rust binary in a source checkout. Use
-`./target/debug/batchalign3` or `cargo run -p batchalign-cli -- ...` for the
-CLI, and reserve `uv run` for Python tools such as `pytest`, `mypy`, and
-`maturin`.
+In a source checkout, `uv run batchalign3` is still the normal way to invoke
+the installed console script. After `make build-python`, the wrapper falls
+back to the repo CLI when the embedded bridge is intentionally omitted, so the
+fast extension-only rebuild still leaves you with a runnable `batchalign3`
+command.
+
+For the fastest contributor loop, pair the slim extension rebuild with a one-
+time CLI build:
+
+```bash
+make build-python
+cargo build -p batchalign-cli
+uv run batchalign3 --help
+```
+
+Reserve `uv run` for Python tools such as `pytest`, `mypy`, and `maturin`
+when you are not invoking the CLI.
 
 Common rebuilds from a dev checkout:
 

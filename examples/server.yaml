@@ -29,7 +29,9 @@ port: 8000
 
 # Pre-load morphotag and align pipelines on startup (main thread).
 # Prevents MPS deadlock on first request from a background thread.
-warmup: true
+warmup_commands:
+  - morphotag
+  - align
 
 # Media roots: directories to search for audio files referenced by @Media:
 # headers.  Set this if your media files are colocated with your data.

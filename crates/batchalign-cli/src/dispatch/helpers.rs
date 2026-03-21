@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use batchalign_app::api::{FilePayload, FileStatusKind, JobInfo, JobStatus};
+use batchalign_app::ReleasedCommand;
+use batchalign_app::api::{FileName, FilePayload, FileStatusKind, JobInfo, JobStatus};
 
 use crate::client::{BatchalignClient, MAX_POLL_FAILURES, POLL_MAX, POLL_MIN, POLL_STEP};
 use crate::error::CliError;
@@ -14,6 +15,25 @@ use crate::progress::ProgressSink;
 // ---------------------------------------------------------------------------
 // Single-server incremental poll
 // ---------------------------------------------------------------------------
+
+/// Named CLI-visible file failure detail.
+#[derive(Debug, Clone)]
+pub(super) struct FileErrorDetail {
+    /// File identity reported to the user.
+    pub filename: FileName,
+    /// Human-readable failure explanation.
+    pub message: String,
+}
+
+impl FileErrorDetail {
+    /// Construct one failure detail from a file identity and message.
+    pub(super) fn new(filename: impl Into<FileName>, message: impl Into<String>) -> Self {
+        Self {
+            filename: filename.into(),
+            message: message.into(),
+        }
+    }
+}
 
 /// Poll a single-server job, writing results incrementally as files complete.
 #[allow(clippy::too_many_arguments)]
@@ -29,7 +49,7 @@ pub(super) async fn poll_and_write_incrementally(
 ) -> Result<(), CliError> {
     let mut written_files: HashSet<String> = HashSet::new();
     let mut written_count: u64 = 0;
-    let mut error_details: Vec<(String, String)> = Vec::new();
+    let mut error_details: Vec<FileErrorDetail> = Vec::new();
     let mut consecutive_failures: u32 = 0;
     let mut poll_interval = POLL_MIN;
     let mut last_completed: i64 = 0;
@@ -59,19 +79,25 @@ pub(super) async fn poll_and_write_incrementally(
                                     Ok(false) => {
                                         let error_msg = result.error.unwrap_or_default();
                                         progress.log_error(fn_, &error_msg);
-                                        error_details.push((fn_.to_string(), error_msg));
+                                        error_details.push(FileErrorDetail::new(
+                                            fn_.clone(),
+                                            error_msg,
+                                        ));
                                     }
                                     Err(e) => {
                                         let error_msg = format!("{e}");
                                         progress.log_error(fn_, &error_msg);
-                                        error_details.push((fn_.to_string(), error_msg));
+                                        error_details.push(FileErrorDetail::new(
+                                            fn_.clone(),
+                                            error_msg,
+                                        ));
                                     }
                                 }
                             }
                             Err(e) => {
                                 let error_msg = format!("{e}");
                                 progress.log_error(fn_, &error_msg);
-                                error_details.push((fn_.to_string(), error_msg));
+                                error_details.push(FileErrorDetail::new(fn_.clone(), error_msg));
                             }
                         }
                         written_files.insert(fn_.to_string());
@@ -82,7 +108,7 @@ pub(super) async fn poll_and_write_incrementally(
                             .clone()
                             .unwrap_or_else(|| "unknown error".into());
                         progress.log_error(fn_, &error_msg);
-                        error_details.push((fn_.to_string(), error_msg));
+                        error_details.push(FileErrorDetail::new(fn_.clone(), error_msg));
                     }
                 }
 
@@ -166,12 +192,13 @@ pub(super) fn maybe_open_dashboard(dashboard_url: &str, cli_enabled: bool) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn terminal_job_detail(info: &JobInfo, error_details: &[(String, String)]) -> String {
+fn terminal_job_detail(info: &JobInfo, error_details: &[FileErrorDetail]) -> String {
     if let Some(job_error) = info.error.as_ref().filter(|s| !s.trim().is_empty()) {
         return job_error.clone();
     }
-    if let Some((filename, error)) = error_details.first() {
-        let first_line = error.lines().next().unwrap_or("unknown error");
+    if let Some(detail) = error_details.first() {
+        let first_line = detail.message.lines().next().unwrap_or("unknown error");
+        let filename = detail.filename.as_ref();
         return format!("{filename}: {first_line}");
     }
     match info.status {
@@ -186,7 +213,7 @@ fn terminal_job_detail(info: &JobInfo, error_details: &[(String, String)]) -> St
 
 fn print_job_terminal_failure(
     info: &JobInfo,
-    error_details: &[(String, String)],
+    error_details: &[FileErrorDetail],
     total_files: u64,
     out_dir: &Path,
 ) {
@@ -207,7 +234,7 @@ fn print_job_terminal_failure(
 
 pub(super) fn finish_terminal_job(
     info: &JobInfo,
-    error_details: &[(String, String)],
+    error_details: &[FileErrorDetail],
     total_files: u64,
     out_dir: &Path,
 ) -> Result<(), CliError> {
@@ -235,7 +262,7 @@ pub(super) fn finish_terminal_job(
 /// resolved server-side by filename convention. Compare uses `*.gold.cha`
 /// companions as references and should not submit them as primary inputs.
 pub(super) fn filter_files_for_command(
-    command: &str,
+    command: ReleasedCommand,
     files: Vec<PathBuf>,
     outputs: Vec<PathBuf>,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
@@ -245,8 +272,8 @@ pub(super) fn filter_files_for_command(
         let name = f.file_name().and_then(|s| s.to_str()).unwrap_or_default();
         let lower = name.to_ascii_lowercase();
         let keep = match command {
-            "avqi" => lower.contains(".cs."),
-            "compare" => !lower.ends_with(".gold.cha"),
+            ReleasedCommand::Avqi => lower.contains(".cs."),
+            ReleasedCommand::Compare => !lower.ends_with(".gold.cha"),
             _ => true,
         };
         if keep {
@@ -371,7 +398,11 @@ pub(super) fn distribute_files_weighted(
 }
 
 /// Print a structured failure summary.
-pub(super) fn print_failure_summary(errors: &[(String, String)], total_files: u64, out_dir: &Path) {
+pub(super) fn print_failure_summary(
+    errors: &[FileErrorDetail],
+    total_files: u64,
+    out_dir: &Path,
+) {
     if errors.is_empty() {
         eprintln!(
             "\nAll done! {total_files} file(s) written to {}",
@@ -389,8 +420,9 @@ pub(super) fn print_failure_summary(errors: &[(String, String)], total_files: u6
     );
     eprintln!("{bar}");
 
-    for (filename, error_msg) in errors {
-        let first_line = error_msg.split('\n').next().unwrap_or("unknown error");
+    for error in errors {
+        let first_line = error.message.split('\n').next().unwrap_or("unknown error");
+        let filename = error.filename.as_ref();
         eprintln!("  \u{2717} {filename}: {first_line}");
     }
 
@@ -401,8 +433,9 @@ pub(super) fn print_failure_summary(errors: &[(String, String)], total_files: u6
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batchalign_app::api::{CommandName, FileStatusEntry, JobId};
+    use batchalign_app::api::{CommandName, FileStatusEntry, JobId, LanguageCode3, LanguageSpec};
     use batchalign_app::options::{CommandOptions, CommonOptions, MorphotagOptions};
+    use batchalign_app::ReleasedCommand;
 
     fn test_job_info(status: JobStatus, error: Option<&str>) -> JobInfo {
         JobInfo {
@@ -415,7 +448,7 @@ mod tests {
                 skipmultilang: false,
                 merge_abbrev: false.into(),
             }),
-            lang: "eng".into(),
+            lang: LanguageSpec::Resolved(LanguageCode3::eng()),
             source_dir: "/tmp/in".into(),
             total_files: 1,
             completed_files: 0,
@@ -511,7 +544,7 @@ mod tests {
         ];
         let outputs = vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")];
 
-        let (f, o) = filter_files_for_command("avqi", files, outputs);
+        let (f, o) = filter_files_for_command(ReleasedCommand::Avqi, files, outputs);
         assert_eq!(f.len(), 2);
         assert_eq!(o.len(), 2);
         assert!(f[0].to_string_lossy().contains(".cs."));
@@ -533,7 +566,7 @@ mod tests {
             PathBuf::from("d"),
         ];
 
-        let (f, o) = filter_files_for_command("compare", files, outputs);
+        let (f, o) = filter_files_for_command(ReleasedCommand::Compare, files, outputs);
         assert_eq!(f.len(), 2);
         assert_eq!(o.len(), 2);
         assert!(f.iter().all(|path| {
@@ -570,14 +603,24 @@ mod tests {
 
     #[test]
     fn capability_check_allows_test_echo() {
+        use batchalign_app::ReleasedCommand;
+
         let caps = vec!["test-echo".to_string()];
-        assert!(super::super::server_supports_command(&caps, "morphotag"));
+        assert!(super::super::server_supports_command(
+            &caps,
+            ReleasedCommand::Morphotag
+        ));
     }
 
     #[test]
     fn capability_check_rejects_missing_command() {
+        use batchalign_app::ReleasedCommand;
+
         let caps = vec!["align".to_string(), "transcribe".to_string()];
-        assert!(!super::super::server_supports_command(&caps, "morphotag"));
+        assert!(!super::super::server_supports_command(
+            &caps,
+            ReleasedCommand::Morphotag
+        ));
     }
 
     #[test]
@@ -680,7 +723,7 @@ mod tests {
     fn finish_terminal_job_rejects_completed_job_with_file_errors() {
         let info = test_job_info(JobStatus::Completed, None);
         let out_dir = tempfile::tempdir().unwrap();
-        let errors = vec![("clip.cha".to_string(), "decoder failed\ntrace".to_string())];
+        let errors = vec![FileErrorDetail::new("clip.cha", "decoder failed\ntrace")];
 
         let result = finish_terminal_job(&info, &errors, 1, out_dir.path());
 

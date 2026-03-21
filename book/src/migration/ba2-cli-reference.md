@@ -229,7 +229,8 @@ alongside `train` (Python runtime).
 
 The HK plugin was a separate PyPI package (`batchalign-hk-plugin`) that
 registered additional ASR/FA engines via Python entry points. It was folded
-into batchalign3 as built-in optional extras in March 2026.
+into batchalign3 as built-in engines in March 2026; there is no separate HK
+install tier now.
 
 ### Plugin Discovery
 

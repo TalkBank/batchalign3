@@ -1,4 +1,4 @@
-//! Worker IPC types — the contract between Rust control-plane and
+//! Worker IPC types — the shared contract between Rust control-plane and
 //! Python worker processes.
 //!
 //! Workers communicate over JSON messages. These types define the
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CommandName, DurationSeconds, LanguageCode3};
+use crate::api::{CommandName, DurationSeconds, LanguageCode3, WorkerLanguage};
 
 // ---------------------------------------------------------------------------
 // Domain newtypes (worker-specific)
@@ -20,6 +20,37 @@ numeric_id!(
     pub WorkerPid(u32) [Eq]
 );
 
+/// Worker health status returned by the Python process health check.
+///
+/// The Python side sends `"ok"` as a string over the IPC channel.
+/// Any unrecognized value deserializes to `Unknown` and triggers a
+/// crash-restart cycle in the pool health loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkerHealthStatus {
+    /// Worker is responsive and its loaded pipeline is functioning.
+    Ok,
+    /// Unrecognized status value — treat as unhealthy.
+    #[serde(other)]
+    Unknown,
+}
+
+impl WorkerHealthStatus {
+    /// Return `true` when the worker reported healthy status.
+    pub fn is_ok(self) -> bool {
+        matches!(self, Self::Ok)
+    }
+}
+
+impl std::fmt::Display for WorkerHealthStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ok => write!(f, "ok"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 /// Response from worker health operation.
 ///
 /// Returned when the server sends `{"op":"health"}` over the worker's
@@ -27,16 +58,17 @@ numeric_id!(
 /// crashed workers before they affect job dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkerHealthResponse {
-    /// `"ok"` when the worker is responsive and its loaded pipeline is
-    /// functioning.  Any other value triggers a crash-restart cycle.
-    pub status: String,
+    /// Worker health status — `Ok` when responsive, `Unknown` otherwise.
+    pub status: WorkerHealthStatus,
     /// The logical bootstrap target this worker was spawned for (for example
     /// `infer:morphosyntax`). Workers are specialized at spawn time and cannot
     /// change target.
     pub command: CommandName,
-    /// 3-letter ISO language code this worker was spawned for.  Together
-    /// with `command`, forms the pool key (`command:lang`).
-    pub lang: LanguageCode3,
+    /// Worker-runtime language string this worker was spawned for.
+    ///
+    /// This is a routing/bootstrap value rather than a true domain language,
+    /// so it may be `"auto"` or an empty string for runtime-only worker keys.
+    pub lang: WorkerLanguage,
     /// OS process ID of the Python worker.  Used for crash diagnostics
     /// and force-kill during shutdown.
     pub pid: WorkerPid,
@@ -163,9 +195,9 @@ mod tests {
     #[test]
     fn worker_health_roundtrip() {
         let health = WorkerHealthResponse {
-            status: "ok".into(),
+            status: WorkerHealthStatus::Ok,
             command: "infer:morphosyntax".into(),
-            lang: "eng".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
             pid: WorkerPid(12345),
             uptime_s: DurationSeconds(120.5),
         };
@@ -214,7 +246,7 @@ mod tests {
     fn infer_request_roundtrip() {
         let req = InferRequest {
             task: InferTask::Morphosyntax,
-            lang: "eng".into(),
+            lang: LanguageCode3::eng(),
             payload: serde_json::json!({
                 "words": ["the", "dog", "runs"],
                 "terminator": ".",
@@ -257,7 +289,7 @@ mod tests {
     fn batch_infer_request_roundtrip() {
         let req = BatchInferRequest {
             task: InferTask::Morphosyntax,
-            lang: "eng".into(),
+            lang: LanguageCode3::eng(),
             items: vec![
                 serde_json::json!({"words": ["hello"]}),
                 serde_json::json!({"words": ["goodbye"]}),
@@ -275,7 +307,7 @@ mod tests {
     fn batch_infer_request_with_mwt_roundtrip() {
         let req = BatchInferRequest {
             task: InferTask::Morphosyntax,
-            lang: "eng".into(),
+            lang: LanguageCode3::eng(),
             items: vec![serde_json::json!({"words": ["gonna"]})],
             mwt: BTreeMap::from([("gonna".into(), vec!["going".into(), "to".into()])]),
         };
@@ -297,7 +329,7 @@ mod tests {
     fn infer_task_wire_format_is_snake_case_string() {
         let req = BatchInferRequest {
             task: InferTask::Translate,
-            lang: "eng".into(),
+            lang: LanguageCode3::eng(),
             items: vec![],
             mwt: BTreeMap::new(),
         };

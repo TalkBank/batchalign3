@@ -21,7 +21,7 @@ system:
 Key current components:
 
 - server runner: `crates/batchalign-app/src/runner/mod.rs`
-- FA orchestrator: `crates/batchalign-app/src/fa.rs`
+- FA orchestrator: `crates/batchalign-app/src/fa/`
 - FA grouping/alignment: `crates/batchalign-chat-ops/src/fa/`
 - worker pool: `crates/batchalign-app/src/worker/pool/`
 

@@ -10,70 +10,19 @@
 
 use std::path::Path;
 
-use crate::api::LanguageCode3;
-use crate::compare::process_compare;
 use crate::error::ServerError;
-use crate::params::CachePolicy;
-use crate::pipeline::PipelineServices;
-use crate::runner::util::ProgressSender;
-use crate::transcribe::{TranscribeOptions, process_transcribe};
-use batchalign_chat_ops::morphosyntax::MwtDict;
-
-/// Fully-typed request bundle for one benchmark run.
-///
-/// Benchmarking is conceptually just "transcribe this audio, then compare the
-/// resulting CHAT against this gold transcript". Grouping the inputs into one
-/// value makes that control-plane seam explicit and avoids another long
-/// primitive-heavy orchestrator signature.
-pub(crate) struct BenchmarkRequest<'a> {
-    /// Audio file to transcribe before comparison.
-    pub audio_path: &'a Path,
-    /// Gold-standard CHAT transcript to compare against.
-    pub gold_text: &'a str,
-    /// Primary language used for comparison and downstream NLP shaping.
-    pub lang: &'a LanguageCode3,
-    /// Shared worker/cache services used by the transcribe and compare phases.
-    pub services: PipelineServices<'a>,
-    /// Typed transcription options for the Rust-owned transcribe pipeline.
-    pub transcribe_options: &'a TranscribeOptions,
-    /// Cache policy used by the compare-side morphosyntax helpers.
-    pub cache_policy: CachePolicy,
-    /// Multi-word-token dictionary shared with the compare pipeline.
-    pub mwt: &'a MwtDict,
-    /// Optional progress sink for the transcribe sub-pipeline.
-    pub progress: Option<&'a ProgressSender>,
-}
+use crate::workflow::CompositeWorkflow;
+use crate::workflow::benchmark::BenchmarkWorkflow;
+pub(crate) use crate::workflow::benchmark::BenchmarkWorkflowRequest as BenchmarkRequest;
+pub(crate) use crate::workflow::compare::CompareMaterializedOutputs as BenchmarkOutputs;
 
 /// Run the benchmark pipeline for one audio file and one gold CHAT transcript.
 ///
-/// The output is:
-/// - annotated CHAT containing the benchmarked transcription
-/// - a CSV metrics payload matching the compare pipeline output
+/// Returns a [`BenchmarkOutputs`] containing the annotated CHAT and CSV metrics.
 pub(crate) async fn process_benchmark(
     request: BenchmarkRequest<'_>,
-) -> Result<(String, String), ServerError> {
-    let BenchmarkRequest {
-        audio_path,
-        gold_text,
-        lang,
-        services,
-        transcribe_options,
-        cache_policy,
-        mwt,
-        progress,
-    } = request;
-
-    let transcribed_chat =
-        process_transcribe(audio_path, services, transcribe_options, progress, None).await?;
-    process_compare(
-        &transcribed_chat,
-        gold_text,
-        lang,
-        services,
-        cache_policy,
-        mwt,
-    )
-    .await
+) -> Result<BenchmarkOutputs, ServerError> {
+    BenchmarkWorkflow::new().run(request).await
 }
 
 /// Derive the companion gold CHAT path for one audio file.

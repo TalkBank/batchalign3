@@ -52,8 +52,9 @@ class TencentRecognizer:
             from tencentcloud.common.credential import Credential
         except Exception as exc:
             raise ImportError(
-                "Tencent engines require batchalign3 extras: "
-                "pip install 'batchalign3[hk-tencent]'"
+                "Tencent engine dependencies are missing from this "
+                "environment. Reinstall batchalign3 or install the Tencent "
+                "SDK packages."
             ) from exc
 
         secret_id = cfg["engine.tencent.id"]
@@ -89,8 +90,9 @@ class TencentRecognizer:
             from tencentcloud.asr.v20190614 import models
         except Exception as exc:
             raise ImportError(
-                "Tencent engines require batchalign3 extras: "
-                "pip install 'batchalign3[hk-tencent]'"
+                "Tencent engine dependencies are missing from this "
+                "environment. Reinstall batchalign3 or install the Tencent "
+                "SDK packages."
             ) from exc
 
         upload_key = f"{uuid.uuid4()}{pathlib.Path(source_path).suffix}"

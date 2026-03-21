@@ -27,7 +27,8 @@ fn daemon_lifecycle_start_status_stop() {
     // Use port 0 to let the OS assign — but serve start needs a concrete port.
     // Pick a high random port unlikely to conflict.
     let port: u16 = 19000 + (std::process::id() as u16 % 1000);
-    let config = format!("host: 127.0.0.1\nport: {port}\nwarmup: false\nauto_daemon: false\n");
+    let config =
+        format!("host: 127.0.0.1\nport: {port}\nwarmup_commands: []\nauto_daemon: false\n");
     std::fs::write(harness.server_config_path(), &config).unwrap();
 
     // Start server in background (not --foreground)

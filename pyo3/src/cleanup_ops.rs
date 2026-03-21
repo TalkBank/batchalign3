@@ -3,6 +3,16 @@
 use pyo3::PyResult;
 use talkbank_model::model::Line;
 
+/// A word-level substitution rule: match `original` (case-insensitive) and
+/// replace with `replacement`.
+///
+/// Replaces the anonymous `(String, String)` tuples that previously carried
+/// filled-pause and word-replacement mappings across the PyO3 boundary.
+pub(crate) struct WordReplacement {
+    pub original: String,
+    pub replacement: String,
+}
+
 pub(crate) fn add_disfluency_markers_inner(
     chat_file: &mut talkbank_model::model::ChatFile,
     filled_pauses_json: &str,
@@ -10,22 +20,22 @@ pub(crate) fn add_disfluency_markers_inner(
 ) -> PyResult<()> {
     use talkbank_model::model::content::{BracketedItem, UtteranceContent};
 
-    let filled_pauses: Vec<(String, String)> =
+    let filled_pauses: Vec<WordReplacement> =
         parse_wordlist_json(filled_pauses_json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid filled_pauses JSON: {e}"))
         })?;
-    let replacements: Vec<(String, String)> =
+    let replacements: Vec<WordReplacement> =
         parse_wordlist_json(replacements_json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid replacements JSON: {e}"))
         })?;
 
     let fp_map: std::collections::HashMap<String, String> = filled_pauses
         .into_iter()
-        .map(|(orig, repl)| (orig.to_lowercase(), repl))
+        .map(|wr| (wr.original.to_lowercase(), wr.replacement))
         .collect();
     let repl_map: std::collections::HashMap<String, String> = replacements
         .into_iter()
-        .map(|(orig, repl)| (orig.to_lowercase(), repl))
+        .map(|wr| (wr.original.to_lowercase(), wr.replacement))
         .collect();
 
     for line in &mut chat_file.lines {
@@ -209,19 +219,24 @@ pub(crate) fn apply_disfluency_to_word(
 }
 
 /// Parse a JSON array of `{"original": "...", "replacement": "..."}` objects.
-pub(crate) fn parse_wordlist_json(json_str: &str) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn parse_wordlist_json(json_str: &str) -> Result<Vec<WordReplacement>, String> {
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {e}"))?;
     let arr = val.as_array().ok_or("Expected JSON array")?;
     let mut result = Vec::with_capacity(arr.len());
     for item in arr {
-        let orig = item["original"]
+        let original = item["original"]
             .as_str()
-            .ok_or("Missing 'original' field")?;
-        let repl = item["replacement"]
+            .ok_or("Missing 'original' field")?
+            .to_string();
+        let replacement = item["replacement"]
             .as_str()
-            .ok_or("Missing 'replacement' field")?;
-        result.push((orig.to_string(), repl.to_string()));
+            .ok_or("Missing 'replacement' field")?
+            .to_string();
+        result.push(WordReplacement {
+            original,
+            replacement,
+        });
     }
     Ok(result)
 }

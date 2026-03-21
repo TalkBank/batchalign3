@@ -1,7 +1,7 @@
 # Async Runtime Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-21 15:30
 
 This document describes the async runtime model underlying the batchalign3
 server and CLI. It covers the tokio runtime configuration, thread pool
@@ -395,7 +395,7 @@ leaving lease state as open-coded field choreography.
 |------|------------|
 | `lib.rs` | Runtime entry, app-level JoinSet, broadcast channel, graceful shutdown |
 | `runner/mod.rs` | Job task spawn, lease renewal background task |
-| `runner/dispatch/infer.rs` | JoinSet + Semaphore for per-file dispatch |
+| `runner/dispatch/` | JoinSet + Semaphore for per-file dispatch (`infer_batched.rs`, `fa_pipeline.rs`, `transcribe_pipeline.rs`, etc.) |
 | `worker/pool/mod.rs` | Worker checkout semaphore, `std::sync::Mutex` idle queue |
 | `worker/pool/lifecycle.rs` | Health-check interval loop with CancellationToken |
 | `worker/handle.rs` | `tokio::process::Command` for worker spawn + IPC |

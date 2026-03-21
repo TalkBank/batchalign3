@@ -1,12 +1,16 @@
-//! Integration tests for GPU concurrent dispatch through [`SharedGpuWorker`].
+//! Integration tests for GPU concurrent dispatch through the pool's shared GPU
+//! worker paths.
 //!
 //! These tests exercise the most fragile code path in the worker system:
-//! multiplexing concurrent `execute_v2` requests over a single stdio pipe with
-//! hand-rolled response routing by `request_id`.
+//! multiplexing concurrent `execute_v2` requests over one shared worker
+//! transport with hand-rolled response routing by `request_id`.
 //!
 //! All tests use `--test-echo` workers (no ML models). The Python worker's
 //! test-echo mode returns a success response echoing the `request_id` for
 //! `execute_v2`, enabling concurrent dispatch verification without real models.
+//! Most tests exercise the pool-level dispatch path, which may use either the
+//! stdio or TCP shared-worker transport depending on setup. The explicit drop
+//! cleanup test below targets the stdio lifecycle-owner path directly.
 //!
 //! # What these tests prove
 //!
@@ -19,8 +23,9 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use batchalign_app::api::LanguageCode3;
+use batchalign_app::api::{CommandName, LanguageCode3, WorkerLanguage};
 use batchalign_app::types::worker_v2::{
     AsrBackendV2, AsrInputV2, AsrRequestV2, ExecuteRequestV2, ExecuteResponseV2, InferenceTaskV2,
     PreparedAudioInputV2, TaskRequestV2, WorkerArtifactIdV2, WorkerRequestIdV2,
@@ -31,7 +36,14 @@ use common::resolve_python;
 use serde_json::json;
 
 macro_rules! require_python {
-    () => {
+    () => {{
+        let available_mb = batchalign_app::worker::memory_guard::available_memory_mb();
+        if available_mb < 4096 {
+            eprintln!(
+                "SKIP: insufficient memory ({available_mb} MB available, 4096 MB required)"
+            );
+            return;
+        }
         match resolve_python() {
             Some(path) => path,
             None => {
@@ -39,7 +51,7 @@ macro_rules! require_python {
                 return;
             }
         }
-    };
+    }};
 }
 
 /// Build a GPU execute_v2 request with a unique request_id.
@@ -48,7 +60,7 @@ fn gpu_execute_request(request_id: &str) -> ExecuteRequestV2 {
         request_id: WorkerRequestIdV2::from(request_id),
         task: InferenceTaskV2::Asr,
         payload: TaskRequestV2::Asr(AsrRequestV2 {
-            lang: "eng".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
             backend: AsrBackendV2::LocalWhisper,
             input: AsrInputV2::PreparedAudio(PreparedAudioInputV2 {
                 audio_ref_id: WorkerArtifactIdV2::from("audio-test"),
@@ -73,6 +85,32 @@ fn test_pool(python: String) -> WorkerPool {
     })
 }
 
+fn summary_pid(entry: &str) -> u32 {
+    entry
+        .split(':')
+        .find_map(|part| part.strip_prefix("pid="))
+        .unwrap_or_else(|| panic!("missing pid= segment in worker summary entry: {entry}"))
+        .parse::<u32>()
+        .unwrap_or_else(|e| panic!("invalid pid in worker summary entry {entry}: {e}"))
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) only checks process existence/permission.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(unix)]
+async fn wait_for_process_exit(pid: u32) {
+    for _ in 0..50 {
+        if !process_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("worker pid {pid} was still alive after waiting for pool drop cleanup");
+}
+
 // ---------------------------------------------------------------------------
 // Core concurrent dispatch tests
 // ---------------------------------------------------------------------------
@@ -85,7 +123,10 @@ async fn gpu_concurrent_dispatch_all_responses_arrive() {
     let pool = test_pool(python);
 
     // Warmup to create the SharedGpuWorker.
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
@@ -96,7 +137,7 @@ async fn gpu_concurrent_dispatch_all_responses_arrive() {
         let request = gpu_execute_request(&format!("concurrent-{i}"));
         let pool_ref = &pool;
         handles.push(tokio::spawn({
-            let lang = LanguageCode3::from("eng");
+            let lang = LanguageCode3::eng();
             let pool_ptr = pool_ref as *const WorkerPool as usize;
             async move {
                 // SAFETY: pool lives for the duration of the test
@@ -145,7 +186,10 @@ async fn gpu_concurrent_dispatch_shares_same_pid() {
     let python = require_python!();
     let pool = test_pool(python);
 
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
@@ -170,7 +214,7 @@ async fn gpu_concurrent_dispatch_shares_same_pid() {
         let pool_ptr = &pool as *const WorkerPool as usize;
         handles.push(tokio::spawn(async move {
             let pool = unsafe { &*(pool_ptr as *const WorkerPool) };
-            pool.dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+            pool.dispatch_execute_v2(&LanguageCode3::eng(), &request)
                 .await
         }));
     }
@@ -208,7 +252,10 @@ async fn gpu_sequential_after_concurrent_works() {
     let python = require_python!();
     let pool = test_pool(python);
 
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
@@ -219,7 +266,7 @@ async fn gpu_sequential_after_concurrent_works() {
         let pool_ptr = &pool as *const WorkerPool as usize;
         handles.push(tokio::spawn(async move {
             let pool = unsafe { &*(pool_ptr as *const WorkerPool) };
-            pool.dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+            pool.dispatch_execute_v2(&LanguageCode3::eng(), &request)
                 .await
         }));
     }
@@ -234,7 +281,7 @@ async fn gpu_sequential_after_concurrent_works() {
     for i in 0..3 {
         let request = gpu_execute_request(&format!("phase2-{i}"));
         let response = pool
-            .dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+            .dispatch_execute_v2(&LanguageCode3::eng(), &request)
             .await
             .expect("phase 2 sequential dispatch failed");
         assert_eq!(
@@ -255,7 +302,10 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
     let python = require_python!();
     let pool = test_pool(python);
 
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
@@ -266,7 +316,7 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
         let pool_ptr = &pool as *const WorkerPool as usize;
         handles.push(tokio::spawn(async move {
             let pool = unsafe { &*(pool_ptr as *const WorkerPool) };
-            pool.dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+            pool.dispatch_execute_v2(&LanguageCode3::eng(), &request)
                 .await
         }));
     }
@@ -290,6 +340,36 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
     pool.shutdown().await;
 }
 
+/// Dropping the pool without `shutdown()` must still reap stdio shared GPU
+/// workers. This is the lifecycle-owner path that SharedGpuWorker exists for.
+#[cfg(unix)]
+#[tokio::test]
+async fn gpu_stdio_shared_worker_drop_reaps_process() {
+    let python = require_python!();
+
+    let pid = {
+        let pool = test_pool(python);
+        pool.pre_scale(&CommandName::from("transcribe"), WorkerLanguage::from(LanguageCode3::eng()), 1)
+            .await;
+
+        let entry = pool
+            .worker_summary()
+            .into_iter()
+            .find(|item| item.contains("transport=stdio:concurrent"))
+            .expect("expected stdio shared GPU worker after pre_scale");
+        let pid = summary_pid(&entry);
+        assert!(
+            process_alive(pid),
+            "spawned shared GPU worker should be alive"
+        );
+
+        drop(pool);
+        pid
+    };
+
+    wait_for_process_exit(pid).await;
+}
+
 // ---------------------------------------------------------------------------
 // Transcribe dispatch path (GPU execute_v2 through pool)
 // ---------------------------------------------------------------------------
@@ -302,13 +382,16 @@ async fn gpu_single_execute_v2_through_pool() {
     let python = require_python!();
     let pool = test_pool(python);
 
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
     let request = gpu_execute_request("single-dispatch-test");
     let response = pool
-        .dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+        .dispatch_execute_v2(&LanguageCode3::eng(), &request)
         .await
         .expect("GPU dispatch_execute_v2 failed");
 
@@ -327,14 +410,17 @@ async fn gpu_repeated_execute_v2_through_pool() {
     let python = require_python!();
     let pool = test_pool(python);
 
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
     for i in 0..5 {
         let request = gpu_execute_request(&format!("repeat-{i}"));
         let response = pool
-            .dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+            .dispatch_execute_v2(&LanguageCode3::eng(), &request)
             .await
             .unwrap_or_else(|e| panic!("GPU dispatch_execute_v2 failed on request {i}: {e}"));
 
@@ -361,14 +447,17 @@ async fn gpu_dispatch_after_warmup_shutdown_spawns_fallback() {
     let pool = test_pool(python);
 
     // Warmup creates a TCP daemon worker.
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
     // First dispatch should work.
     let request = gpu_execute_request("before-shutdown");
     let response = pool
-        .dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+        .dispatch_execute_v2(&LanguageCode3::eng(), &request)
         .await
         .expect("first dispatch should succeed");
     assert_eq!(&*response.request_id, "before-shutdown");
@@ -383,7 +472,7 @@ async fn gpu_dispatch_after_warmup_shutdown_spawns_fallback() {
     let request = gpu_execute_request("after-shutdown");
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        pool.dispatch_execute_v2(&LanguageCode3::from("eng"), &request),
+        pool.dispatch_execute_v2(&LanguageCode3::eng(), &request),
     )
     .await;
 
@@ -406,10 +495,10 @@ async fn stanza_worker_survives_many_sequential_requests() {
         let item = json!({"request": i, "payload": format!("test-{i}")});
         let response = pool
             .dispatch_batch_infer(
-                &"eng".into(),
+                &LanguageCode3::eng(),
                 &BatchInferRequest {
                     task: InferTask::Morphosyntax,
-                    lang: "eng".into(),
+                    lang: LanguageCode3::eng(),
                     items: vec![item.clone()],
                     mwt: BTreeMap::new(),
                 },
@@ -468,7 +557,10 @@ async fn gpu_request_with_short_timeout_fails_cleanly() {
     // error, not hang.
 
     // Warmup without delay (so the worker starts).
-    pool.warmup(&[("transcribe".to_string(), "eng".to_string())])
+    pool.warmup(&[batchalign_app::server::WarmupTarget {
+            command: "transcribe".into(),
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        }])
         .await;
     pool.mark_warmup_complete();
 
@@ -476,7 +568,7 @@ async fn gpu_request_with_short_timeout_fails_cleanly() {
     // The test-echo worker responds instantly, so this should succeed.
     let request = gpu_execute_request("timeout-test");
     let result = pool
-        .dispatch_execute_v2(&LanguageCode3::from("eng"), &request)
+        .dispatch_execute_v2(&LanguageCode3::eng(), &request)
         .await;
     assert!(
         result.is_ok(),
@@ -499,7 +591,7 @@ async fn worker_with_delay_responds_when_timeout_is_generous() {
         test_echo: true,
         test_delay_ms: 500, // 500ms delay
         profile: batchalign_app::worker::WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };
@@ -510,7 +602,7 @@ async fn worker_with_delay_responds_when_timeout_is_generous() {
     let resp = handle
         .batch_infer(&BatchInferRequest {
             task: InferTask::Morphosyntax,
-            lang: "eng".into(),
+            lang: LanguageCode3::eng(),
             items: vec![json!({"test": true})],
             mwt: BTreeMap::new(),
         })
@@ -544,10 +636,10 @@ async fn stanza_sequential_dispatch_reuses_worker() {
         let item = json!({"request": i});
         let response = pool
             .dispatch_batch_infer(
-                &"eng".into(),
+                &LanguageCode3::eng(),
                 &BatchInferRequest {
                     task: InferTask::Morphosyntax,
-                    lang: "eng".into(),
+                    lang: LanguageCode3::eng(),
                     items: vec![item.clone()],
                     mwt: BTreeMap::new(),
                 },

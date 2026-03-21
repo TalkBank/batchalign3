@@ -8,6 +8,7 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use tokio::sync::broadcast;
+use tracing::warn;
 
 use crate::state::AppState;
 use crate::ws::WsEvent;
@@ -24,10 +25,19 @@ async fn ws_handler(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) ->
 async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     // Send initial snapshot
     let jobs = state.control.store.list_all().await;
-    let jobs_json: Vec<serde_json::Value> = jobs
-        .iter()
-        .map(|j| serde_json::to_value(j).unwrap_or_default())
-        .collect();
+    let mut jobs_json = Vec::with_capacity(jobs.len());
+    for job in &jobs {
+        match serde_json::to_value(job) {
+            Ok(value) => jobs_json.push(value),
+            Err(error) => {
+                warn!(
+                    job_id = %job.job_id,
+                    error = %error,
+                    "Skipping job in WS snapshot because serialization failed"
+                );
+            }
+        }
+    }
 
     let (
         worker_crashes,
@@ -73,10 +83,16 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
         health,
     };
 
-    if let Ok(json) = serde_json::to_string(&snapshot)
-        && socket.send(Message::Text(json.into())).await.is_err()
-    {
-        return;
+    match serde_json::to_string(&snapshot) {
+        Ok(json) => {
+            if socket.send(Message::Text(json.into())).await.is_err() {
+                return;
+            }
+        }
+        Err(error) => {
+            warn!(error = %error, "Failed to serialize initial WS snapshot");
+            return;
+        }
     }
 
     // Subscribe to broadcast channel
@@ -89,10 +105,15 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
             msg = rx.recv() => {
                 match msg {
                     Ok(event) => {
-                        if let Ok(json) = serde_json::to_string(&event)
-                            && socket.send(Message::Text(json.into())).await.is_err()
-                        {
-                            break;
+                        match serde_json::to_string(&event) {
+                            Ok(json) => {
+                                if socket.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                warn!(error = %error, "Failed to serialize WS event");
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {

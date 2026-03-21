@@ -1,11 +1,16 @@
 //! Insert operations on the `jobs` and `file_statuses` tables.
 
+use std::time::Duration;
+
 use crate::options::CommandOptions;
 use crate::scheduling::{AttemptOutcome, RetryDisposition, WorkUnitKind};
 
 use crate::error::ServerError;
+use tracing::warn;
 
 use super::JobDB;
+
+const ATTEMPT_START_RETRY_DELAYS_MS: [u64; 5] = [25, 50, 100, 200, 400];
 
 /// Typed payload for inserting a new job row and its initial file-status rows.
 ///
@@ -62,13 +67,15 @@ impl JobDB {
     /// Returns `ServerError::Database` if the transaction fails (e.g. duplicate
     /// `job_id` or disk-full).  On error the transaction is rolled back.
     pub async fn insert_job(&self, job: &NewJobRecord) -> Result<(), ServerError> {
-        let filenames_json = serde_json::to_string(&job.filenames).unwrap_or_default();
-        let has_chat_json = serde_json::to_string(&job.has_chat).unwrap_or_default();
-        let options_json = serde_json::to_string(&job.options).unwrap_or_default();
+        let filenames_json = serialize_job_field(&job.job_id, "filenames", &job.filenames)?;
+        let has_chat_json = serialize_job_field(&job.job_id, "has_chat", &job.has_chat)?;
+        let options_json = serialize_job_field(&job.job_id, "options", &job.options)?;
         // engine_overrides stored as empty — overrides are inside CommandOptions.common.engine_overrides
         let engine_json = "{}";
-        let source_paths_json = serde_json::to_string(&job.source_paths).unwrap_or_default();
-        let output_paths_json = serde_json::to_string(&job.output_paths).unwrap_or_default();
+        let source_paths_json =
+            serialize_job_field(&job.job_id, "source_paths", &job.source_paths)?;
+        let output_paths_json =
+            serialize_job_field(&job.job_id, "output_paths", &job.output_paths)?;
         let paths_mode_int = job.paths_mode as i32;
 
         let mut tx = self.pool.begin().await?;
@@ -135,43 +142,93 @@ impl JobDB {
         worker_node_id: Option<&str>,
         worker_pid: Option<u32>,
     ) -> Result<(String, u32), ServerError> {
-        let mut tx = self.pool.begin().await?;
-
-        let attempt_number: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(attempt_number), 0) + 1
-             FROM attempts
-             WHERE job_id = ? AND work_unit_id = ?",
-        )
-        .bind(job_id)
-        .bind(work_unit_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        let attempt_id = format!("{job_id}:{work_unit_id}:{attempt_number}");
         let worker_pid_i64 = worker_pid.map(i64::from);
+        let mut retry_index = 0usize;
 
-        sqlx::query(
-            "INSERT INTO attempts (
-                attempt_id, job_id, work_unit_id, work_unit_kind,
-                attempt_number, started_at, outcome, disposition,
-                worker_node_id, worker_pid
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&attempt_id)
-        .bind(job_id)
-        .bind(work_unit_id)
-        .bind(work_unit_kind.to_string())
-        .bind(attempt_number)
-        .bind(started_at)
-        .bind(AttemptOutcome::Deferred.to_string())
-        .bind(RetryDisposition::Defer.to_string())
-        .bind(worker_node_id)
-        .bind(worker_pid_i64)
-        .execute(&mut *tx)
-        .await?;
+        loop {
+            let result: Result<(String, u32), ServerError> = async {
+                let mut tx = self.pool.begin().await?;
 
-        tx.commit().await?;
+                let attempt_number: i64 = sqlx::query_scalar(
+                    "SELECT COALESCE(MAX(attempt_number), 0) + 1
+                     FROM attempts
+                     WHERE job_id = ? AND work_unit_id = ?",
+                )
+                .bind(job_id)
+                .bind(work_unit_id)
+                .fetch_one(&mut *tx)
+                .await?;
 
-        Ok((attempt_id, attempt_number as u32))
+                let attempt_id = format!("{job_id}:{work_unit_id}:{attempt_number}");
+
+                sqlx::query(
+                    "INSERT INTO attempts (
+                        attempt_id, job_id, work_unit_id, work_unit_kind,
+                        attempt_number, started_at, outcome, disposition,
+                        worker_node_id, worker_pid
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&attempt_id)
+                .bind(job_id)
+                .bind(work_unit_id)
+                .bind(work_unit_kind.to_string())
+                .bind(attempt_number)
+                .bind(started_at)
+                .bind(AttemptOutcome::Deferred.to_string())
+                .bind(RetryDisposition::Defer.to_string())
+                .bind(worker_node_id)
+                .bind(worker_pid_i64)
+                .execute(&mut *tx)
+                .await?;
+
+                tx.commit().await?;
+
+                Ok((attempt_id, attempt_number as u32))
+            }
+            .await;
+
+            match result {
+                Ok(value) => return Ok(value),
+                Err(error) if retryable_sqlite_lock(&error) => {
+                    let Some(delay_ms) = ATTEMPT_START_RETRY_DELAYS_MS.get(retry_index).copied()
+                    else {
+                        return Err(error);
+                    };
+                    retry_index += 1;
+                    warn!(
+                        job_id,
+                        work_unit_id,
+                        retry = retry_index,
+                        delay_ms,
+                        error = %error,
+                        "retrying insert_attempt_start after transient sqlite lock"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
+}
+
+fn retryable_sqlite_lock(error: &ServerError) -> bool {
+    let ServerError::Database(sqlx::Error::Database(db_error)) = error else {
+        return false;
+    };
+
+    matches!(db_error.code().as_deref(), Some("5") | Some("517"))
+        || db_error.message().contains("database is locked")
+        || db_error.message().contains("database is busy")
+}
+
+fn serialize_job_field<T: serde::Serialize>(
+    job_id: &str,
+    field_name: &str,
+    value: &T,
+) -> Result<String, ServerError> {
+    serde_json::to_string(value).map_err(|error| {
+        ServerError::Persistence(format!(
+            "failed to serialize jobs.{field_name} for job {job_id}: {error}"
+        ))
+    })
 }

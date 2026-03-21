@@ -89,11 +89,7 @@ impl RevAiClient {
     /// exponential backoff before returning an error.
     pub fn submit_local_file(&self, path: &Path, opts: &SubmitOptions) -> Result<Job> {
         let file_bytes = std::fs::read(path)?;
-        let file_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = upload_file_name(path);
         let options_json = serde_json::to_string(opts)?;
 
         let mut last_err: Option<RevAiError> = None;
@@ -129,7 +125,7 @@ impl RevAiClient {
                 Ok(resp) => {
                     if !resp.status().is_success() {
                         let status = resp.status().as_u16();
-                        let body = resp.text().unwrap_or_default();
+                        let body = read_error_body(resp);
                         if status >= 500 {
                             last_err = Some(RevAiError::ApiError { status, body });
                             continue;
@@ -157,7 +153,7 @@ impl RevAiClient {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().unwrap_or_default();
+            let body = read_error_body(resp);
             return Err(RevAiError::ApiError { status, body });
         }
 
@@ -176,7 +172,7 @@ impl RevAiClient {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().unwrap_or_default();
+            let body = read_error_body(resp);
             return Err(RevAiError::ApiError { status, body });
         }
 
@@ -253,11 +249,7 @@ impl RevAiClient {
     /// Rev.AI endpoint from Speech-to-Text.
     pub fn submit_langid(&self, path: &Path) -> Result<LangIdJob> {
         let file_bytes = std::fs::read(path)?;
-        let file_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let file_name = upload_file_name(path);
 
         let file_part = reqwest::blocking::multipart::Part::bytes(file_bytes)
             .file_name(file_name)
@@ -273,7 +265,7 @@ impl RevAiClient {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().unwrap_or_default();
+            let body = read_error_body(resp);
             return Err(RevAiError::ApiError { status, body });
         }
 
@@ -290,7 +282,7 @@ impl RevAiClient {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().unwrap_or_default();
+            let body = read_error_body(resp);
             return Err(RevAiError::ApiError { status, body });
         }
 
@@ -308,7 +300,7 @@ impl RevAiClient {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().unwrap_or_default();
+            let body = read_error_body(resp);
             return Err(RevAiError::ApiError { status, body });
         }
 
@@ -349,6 +341,20 @@ impl RevAiClient {
                 }
             }
         }
+    }
+}
+
+fn upload_file_name(path: &Path) -> String {
+    path.file_name()
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn read_error_body(resp: reqwest::blocking::Response) -> String {
+    match resp.text() {
+        Ok(body) => body,
+        Err(error) => format!("<failed to read response body: {error}>"),
     }
 }
 
@@ -412,6 +418,7 @@ pub fn extract_timed_words(transcript: &Transcript) -> Vec<TimedWord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn parse_job_in_progress() {
@@ -516,5 +523,19 @@ mod tests {
         let result: crate::types::LangIdResult = serde_json::from_str(json).unwrap();
         assert_eq!(result.top_language, "en");
         assert_eq!(result.language_confidences.len(), 1);
+    }
+
+    #[test]
+    fn upload_file_name_prefers_basename() {
+        assert_eq!(
+            upload_file_name(Path::new("/tmp/example.wav")),
+            "example.wav"
+        );
+    }
+
+    #[test]
+    fn upload_file_name_falls_back_to_full_path_when_needed() {
+        assert_eq!(upload_file_name(Path::new("")), "");
+        assert_eq!(upload_file_name(Path::new("/")), "/");
     }
 }

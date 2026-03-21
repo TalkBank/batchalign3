@@ -28,7 +28,7 @@ def _config_with_asr(**entries: str) -> configparser.ConfigParser:
     return cfg
 
 
-def test_runner_start_reports_missing_sdk_extra(monkeypatch) -> None:
+def test_runner_start_reports_missing_sdk_dependency(monkeypatch) -> None:
     original_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -38,7 +38,7 @@ def test_runner_start_reports_missing_sdk_extra(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="hk-aliyun"):
+    with pytest.raises(ImportError, match="Aliyun engine dependencies"):
         _AliyunRunner(token="token", appkey="app", wav_path="clip.wav").start()
 
 
@@ -106,7 +106,7 @@ def test_runner_start_streams_audio_chunks(monkeypatch) -> None:
     assert events["stopped"] is True
 
 
-def test_get_token_reports_missing_sdk_extra(monkeypatch) -> None:
+def test_get_token_reports_missing_sdk_dependency(monkeypatch) -> None:
     original_import = builtins.__import__
     monkeypatch.setattr(aliyun_asr, "_cached_token", None)
     monkeypatch.setattr(aliyun_asr, "_cached_token_time", 0.0)
@@ -118,7 +118,7 @@ def test_get_token_reports_missing_sdk_extra(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="hk-aliyun"):
+    with pytest.raises(ImportError, match="Aliyun engine dependencies"):
         _get_token("id", "secret")
 
 

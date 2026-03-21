@@ -215,11 +215,11 @@ async fn process_one_benchmark_file(
 
         match process_benchmark(BenchmarkRequest {
             audio_path: &audio_path,
-            gold_text: &gold_text,
+            gold_text: crate::api::ChatText::from(gold_text.as_str()),
             lang: &job
                 .dispatch
                 .lang
-                .resolve_or(&crate::api::LanguageCode3::from("eng")),
+                .resolve_or(&crate::api::LanguageCode3::eng()),
             services,
             transcribe_options: opts,
             cache_policy,
@@ -228,12 +228,13 @@ async fn process_one_benchmark_file(
         })
         .await
         {
-            Ok((mut chat_output, csv_output)) => {
+            Ok(mut outputs) => {
                 lifecycle.stage(FileStage::Writing).await;
                 let finished_at = unix_now();
 
                 if should_merge_abbrev {
-                    chat_output = apply_merge_abbrev(&chat_output);
+                    outputs.annotated_main_chat =
+                        apply_merge_abbrev(&outputs.annotated_main_chat);
                 }
 
                 let output_filename = Path::new(filename)
@@ -260,12 +261,14 @@ async fn process_one_benchmark_file(
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
-                if let Err(err) = tokio::fs::write(&write_path, &chat_output).await {
+                if let Err(err) =
+                    tokio::fs::write(&write_path, &outputs.annotated_main_chat).await
+                {
                     warn!(error = %err, "Failed to write benchmark CHAT output");
                 }
 
                 let csv_path = write_path.with_extension("compare.csv");
-                if let Err(err) = tokio::fs::write(&csv_path, &csv_output).await {
+                if let Err(err) = tokio::fs::write(&csv_path, &outputs.metrics_csv).await {
                     warn!(error = %err, "Failed to write benchmark CSV output");
                 }
 

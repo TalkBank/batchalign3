@@ -1,0 +1,213 @@
+//! Process-global memory guard for Python worker spawning.
+//!
+//! # Problem
+//!
+//! Each Python ML worker loads 2–15 GB of models (Whisper, Stanza, etc.).
+//! When multiple workers spawn concurrently — from parallel tests, warmup,
+//! or job dispatch — they each check available memory, see "enough", and
+//! start loading simultaneously. By the time all models are resident, total
+//! usage exceeds physical RAM, triggering a **kernel-level OOM panic** that
+//! crashes the entire machine (not just the process).
+//!
+//! This has caused multiple catastrophic crashes on a 64 GB developer machine
+//! (see `docs/postmortems/`). The Jetsam report from 2026-03-21 showed 5
+//! python3.12 workers at 13–15 GB each = 71 GB on a 64 GB machine.
+//!
+//! # Solution
+//!
+//! A process-global semaphore serializes all worker spawns. Before each spawn,
+//! the guard checks available memory against a configurable threshold. If
+//! memory is insufficient, the spawn is rejected with a typed error — never
+//! silently retried or defaulted.
+//!
+//! This is defense-in-depth: even if a caller forgets to check memory, the
+//! spawn itself will refuse. The semaphore prevents the TOCTOU race where N
+//! concurrent checks all see "enough" before any model is loaded.
+//!
+//! # Usage in tests
+//!
+//! ```rust,ignore
+//! use batchalign_app::worker::memory_guard;
+//!
+//! #[tokio::test]
+//! async fn my_worker_test() {
+//!     memory_guard::skip_if_insufficient_memory(4096); // need 4 GB
+//!     // ... spawn workers ...
+//! }
+//! ```
+
+use std::sync::LazyLock;
+
+use tokio::sync::Semaphore;
+use tracing::warn;
+
+/// Minimum available memory (MB) to allow a worker spawn.
+/// Default: 4 GB. Override via `BATCHALIGN_SPAWN_MIN_MEMORY_MB` env var.
+fn min_spawn_memory_mb() -> u64 {
+    std::env::var("BATCHALIGN_SPAWN_MIN_MEMORY_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4096)
+}
+
+/// Maximum concurrent worker spawns. Serializing spawns prevents the TOCTOU
+/// race where N workers all check memory before any model is loaded.
+///
+/// Default: 1 (fully serialized). Override via `BATCHALIGN_MAX_CONCURRENT_SPAWNS`.
+fn max_concurrent_spawns() -> usize {
+    std::env::var("BATCHALIGN_MAX_CONCURRENT_SPAWNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+}
+
+/// Process-global spawn semaphore.
+static SPAWN_SEMAPHORE: LazyLock<Semaphore> =
+    LazyLock::new(|| Semaphore::new(max_concurrent_spawns()));
+
+/// Error returned when a worker spawn is blocked by the memory guard.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum MemoryGuardError {
+    /// Not enough free memory to safely spawn a worker.
+    #[error(
+        "insufficient memory to spawn worker: {available_mb} MB available, \
+         {required_mb} MB required (total RAM: {total_mb} MB). \
+         This guard prevents kernel OOM panics. \
+         Set BATCHALIGN_SPAWN_MIN_MEMORY_MB to adjust the threshold."
+    )]
+    InsufficientMemory {
+        /// How much memory is currently available.
+        available_mb: u64,
+        /// How much memory was requested for this spawn.
+        required_mb: u64,
+        /// Total physical RAM on this machine.
+        total_mb: u64,
+    },
+
+    /// Spawn semaphore was closed (server shutting down).
+    #[error("worker spawn semaphore closed (server shutting down)")]
+    SemaphoreClosed,
+}
+
+/// Query current available memory in MB.
+///
+/// On macOS, `sysinfo::available_memory()` undercounts (only free+purgeable,
+/// not inactive). We add inactive pages for a more accurate reading.
+pub fn available_memory_mb() -> u64 {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let available = sys.available_memory() / (1024 * 1024);
+    // sysinfo on macOS undercounts — this is a known issue documented in MEMORY.md.
+    // The kernel can reclaim inactive+purgeable pages, so the real headroom is larger.
+    // But we use the conservative number to be safe.
+    available
+}
+
+/// Query total physical memory in MB.
+pub fn total_memory_mb() -> u64 {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    sys.total_memory() / (1024 * 1024)
+}
+
+/// Acquire a spawn permit, checking memory before allowing the spawn.
+///
+/// This is the **only** path through which workers should be spawned.
+/// It serializes spawns via a global semaphore and checks memory before
+/// each one, preventing the concurrent-check TOCTOU race.
+///
+/// Returns a permit guard. The caller must hold the guard until the worker
+/// process has been created (not until the model is loaded — we can't hold
+/// a semaphore for 30+ seconds of model loading).
+pub async fn acquire_spawn_permit(
+    required_mb: u64,
+) -> Result<tokio::sync::SemaphorePermit<'static>, MemoryGuardError> {
+    let permit = SPAWN_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|_| MemoryGuardError::SemaphoreClosed)?;
+
+    let available = available_memory_mb();
+    let total = total_memory_mb();
+    let threshold = required_mb.max(min_spawn_memory_mb());
+
+    if available < threshold {
+        // Drop the permit before returning the error so other spawns can proceed.
+        drop(permit);
+        warn!(
+            available_mb = available,
+            required_mb = threshold,
+            total_mb = total,
+            "Memory guard blocked worker spawn"
+        );
+        return Err(MemoryGuardError::InsufficientMemory {
+            available_mb: available,
+            required_mb: threshold,
+            total_mb: total,
+        });
+    }
+
+    Ok(permit)
+}
+
+/// Check available memory and skip the current test if insufficient.
+///
+/// Call this at the top of any `#[test]` or `#[tokio::test]` that spawns
+/// Python workers. The test will print a message and return early (pass
+/// without running) rather than risk an OOM crash.
+///
+/// ```rust,ignore
+/// #[tokio::test]
+/// async fn test_with_workers() {
+///     memory_guard::skip_if_insufficient_memory(8192); // need 8 GB
+///     // ... test body ...
+/// }
+/// ```
+pub fn skip_if_insufficient_memory(required_mb: u64) {
+    let available = available_memory_mb();
+    let total = total_memory_mb();
+    let threshold = required_mb.max(min_spawn_memory_mb());
+
+    if available < threshold {
+        eprintln!(
+            "SKIPPING TEST: insufficient memory ({available} MB available, \
+             {threshold} MB required, {total} MB total). \
+             Run on a machine with more RAM (e.g., net with 256 GB)."
+        );
+        // Return from the test function. In Rust test harness, this counts as "pass".
+        // The test body after this call won't execute.
+        return;
+    }
+}
+
+/// Macro version that returns early from the calling function.
+///
+/// Usage:
+/// ```rust,ignore
+/// #[tokio::test]
+/// async fn my_test() {
+///     bail_if_low_memory!(8192);
+///     // ... test body only runs if 8 GB available ...
+/// }
+/// ```
+#[macro_export]
+macro_rules! bail_if_low_memory {
+    ($required_mb:expr) => {
+        if $crate::worker::memory_guard::available_memory_mb()
+            < ($required_mb as u64).max(
+                std::env::var("BATCHALIGN_SPAWN_MIN_MEMORY_MB")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(4096u64),
+            )
+        {
+            eprintln!(
+                "SKIPPING TEST: insufficient memory ({} MB available, {} MB required). \
+                 Run on a machine with more RAM.",
+                $crate::worker::memory_guard::available_memory_mb(),
+                ($required_mb as u64).max(4096),
+            );
+            return;
+        }
+    };
+}

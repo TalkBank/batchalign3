@@ -115,6 +115,7 @@ pub const WARMUP_PRESET_FULL: &[&str] = &["morphotag", "align", "transcribe"];
 /// configuration.  The [`validate`](Self::validate) method clamps out-of-range
 /// values and returns non-fatal warnings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Filesystem directories the server searches when resolving media files
     /// for transcribe/align.  Paths that do not exist at startup produce a
@@ -239,7 +240,7 @@ pub struct ServerConfig {
 }
 
 fn default_lang() -> LanguageCode3 {
-    LanguageCode3::from("eng")
+    LanguageCode3::eng()
 }
 
 fn default_port() -> u16 {
@@ -310,7 +311,7 @@ impl Default for ServerConfig {
         Self {
             media_roots: Vec::new(),
             media_mappings: BTreeMap::new(),
-            default_lang: LanguageCode3::from("eng"),
+            default_lang: LanguageCode3::eng(),
             max_concurrent_jobs: 0,
             port: 8000,
             host: "0.0.0.0".to_string(),
@@ -412,6 +413,20 @@ pub fn load_config_from_layout(
     Ok(config)
 }
 
+/// Load [`ServerConfig`] and apply non-fatal validation/clamping.
+///
+/// Returns the validated config plus any warning messages produced by
+/// [`ServerConfig::validate`]. Callers that need a working runtime config but
+/// still want to surface bad values should prefer this helper.
+pub fn load_validated_config_from_layout(
+    layout: &RuntimeLayout,
+    path: Option<&Path>,
+) -> Result<(ServerConfig, Vec<String>), ConfigError> {
+    let mut config = load_config_from_layout(layout, path)?;
+    let warnings = config.validate();
+    Ok((config, warnings))
+}
+
 /// Load ServerConfig from a YAML file. Falls back to defaults if the file
 /// doesn't exist.
 pub fn load_config(path: Option<&Path>) -> Result<ServerConfig, ConfigError> {
@@ -498,6 +513,19 @@ auto_daemon: true
     }
 
     #[test]
+    fn deserialize_rejects_unknown_fields() {
+        let yaml = r#"
+port: 9000
+warmup: false
+"#;
+        let error = serde_yaml::from_str::<ServerConfig>(yaml).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown field `warmup`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn validate_fixes_bad_values() {
         let mut cfg = ServerConfig {
             max_concurrent_jobs: -1,
@@ -518,6 +546,27 @@ auto_daemon: true
     fn load_missing_file_returns_defaults() {
         let cfg = load_config(Some(Path::new("/nonexistent/server.yaml"))).unwrap();
         assert_eq!(cfg, ServerConfig::default());
+    }
+
+    #[test]
+    fn load_validated_config_clamps_bad_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let config_path = state_dir.join("server.yaml");
+        std::fs::write(
+            &config_path,
+            "port: 0\njob_ttl_days: 0\nmemory_gate_poll_s: 0\ngpu_thread_pool_size: 0\n",
+        )
+        .unwrap();
+
+        let layout = RuntimeLayout::from_state_dir(state_dir);
+        let (cfg, warnings) = load_validated_config_from_layout(&layout, None).unwrap();
+        assert_eq!(cfg.port, 8000);
+        assert_eq!(cfg.job_ttl_days, 1);
+        assert_eq!(cfg.memory_gate_poll_s, 1);
+        assert_eq!(cfg.gpu_thread_pool_size, 1);
+        assert_eq!(warnings.len(), 4);
     }
 
     #[test]

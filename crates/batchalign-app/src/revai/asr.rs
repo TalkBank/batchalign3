@@ -93,7 +93,7 @@ pub(crate) async fn infer_revai_asr(
                     .as_deref()
                     .filter(|d| !d.is_empty() && *d != "auto")
                     .and_then(revai_code_to_iso639_3)
-                    .unwrap_or_else(|| LanguageCode3::from("eng"))
+                    .unwrap_or_else(LanguageCode3::eng)
             }
         };
 
@@ -261,7 +261,7 @@ fn revai_code_to_iso639_3(revai_code: &str) -> Option<LanguageCode3> {
             return None;
         }
     };
-    Some(LanguageCode3::from(iso3))
+    LanguageCode3::try_new(iso3).ok()
 }
 
 fn transcript_to_asr_response(transcript: &Transcript, lang: &LanguageCode3) -> AsrResponse {
@@ -317,7 +317,7 @@ mod tests {
         )
         .unwrap();
 
-        let response = transcript_to_asr_response(&transcript, &LanguageCode3::from("eng"));
+        let response = transcript_to_asr_response(&transcript, &LanguageCode3::eng());
         assert_eq!(response.lang, "eng");
         assert_eq!(response.tokens.len(), 2);
         assert_eq!(response.tokens[0].text, "hello");

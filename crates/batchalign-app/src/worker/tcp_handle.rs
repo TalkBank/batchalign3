@@ -21,7 +21,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use crate::api::LanguageCode3;
+use crate::api::WorkerLanguage;
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::error::WorkerError;
 use crate::worker::{
@@ -66,8 +66,8 @@ pub struct TcpWorkerInfo {
     pub port: u16,
     /// Worker profile.
     pub profile: WorkerProfile,
-    /// 3-letter ISO language code.
-    pub lang: LanguageCode3,
+    /// Worker-runtime language string.
+    pub lang: WorkerLanguage,
     /// Engine overrides JSON string.
     pub engine_overrides: String,
     /// Worker process ID (from registry, for display).
@@ -217,10 +217,9 @@ impl TcpWorkerHandle {
 
         match response {
             WorkerResponse::Health { response } => {
-                if response.status != "ok" {
+                if !response.status.is_ok() {
                     return Err(WorkerError::HealthCheckFailed(format!(
-                        "status={}",
-                        response.status
+                        "status={}", response.status
                     )));
                 }
                 Ok(response)
@@ -360,7 +359,7 @@ impl TcpWorkerHandle {
 
     /// The language this worker handles.
     pub fn lang(&self) -> &str {
-        &self.info.lang
+        self.info.lang.as_worker_arg()
     }
 
     /// The transport this worker uses.

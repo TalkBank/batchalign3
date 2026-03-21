@@ -12,10 +12,12 @@ use crate::config::ServerConfig;
 use crate::error;
 use crate::media::MediaResolver;
 use crate::queue::QueueBackend;
-use crate::runtime_supervisor::{RuntimeSupervisor, ShutdownSummary};
+use crate::runtime_supervisor::{RuntimeSupervisor, ShutdownError, ShutdownSummary};
 use crate::store::JobStore;
 use crate::worker::InferTask;
 use crate::worker::pool::WorkerPool;
+use crate::worker::target::task_name as infer_task_capability_name;
+use crate::workflow::{CommandCapabilityKind, released_command_workflows};
 use crate::ws::WsEvent;
 
 // ---------------------------------------------------------------------------
@@ -109,7 +111,10 @@ impl AppState {
     /// Reused-worker fixtures call this before dropping one isolated app
     /// instance so no job task or queue loop keeps running against the shared
     /// worker pool after the control plane has been torn down.
-    pub async fn shutdown_for_reuse(&self, timeout: Duration) -> ShutdownSummary {
+    pub async fn shutdown_for_reuse(
+        &self,
+        timeout: Duration,
+    ) -> Result<ShutdownSummary, ShutdownError> {
         let _ = self.control.store.cancel_all().await;
         self.control.runtime.shutdown(timeout).await
     }
@@ -119,56 +124,32 @@ impl AppState {
 // Capability validation
 // ---------------------------------------------------------------------------
 
-/// Return the worker capability-key string used for one infer task.
-pub(crate) fn infer_task_capability_name(task: InferTask) -> &'static str {
-    match task {
-        InferTask::Morphosyntax => "morphosyntax",
-        InferTask::Utseg => "utseg",
-        InferTask::Translate => "translate",
-        InferTask::Coref => "coref",
-        InferTask::Fa => "fa",
-        InferTask::Asr => "asr",
-        InferTask::Opensmile => "opensmile",
-        InferTask::Avqi => "avqi",
-        InferTask::Speaker => "speaker",
-    }
-}
-
-/// Released CLI commands derived directly from one infer task.
-pub(crate) const DIRECT_INFER_COMMANDS: &[(&str, InferTask)] = &[
-    ("morphotag", InferTask::Morphosyntax),
-    ("utseg", InferTask::Utseg),
-    ("translate", InferTask::Translate),
-    ("coref", InferTask::Coref),
-    ("align", InferTask::Fa),
-    ("compare", InferTask::Morphosyntax),
-    ("opensmile", InferTask::Opensmile),
-    ("avqi", InferTask::Avqi),
-];
-
-/// Commands synthesized by the Rust control plane from lower-level infer
-/// capabilities instead of being advertised directly by Python workers.
-///
-/// These commands are server-owned orchestrators: Python hosts the model task,
-/// while Rust owns the command lifecycle, post-processing, and output shaping.
-pub(crate) const SERVER_COMPOSED_COMMANDS: &[(&str, InferTask)] = &[
-    ("transcribe", InferTask::Asr),
-    ("transcribe_s", InferTask::Asr),
-    ("benchmark", InferTask::Asr),
-];
-
 fn derive_command_capabilities(infer_tasks: &[InferTask]) -> Vec<String> {
     let mut derived = Vec::new();
 
-    for (command, task) in DIRECT_INFER_COMMANDS {
-        if infer_tasks.contains(task) && !derived.iter().any(|cap| cap == command) {
-            derived.push((*command).to_string());
+    for descriptor in released_command_workflows()
+        .iter()
+        .filter(|descriptor| descriptor.capability_kind == CommandCapabilityKind::DirectInfer)
+    {
+        if infer_tasks.contains(&descriptor.infer_task)
+            && !derived
+                .iter()
+                .any(|cap: &String| descriptor.command.as_str() == cap.as_str())
+        {
+            derived.push(descriptor.command.to_string());
         }
     }
 
-    for (command, task) in SERVER_COMPOSED_COMMANDS {
-        if infer_tasks.contains(task) && !derived.iter().any(|cap| cap == command) {
-            derived.push((*command).to_string());
+    for descriptor in released_command_workflows()
+        .iter()
+        .filter(|descriptor| descriptor.capability_kind == CommandCapabilityKind::ServerComposed)
+    {
+        if infer_tasks.contains(&descriptor.infer_task)
+            && !derived
+                .iter()
+                .any(|cap: &String| descriptor.command.as_str() == cap.as_str())
+        {
+            derived.push(descriptor.command.to_string());
         }
     }
 

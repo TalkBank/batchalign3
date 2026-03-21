@@ -24,7 +24,7 @@ helper code.
 
 The current worker protocol in:
 
-- [types/worker.rs](../../crates/batchalign-app/src/types/worker.rs)
+- [types/worker.rs](../../crates/batchalign-app/src/types/worker.rs) (re-exports from `batchalign-types/src/worker.rs`)
 - [\_types.py](../../batchalign/worker/_types.py)
 - [\_protocol.py](../../batchalign/worker/_protocol.py)
 - [\_protocol_ops.py](../../batchalign/worker/_protocol_ops.py)

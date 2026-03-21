@@ -166,8 +166,8 @@ def load_cantonese_fa(
         import pycantonese as pc
     except ImportError as exc:
         raise ImportError(
-            "Cantonese FA requires batchalign3 extras: "
-            "pip install 'batchalign3[hk-cantonese-fa]'"
+            "Cantonese FA dependency 'pycantonese' is missing from this "
+            "environment. Reinstall batchalign3 or install pycantonese."
         ) from exc
 
     from batchalign.inference.fa import load_wave2vec_fa

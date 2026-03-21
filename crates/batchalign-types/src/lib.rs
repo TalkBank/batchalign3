@@ -1,16 +1,19 @@
-//! Shared domain newtypes and worker IPC types for batchalign3.
+//! Shared domain and worker-boundary types for batchalign.
 //!
-//! This crate contains pure data types with zero server logic — only serde,
-//! utoipa, schemars, and thiserror dependencies. It exists so that downstream
-//! crates (notably `batchalign-pyo3`) can use these types without pulling in
-//! the full server stack from `batchalign-app`.
+//! This crate is the first step toward separating build/publish boundaries:
+//! worker protocol, runtime language/domain scalars, and other wire-facing
+//! identifiers should not live inside the server crate.
 
 #[macro_use]
 mod macros;
 
+pub mod api {
+    //! Backward-compatible re-export of domain types historically reached via
+    //! `batchalign_app::api`.
+    pub use crate::domain::*;
+}
+
 pub mod domain;
+pub mod scheduling;
 pub mod worker;
 pub mod worker_v2;
-
-// Re-export all domain types at crate root for convenience.
-pub use domain::*;

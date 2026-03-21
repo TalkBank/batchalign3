@@ -1,7 +1,7 @@
 # Caching
 
 **Status:** Current
-**Last verified:** 2026-03-12
+**Last updated:** 2026-03-21 15:30
 
 Batchalign uses two distinct cache layers. All caching is managed by the
 Rust server — Python workers are cache-unaware.
@@ -100,11 +100,11 @@ The `CacheTaskName` enum enumerates every NLP task with cached results:
 
 | Variant | Wire string | Orchestrator |
 |---------|-------------|-------------|
-| `Morphosyntax` | `morphosyntax_v4` | `morphosyntax.rs` |
+| `Morphosyntax` | `morphosyntax_v4` | `morphosyntax/` |
 | `UtteranceSegmentation` | `utterance_segmentation` | `utseg.rs` |
 | `Translation` | `translation` | `translate.rs` |
-| `ForcedAlignment` | `forced_alignment` | `fa.rs` |
-| `UtrAsr` | `utr_asr` | `dispatch/infer.rs` (UTR pre-pass) |
+| `ForcedAlignment` | `forced_alignment` | `fa/` |
+| `UtrAsr` | `utr_asr` | `runner/dispatch/fa_pipeline.rs` (UTR pre-pass) |
 
 ### Cache key composition per task
 

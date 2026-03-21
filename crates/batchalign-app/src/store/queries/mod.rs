@@ -210,7 +210,7 @@ mod tests {
             },
             dispatch: JobDispatchConfig {
                 command: command.into(),
-                lang: crate::api::LanguageSpec::Resolved(crate::api::LanguageCode3::from("eng")),
+                lang: crate::api::LanguageSpec::Resolved(crate::api::LanguageCode3::eng()),
                 num_speakers: crate::api::NumSpeakers(1),
                 options,
                 runtime_state: std::collections::BTreeMap::new(),
@@ -601,6 +601,12 @@ mod tests {
         let ts = UnixTimestamp(1700000000.0);
         let iso = ts_iso(ts);
         assert!(iso.starts_with("2023-11-14"));
+    }
+
+    #[test]
+    fn ts_iso_invalid_timestamp_is_explicit() {
+        let iso = ts_iso(UnixTimestamp(f64::INFINITY));
+        assert!(iso.starts_with("invalid-unix-timestamp("));
     }
 
     #[test]

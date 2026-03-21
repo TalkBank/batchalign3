@@ -91,7 +91,7 @@ def _make_recognizer() -> TencentRecognizer:
     return recognizer
 
 
-def test_init_reports_missing_sdk_extra(monkeypatch) -> None:
+def test_init_reports_missing_sdk_dependency(monkeypatch) -> None:
     original_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -101,7 +101,7 @@ def test_init_reports_missing_sdk_extra(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="hk-tencent"):
+    with pytest.raises(ImportError, match="Tencent engine dependencies"):
         TencentRecognizer("yue", config=_valid_config())
 
 
@@ -124,7 +124,7 @@ def test_init_rejects_empty_region_in_shared_config_reader(monkeypatch) -> None:
         TencentRecognizer("yue", config=_valid_config(**{"engine.tencent.region": ""}))
 
 
-def test_transcribe_reports_missing_runtime_sdk(monkeypatch) -> None:
+def test_transcribe_reports_missing_runtime_sdk_dependency(monkeypatch) -> None:
     original_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -134,7 +134,7 @@ def test_transcribe_reports_missing_runtime_sdk(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="hk-tencent"):
+    with pytest.raises(ImportError, match="Tencent engine dependencies"):
         _make_recognizer().transcribe("clip.wav")
 
 

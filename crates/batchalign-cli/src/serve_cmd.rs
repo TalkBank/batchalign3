@@ -198,12 +198,27 @@ pub async fn start(
         let proc = cmd.spawn()?;
         let pid = proc.id();
 
-        // Write PID file
+        // Write PID file atomically (via temp + rename).
         let pid_path = layout.server_pid_path();
-        std::fs::write(&pid_path, pid.to_string())?;
+        let pid_tmp = pid_path.with_extension("pid.tmp");
+        std::fs::write(&pid_tmp, pid.to_string())?;
+        std::fs::rename(&pid_tmp, &pid_path)?;
 
-        // Brief health check
+        // Brief wait, then verify the spawned process is still alive.
+        // If it crashed immediately (e.g. port conflict, missing Python),
+        // report that rather than claiming success.
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        if !is_process_alive(pid) {
+            let _ = std::fs::remove_file(&pid_path);
+            eprintln!(
+                "\nerror: server process (PID {pid}) exited immediately after spawn.\n\
+                 Check the log file: {}\n\
+                 hint: run `batchalign3 serve start --foreground` to see startup errors.",
+                log_path.display()
+            );
+            return Err(CliError::DaemonStartFailed);
+        }
 
         eprintln!("\nServer started (PID {pid})");
         eprintln!("Listening on http://{}:{}", cfg.host, cfg.port);
@@ -244,9 +259,11 @@ pub async fn stop() -> Result<(), CliError> {
 pub async fn status(args: &ServeStatusArgs) -> Result<(), CliError> {
     let client = BatchalignClient::new();
     let layout = RuntimeLayout::from_env();
-    let configured_port = config::load_config_from_layout(&layout, None)
-        .unwrap_or_default()
-        .port;
+    let (cfg, warnings) = config::load_validated_config_from_layout(&layout, None)?;
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
+    let configured_port = cfg.port;
 
     let server = if let Some(ref s) = args.server {
         s.trim_end_matches('/').to_string()
@@ -294,6 +311,11 @@ pub async fn status(args: &ServeStatusArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Stop a server whose PID is recorded in the state directory.
+///
+/// Validates that the recorded PID actually belongs to a live process before
+/// sending signals. Always cleans up the PID file, even if the process is
+/// already dead (stale PID file from a previous crash).
 fn stop_server(layout: &RuntimeLayout) -> bool {
     let pid_path = layout.server_pid_path();
     let pid_str = match std::fs::read_to_string(&pid_path) {
@@ -302,12 +324,35 @@ fn stop_server(layout: &RuntimeLayout) -> bool {
     };
     let pid: u32 = match pid_str.trim().parse() {
         Ok(p) => p,
-        Err(_) => return false,
+        Err(_) => {
+            // Corrupt PID file -- clean it up.
+            let _ = std::fs::remove_file(&pid_path);
+            return false;
+        }
     };
+
+    // Check if the process is actually alive before signalling.
+    // Avoids sending signals to an unrelated process that reused the PID.
+    if !is_process_alive(pid) {
+        // Stale PID file -- clean it up.
+        let _ = std::fs::remove_file(&pid_path);
+        return false;
+    }
 
     let killed = kill_pid(pid);
     let _ = std::fs::remove_file(&pid_path);
     killed
+}
+
+/// Check if a process is alive via `kill(pid, 0)`.
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(_pid: u32) -> bool {
+    false
 }
 
 /// Parse the `--warmup` CLI flag value and apply it to the server config.
@@ -334,18 +379,35 @@ fn apply_warmup_flag(value: &str, cfg: &mut batchalign_app::config::ServerConfig
     };
 }
 
+/// Kill a server process: SIGTERM the process group, wait up to 3 seconds,
+/// then escalate to SIGKILL if still alive.
 fn kill_pid(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        unsafe {
-            if libc::killpg(pid as i32, libc::SIGTERM) == 0 {
-                return true;
-            }
-            if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+        let pgid_ok =
+            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) == 0 };
+        let pid_ok =
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 };
+
+        if !pgid_ok && !pid_ok {
+            return false;
+        }
+
+        // Wait for the process to exit so the port is released.
+        for _ in 0..6 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if !is_process_alive(pid) {
                 return true;
             }
         }
-        false
+
+        // Still alive after 3 seconds -- escalate to SIGKILL.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        true
     }
     #[cfg(not(unix))]
     {

@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use batchalign_types::DurationSeconds;
+use batchalign_types::api::DurationSeconds;
 use batchalign_types::worker_v2::{
     AvqiRequestV2, AvqiResultV2, ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2,
     InferenceTaskV2, OpenSmileRequestV2, OpenSmileResultV2, ProtocolErrorCodeV2, SpeakerBackendV2,

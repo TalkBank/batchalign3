@@ -14,7 +14,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::api::{LanguageCode3, NumSpeakers};
+use crate::api::{NumSpeakers, WorkerLanguage};
 use crate::types::worker_v2::{
     ArtifactRefV2, AsrBackendV2, AsrInputV2, AsrRequestV2, ExecuteRequestV2, InferenceTaskV2,
     PreparedAudioInputV2, ProviderMediaInputV2, TaskRequestV2, WorkerArtifactIdV2,
@@ -52,8 +52,8 @@ pub struct AsrBuildInputV2<'a> {
     pub ids: &'a PreparedAsrRequestIdsV2,
     /// Typed input transport selected by Rust.
     pub input: AsrInputSourceV2<'a>,
-    /// Language requested by the Rust control plane.
-    pub lang: &'a LanguageCode3,
+    /// Worker-runtime language requested by the Rust control plane.
+    pub lang: &'a WorkerLanguage,
     /// Concrete V2 ASR backend selected by Rust.
     pub backend: AsrBackendV2,
 }
@@ -158,7 +158,7 @@ mod tests {
         let store = PreparedArtifactStoreV2::new(tempdir.path().join("artifacts"))
             .expect("artifact store should exist");
         let ids = PreparedAsrRequestIdsV2::new("req-asr-v2-provider", "audio-asr-v2-provider");
-        let lang = LanguageCode3::from("yue");
+        let lang = WorkerLanguage::from(crate::api::LanguageCode3::yue());
         let media_path = tempdir.path().join("sample.wav");
 
         let request = build_asr_request_v2(

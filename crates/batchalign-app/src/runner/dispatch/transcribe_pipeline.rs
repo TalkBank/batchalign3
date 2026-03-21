@@ -307,6 +307,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{
         EngineVersion, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp,
     };
@@ -337,7 +338,7 @@ mod tests {
             },
             dispatch: JobDispatchConfig {
                 command: "transcribe".into(),
-                lang: "eng".into(),
+                lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Transcribe(TranscribeCommand {
                     common: CommonOptions::default(),
@@ -438,7 +439,7 @@ mod tests {
             backend: AsrBackend::Worker(crate::transcribe::AsrWorkerMode::LocalWhisperV2),
             diarize: false,
             speaker_backend: None,
-            lang: "eng".into(),
+            lang: LanguageSpec::Resolved(LanguageCode3::eng()),
             num_speakers: 1,
             with_utseg: true,
             with_morphosyntax: false,

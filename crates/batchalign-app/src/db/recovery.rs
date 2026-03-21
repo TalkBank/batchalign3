@@ -16,10 +16,10 @@ impl JobDB {
             .fetch_all(&self.pool)
             .await?;
 
-        let ids: Vec<String> = rows
-            .iter()
-            .map(|row| row.try_get("job_id").unwrap_or_default())
-            .collect();
+        let mut ids = Vec::with_capacity(rows.len());
+        for row in &rows {
+            ids.push(row.try_get("job_id")?);
+        }
 
         if !ids.is_empty() {
             let now = unix_now();

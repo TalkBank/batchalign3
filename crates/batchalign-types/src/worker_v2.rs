@@ -1,4 +1,4 @@
-//! Worker protocol V2 schema types.
+//! Worker protocol V2 schema types shared across batchalign crates.
 //!
 //! These types define the next worker boundary described in
 //! `book/src/developer/worker-protocol-v2.md`. Unlike the current
@@ -29,7 +29,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DurationMs, DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers};
+use crate::api::{
+    DurationMs, DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers, WorkerLanguage,
+};
 use crate::worker::WorkerPid;
 
 string_id!(
@@ -372,8 +374,11 @@ pub enum AsrInputV2 {
 /// V2 ASR request payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct AsrRequestV2 {
-    /// Input language for the transcript.
-    pub lang: LanguageCode3,
+    /// Worker-runtime language hint for the transcript.
+    ///
+    /// This may be a concrete ISO 639-3 code or the `"auto"` worker sentinel
+    /// used by local Whisper auto-detect.
+    pub lang: WorkerLanguage,
     /// Backend selected by Rust.
     pub backend: AsrBackendV2,
     /// Backend-specific input transport.

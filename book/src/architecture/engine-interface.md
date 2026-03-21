@@ -1,7 +1,7 @@
 # Worker Interface
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last modified:** 2026-03-21 07:16 EDT
 
 ## Architecture
 
@@ -12,6 +12,16 @@ neural models, receive typed prepared-audio or prepared-text requests, call ML
 libraries, and return raw model output. The intended steady state is that
 Python remains a thin inference host while workflow policy and document
 semantics stay Rust-owned.
+
+`compare` is the clearest Rust-owned reference-projection workflow in this
+model, and `benchmark` is a Rust-owned composite workflow that runs transcribe
+then compare before materializing its outputs. The Python `benchmark.py`
+module remains only a convenience wrapper over Rust WER helpers.
+
+New command semantics should not be invented here. The workflow layer under
+`crates/batchalign-app/src/workflow/` owns command shape, typed bundles, and
+materialization. This page only describes the worker/provider boundary that
+those workflows consume.
 
 ```mermaid
 sequenceDiagram
@@ -168,7 +178,11 @@ as Whisper or the Rust-owned Rev.AI path with a configured legacy key.
 > The actual model loading happens when a real worker is spawned for a specific
 > command.
 >
-> All dependencies in the table above are included in the base `batchalign3` package — a standard `uv tool install batchalign3` gives you every command. Only HK/Cantonese engines require optional extras (`batchalign3[hk]`). The import probes exist as a safety net for environments where a dependency failed to install or was removed.
+> All dependencies in the table above are part of the base `batchalign3`
+> package — a standard `uv tool install batchalign3` gives you every built-in
+> engine family, including Cantonese/HK providers. The import probes exist as a
+> safety net for environments where a dependency failed to install or was
+> removed.
 
 `speaker` in the table above is a worker infer task, not a standalone CLI
 command. As in batchalign2, the user-facing diarization surface is

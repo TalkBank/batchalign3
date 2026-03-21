@@ -100,7 +100,7 @@
 //!     Path::new(&inputs[0]),
 //!     Path::new(out_dir.as_deref().unwrap()),
 //!     &["cha"],
-//! );
+//! ).unwrap();
 //! println!("found {} .cha files", files.len());
 //! ```
 //!
@@ -149,6 +149,14 @@
 //! | Module           | Responsibility                                                  |
 //! |------------------|-----------------------------------------------------------------|
 //! | [`update_check`] | Non-blocking PyPI version check with 24h file cache             |
+//!
+//! Binary-only concerns such as OTLP export and the update-check task are kept
+//! behind the `binary-entry` feature. The embedded PyO3 CLI bridge depends on
+//! this crate with `default-features = false`, so the native extension no
+//! longer pulls the standalone binary's telemetry stack into its dependency
+//! graph.
+
+use clap::Parser;
 
 pub mod args;
 pub mod bench_cmd;
@@ -170,6 +178,7 @@ pub(crate) mod self_exe;
 pub mod serve_cmd;
 pub mod setup_cmd;
 pub mod tui;
+#[cfg(feature = "binary-entry")]
 pub mod update_check;
 pub mod worker_cmd;
 
@@ -177,6 +186,53 @@ pub mod worker_cmd;
 /// the same.  Used for stale-binary detection during development.
 pub fn build_hash() -> &'static str {
     env!("BUILD_HASH")
+}
+
+/// Run the embedded CLI entry path from an explicit `argv` vector.
+///
+/// This is used by the PyO3 console-script bridge. Unlike the standalone
+/// binary entry, it does not spawn the background update check or initialize
+/// OTLP tracing; it only sets up basic stderr logging and then delegates to
+/// [`run_command`].
+pub fn run_embedded_cli_from_argv(argv: Vec<String>) -> Result<(), i32> {
+    let cli = args::Cli::parse_from(argv);
+    init_embedded_cli_tracing(cli.global.verbose);
+
+    let rt = tokio::runtime::Runtime::new().map_err(|error| {
+        eprintln!("error: failed to create async runtime: {error}");
+        6
+    })?;
+
+    rt.block_on(async {
+        match run_command(cli).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                eprintln!("error: {error}");
+                Err(error.exit_code())
+            }
+        }
+    })
+}
+
+fn init_embedded_cli_tracing(verbose: u8) {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = match verbose {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
+
+    // The embedded PyO3 path uses only basic stderr logging. OTLP export
+    // remains a standalone-binary concern.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 /// Shared CLI dispatch — the canonical command router.
@@ -283,7 +339,7 @@ pub async fn run_command(cli: args::Cli) -> Result<(), error::CliError> {
                 }
             }
 
-            let (command, lang, num_speakers, extensions) = CommonOpts::command_meta(cmd);
+            let profile = CommonOpts::command_profile(cmd);
             let common = args::common_opts(cmd);
 
             let (inputs, out_dir) = match cmd {
@@ -311,25 +367,25 @@ pub async fn run_command(cli: args::Cli) -> Result<(), error::CliError> {
 
             let before = common.as_ref().and_then(|c| c.before.as_deref());
 
-            dispatch::dispatch(
-                command,
-                lang,
-                num_speakers,
-                extensions,
-                cli.global.server.as_deref(),
-                &inputs,
-                out_dir.as_deref(),
+            dispatch::dispatch(dispatch::DispatchRequest {
+                command: profile.command,
+                lang: profile.lang,
+                num_speakers: profile.num_speakers,
+                extensions: profile.extensions,
+                server_arg: cli.global.server.as_deref(),
+                inputs: &inputs,
+                out_dir: out_dir.as_deref(),
                 options,
                 bank,
                 subdir,
                 lexicon,
-                cli.global.tui && !cli.global.no_tui,
-                cli.global.open_dashboard && !cli.global.no_open_dashboard,
-                cli.global.force_cpu,
+                use_tui: cli.global.tui && !cli.global.no_tui,
+                open_dashboard: cli.global.open_dashboard && !cli.global.no_open_dashboard,
+                force_cpu: cli.global.force_cpu,
                 before,
-                cli.global.workers,
-                cli.global.timeout,
-            )
+                workers: cli.global.workers,
+                timeout: cli.global.timeout,
+            })
             .await
         }
     }

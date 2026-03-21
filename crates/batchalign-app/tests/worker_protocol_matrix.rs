@@ -12,6 +12,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use batchalign_app::api::{LanguageCode3, WorkerLanguage};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -659,7 +660,14 @@ fn validate_task_result_shape(result: &TaskResultV2) -> Result<(), String> {
 
 /// Require a Python interpreter for real Rust->Python worker tests.
 macro_rules! require_python {
-    () => {
+    () => {{
+        let available_mb = batchalign_app::worker::memory_guard::available_memory_mb();
+        if available_mb < 4096 {
+            eprintln!(
+                "SKIP: insufficient memory ({available_mb} MB available, 4096 MB required)"
+            );
+            return;
+        }
         match resolve_python() {
             Some(path) => path,
             None => {
@@ -667,7 +675,7 @@ macro_rules! require_python {
                 return;
             }
         }
-    };
+    }};
 }
 
 /// Build one intentionally mismatched execute request that should fail before
@@ -677,7 +685,7 @@ fn mismatched_execute_request(request_id: &str, task: InferenceTaskV2) -> Execut
         request_id: request_id.into(),
         task,
         payload: TaskRequestV2::Asr(AsrRequestV2 {
-            lang: "yue".into(),
+            lang: WorkerLanguage::from(LanguageCode3::yue()),
             backend: AsrBackendV2::HkTencent,
             input: AsrInputV2::ProviderMedia(ProviderMediaInputV2 {
                 media_path: "/tmp/mismatched-provider.wav".into(),
@@ -831,7 +839,7 @@ async fn worker_execute_v2_returns_typed_invalid_payload_for_mismatched_task_mat
         python_path: python,
         test_echo: true,
         profile: WorkerProfile::Stanza,
-        lang: "eng".into(),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
         ready_timeout_s: 30,
         ..Default::default()
     };

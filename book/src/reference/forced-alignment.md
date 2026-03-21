@@ -1,7 +1,7 @@
 # Forced Alignment Design
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-21 15:30
 
 ## Overview
 
@@ -118,7 +118,7 @@ flowchart TD
 ### Step 1: UTR (detect-and-skip)
 
 UTR is implemented as a pre-pass in `process_one_fa_file`
-(`crates/batchalign-app/src/runner/dispatch/infer.rs`). The core algorithm
+(`crates/batchalign-app/src/runner/dispatch/fa_pipeline.rs`). The core algorithm
 lives in `crates/batchalign-chat-ops/src/fa/utr.rs`.
 
 **Detection:** `count_utterance_timing()` counts timed vs untimed utterances.

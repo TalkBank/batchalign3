@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use batchalign_types::{DurationSeconds, LanguageCode3};
+use batchalign_types::api::{DurationSeconds, LanguageCode3};
 use batchalign_types::worker_v2::{
     AsrBackendV2, AsrElementKindV2, AsrElementV2, AsrInputV2, AsrMonologueV2, AsrRequestV2,
     ExecuteOutcomeV2, ExecuteRequestV2, ExecuteResponseV2, InferenceTaskV2, MonologueAsrResultV2,
@@ -270,7 +270,7 @@ fn build_provider_media_item<'py>(
         .set_item("audio_path", provider_input.media_path.as_ref())
         .map_err(|error| AsrExecuteFailure::Runtime(error.to_string()))?;
     kwargs
-        .set_item("lang", asr_request.lang.as_ref())
+        .set_item("lang", asr_request.lang.as_worker_arg())
         .map_err(|error| AsrExecuteFailure::Runtime(error.to_string()))?;
     kwargs
         .set_item("num_speakers", provider_input.num_speakers.0)
@@ -295,7 +295,7 @@ fn run_local_whisper(
     let audio_array = audio.into_pyarray(py);
     let response = runner
         .bind(py)
-        .call1((audio_array, asr_request.lang.as_ref()))
+        .call1((audio_array, asr_request.lang.as_worker_arg()))
         .map_err(|error| AsrExecuteFailure::Runtime(error.to_string()))?;
     Ok(TaskResultV2::WhisperChunkResult(parse_whisper_result(
         &response,

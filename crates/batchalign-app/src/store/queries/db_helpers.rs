@@ -2,7 +2,7 @@
 
 use crate::api::{FileStatusEntry, FileStatusKind, JobId, JobListItem, JobStatus, UnixTimestamp};
 use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::super::JobStore;
 use crate::ws::WsEvent;
@@ -195,8 +195,21 @@ impl JobStore {
 
     /// Notify WS clients of one updated job summary row.
     pub(crate) fn notify_job_item(&self, item: JobListItem) {
-        let data = serde_json::to_value(&item).unwrap_or_default();
-        let _ = self.ws_tx.send(WsEvent::JobUpdate { job: data });
+        match serde_json::to_value(&item) {
+            Ok(job) => self.broadcast_ws_event(
+                "job_update",
+                WsEvent::JobUpdate { job },
+                Some(item.job_id.to_string()),
+                None,
+            ),
+            Err(error) => {
+                warn!(
+                    job_id = %item.job_id,
+                    error = %error,
+                    "Failed to serialize job update for WS broadcast"
+                );
+            }
+        }
     }
 
     /// Notify WS clients of one updated file-status row.
@@ -206,11 +219,42 @@ impl JobStore {
         file: FileStatusEntry,
         completed_files: i64,
     ) {
-        let data = serde_json::to_value(&file).unwrap_or_default();
-        let _ = self.ws_tx.send(WsEvent::FileUpdate {
-            job_id: String::from(job_id.clone()),
-            file: data,
-            completed_files,
-        });
+        match serde_json::to_value(&file) {
+            Ok(file_json) => self.broadcast_ws_event(
+                "file_update",
+                WsEvent::FileUpdate {
+                    job_id: String::from(job_id.clone()),
+                    file: file_json,
+                    completed_files,
+                },
+                Some(job_id.to_string()),
+                Some(file.filename.to_string()),
+            ),
+            Err(error) => {
+                warn!(
+                    job_id = %job_id,
+                    filename = %file.filename,
+                    error = %error,
+                    "Failed to serialize file update for WS broadcast"
+                );
+            }
+        }
+    }
+
+    fn broadcast_ws_event(
+        &self,
+        event_type: &'static str,
+        event: WsEvent,
+        job_id: Option<String>,
+        filename: Option<String>,
+    ) {
+        if let Err(tokio::sync::broadcast::error::SendError(_event)) = self.ws_tx.send(event) {
+            debug!(
+                event_type,
+                job_id = job_id.as_deref().unwrap_or(""),
+                filename = filename.as_deref().unwrap_or(""),
+                "Dropping WS broadcast because there are no subscribers"
+            );
+        }
     }
 }

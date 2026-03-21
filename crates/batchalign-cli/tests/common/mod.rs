@@ -333,12 +333,19 @@ impl LiveTestServer {
     pub async fn shutdown(self) {
         self.server_task.abort();
         let _ = self.server_task.await;
-        let shutdown = self.state.shutdown_for_reuse(Duration::from_secs(5)).await;
-        if shutdown.timed_out || shutdown.remaining_jobs > 0 {
-            eprintln!(
-                "WARN: live CLI test server shutdown left {} tracked jobs (timed_out={})",
-                shutdown.remaining_jobs, shutdown.timed_out
-            );
+        match self.state.shutdown_for_reuse(Duration::from_secs(5)).await {
+            Ok(shutdown) if shutdown.timed_out || shutdown.remaining_jobs > 0 => {
+                eprintln!(
+                    "WARN: live CLI test server shutdown left {} tracked jobs (timed_out={})",
+                    shutdown.remaining_jobs, shutdown.timed_out
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!(
+                    "WARN: live CLI test server shutdown failed to report runtime status: {error}"
+                );
+            }
         }
     }
 }
@@ -542,7 +549,7 @@ pub async fn run_job_to_completion(
 ) -> (JobInfo, Vec<batchalign_app::api::FileResult>) {
     let submission = batchalign_app::api::JobSubmission {
         command: command.into(),
-        lang: lang.into(),
+        lang: batchalign_app::api::LanguageSpec::try_from(lang).expect("test lang"),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],

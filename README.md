@@ -1,5 +1,7 @@
 # Batchalign3
 
+**Last modified:** 2026-03-21 08:20 EDT
+
 [![CI](https://github.com/TalkBank/batchalign3/actions/workflows/test.yml/badge.svg)](https://github.com/TalkBank/batchalign3/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/batchalign3)](https://pypi.org/project/batchalign3/)
 
@@ -52,13 +54,11 @@ Close and reopen your terminal, then:
 uv tool install batchalign3
 ```
 
-#### Optional extras
+All built-in engines, including Cantonese/HK providers, ship in the base
+package:
 
 ```bash
-uv tool install "batchalign3[asr]"       # Whisper ASR engine
-uv tool install "batchalign3[hk]"        # HK/Cantonese engines
-uv tool install "batchalign3[all]"       # ASR + diarization + audio features
-uv tool install "batchalign3[all,hk]"   # Everything including HK/Cantonese
+uv tool install batchalign3
 ```
 
 ### System requirements

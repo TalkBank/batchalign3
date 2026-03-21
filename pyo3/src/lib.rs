@@ -49,6 +49,7 @@ mod utterance_segmentation;
 
 mod build;
 mod cleanup_ops;
+#[cfg(feature = "cli-entry")]
 mod cli_entry;
 mod fa_ops;
 mod metadata;
@@ -56,8 +57,10 @@ mod morphosyntax_ops;
 mod parse;
 mod parsed_chat;
 mod provider_pipeline;
+mod pytypes;
 mod py_json_bridge;
 pub(crate) mod pyfunctions;
+#[cfg(feature = "revai-bridge")]
 mod revai;
 mod speaker_ops;
 mod text_ops;
@@ -230,13 +233,19 @@ fn batchalign_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pyfunctions::cantonese_char_tokens, m)?)?;
 
     // Rev.AI native client
+    #[cfg(feature = "revai-bridge")]
     m.add_function(wrap_pyfunction!(revai::rev_transcribe, m)?)?;
+    #[cfg(feature = "revai-bridge")]
     m.add_function(wrap_pyfunction!(revai::rev_get_timed_words, m)?)?;
+    #[cfg(feature = "revai-bridge")]
     m.add_function(wrap_pyfunction!(revai::rev_submit, m)?)?;
+    #[cfg(feature = "revai-bridge")]
     m.add_function(wrap_pyfunction!(revai::rev_poll, m)?)?;
+    #[cfg(feature = "revai-bridge")]
     m.add_function(wrap_pyfunction!(revai::rev_poll_timed_words, m)?)?;
 
     // CLI entry point (used by [project.scripts] console command)
+    #[cfg(feature = "cli-entry")]
     m.add_function(wrap_pyfunction!(cli_entry::cli_main, m)?)?;
 
     Ok(())

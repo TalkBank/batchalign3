@@ -9,6 +9,7 @@
 mod common;
 
 use batchalign_app::api::{FilePayload, JobStatus, NumSpeakers};
+use batchalign_app::api::{LanguageCode3, LanguageSpec};
 use batchalign_app::options::{CommandOptions, CommonOptions, TranscribeOptions};
 
 use common::{
@@ -122,7 +123,7 @@ async fn e2e_empty_input() {
     // Empty files → server returns 400 (no files)
     let submission = batchalign_app::api::JobSubmission {
         command: "transcribe".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
@@ -418,7 +419,7 @@ async fn e2e_invalid_command_rejected() {
 
     let submission = batchalign_app::api::JobSubmission {
         command: "nonexistent_command".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![FilePayload {
             filename: "test.cha".into(),
@@ -511,7 +512,7 @@ async fn e2e_lang_propagates() {
     assert_eq!(info.status, JobStatus::Completed);
     assert_eq!(
         info.lang,
-        batchalign_app::api::LanguageSpec::from("spa"),
+        LanguageSpec::Resolved(LanguageCode3::spa()),
         "Language should propagate to job info"
     );
 }
@@ -644,7 +645,7 @@ async fn e2e_cancel_job() {
 
     let submission = batchalign_app::api::JobSubmission {
         command: "transcribe".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
@@ -714,7 +715,7 @@ async fn e2e_job_status_lifecycle() {
 
     let submission = batchalign_app::api::JobSubmission {
         command: "transcribe".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],

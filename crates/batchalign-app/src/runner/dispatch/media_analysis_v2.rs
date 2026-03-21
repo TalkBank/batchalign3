@@ -278,7 +278,7 @@ async fn dispatch_opensmile_attempt(
 
     let response = pool
         .dispatch_execute_v2(
-            &job.dispatch.lang.resolve_or(&LanguageCode3::from("eng")),
+            &job.dispatch.lang.resolve_or(&LanguageCode3::eng()),
             &request,
         )
         .await
@@ -375,7 +375,7 @@ async fn dispatch_avqi_attempt(
 
     let response = pool
         .dispatch_execute_v2(
-            &job.dispatch.lang.resolve_or(&LanguageCode3::from("eng")),
+            &job.dispatch.lang.resolve_or(&LanguageCode3::eng()),
             &request,
         )
         .await

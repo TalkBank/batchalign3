@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::api::{LanguageCode3, NumSpeakers};
+use crate::api::{NumSpeakers, WorkerLanguage};
 use tracing::{error, info, warn};
 
 use crate::worker::WorkerProfile;
@@ -44,11 +44,11 @@ impl WorkerPool {
         })
     }
 
-    /// Build a `WorkerConfig` for the given worker profile and language.
+    /// Build a `WorkerConfig` for the given worker profile and worker language.
     pub(super) fn worker_config(
         &self,
         profile: &WorkerProfile,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> WorkerConfig {
         WorkerConfig {
@@ -71,11 +71,11 @@ impl WorkerPool {
     pub(super) fn get_or_create_group(
         &self,
         profile: &WorkerProfile,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Arc<WorkerGroup> {
         let key: super::WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
-        let mut groups = self.groups.lock().unwrap();
+        let mut groups = super::lock_recovered(&self.groups);
         groups
             .entry(key)
             .or_insert_with(|| Arc::new(WorkerGroup::new()))
@@ -128,7 +128,7 @@ impl WorkerPool {
     /// best-effort ceiling, not a precise count. Off-by-one under
     /// concurrent spawns is acceptable (the ceiling is a safety margin).
     fn global_worker_count(&self) -> usize {
-        let groups = self.groups.lock().unwrap();
+        let groups = super::lock_recovered(&self.groups);
         groups
             .values()
             .map(|g| g.total.load(Ordering::Relaxed))
@@ -144,7 +144,7 @@ impl WorkerPool {
         &self,
         group: &Arc<WorkerGroup>,
         profile: &WorkerProfile,
-        lang: &LanguageCode3,
+        lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Result<bool, WorkerError> {
         if self.try_claim_spawn_slot(group).is_err() {
@@ -158,7 +158,7 @@ impl WorkerPool {
             Ok(handle) => {
                 // Don't use a separate push_spawned (which would double-increment
                 // total). We already incremented via compare_exchange.
-                group.idle.lock().unwrap().push_back(handle);
+                super::lock_recovered(&group.idle).push_back(handle);
                 group.available.add_permits(1);
                 Ok(true)
             }
@@ -183,14 +183,14 @@ pub(super) async fn run_health_check(
 ) {
     // Snapshot group Arcs so we don't hold the groups lock across awaits.
     let group_snapshot: Vec<(WorkerKey, Arc<WorkerGroup>)> = {
-        let groups = groups_ref.lock().unwrap();
+        let groups = super::lock_recovered(groups_ref);
         groups.iter().map(|(k, g)| (k.clone(), g.clone())).collect()
     };
 
     for (key, group) in &group_snapshot {
         // Drain the idle queue for health checking.
         let workers_to_check: Vec<WorkerHandle> =
-            { group.idle.lock().unwrap().drain(..).collect() };
+            { super::lock_recovered(&group.idle).drain(..).collect() };
         // We drained idle workers. Their permits are already consumed
         // (no one can acquire them). We'll re-add permits for healthy ones.
 
@@ -252,7 +252,7 @@ pub(super) async fn run_health_check(
         // Return healthy workers
         {
             let returned = to_return.len();
-            let mut idle = group.idle.lock().unwrap();
+            let mut idle = super::lock_recovered(&group.idle);
             for w in to_return {
                 idle.push_back(w);
             }
@@ -294,7 +294,7 @@ pub(super) async fn run_health_check(
                 Ok(handle) => {
                     let pid = handle.pid();
                     group.total.fetch_add(1, Ordering::Relaxed);
-                    group.idle.lock().unwrap().push_back(handle);
+                    super::lock_recovered(&group.idle).push_back(handle);
                     group.available.add_permits(1);
                     info!(
                         target = %key.0.label(),
@@ -319,7 +319,7 @@ pub(super) async fn run_health_check(
 
     // Clean up empty groups
     {
-        let mut groups = groups_ref.lock().unwrap();
+        let mut groups = super::lock_recovered(groups_ref);
         groups.retain(|_, g| g.total.load(Ordering::Relaxed) > 0);
     }
 }

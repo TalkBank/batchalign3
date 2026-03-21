@@ -45,15 +45,38 @@ use batchalign_chat_ops::validate::{ValidityLevel, validate_output, validate_to_
 use batchalign_chat_ops::{CacheKey, CacheTaskName};
 use tracing::{info, warn};
 
-use crate::api::DurationMs;
+use crate::api::{ChatText, DurationMs};
 use crate::error::ServerError;
 use crate::runner::util::{FileStage, ProgressSender, ProgressUpdate};
 use crate::types::results::FaResult;
 use crate::types::traces::{FaGroupTrace, TimingTrace, ViolationTrace};
+use crate::workflow::PerFileWorkflow;
+use crate::workflow::fa::{ForcedAlignmentWorkflow, ForcedAlignmentWorkflowRequest};
 use transport::{FaWorkerBatch, FaWorkerTransport};
 
 /// Cache task name for FA results.
 const CACHE_TASK: CacheTaskName = CacheTaskName::ForcedAlignment;
+
+pub(super) fn collect_final_timings(
+    all_timings: Vec<Option<Vec<Option<WordTiming>>>>,
+    context: &str,
+) -> Result<Vec<Vec<Option<WordTiming>>>, ServerError> {
+    let missing_groups: Vec<usize> = all_timings
+        .iter()
+        .enumerate()
+        .filter_map(|(index, timings)| timings.is_none().then_some(index))
+        .collect();
+    if !missing_groups.is_empty() {
+        return Err(ServerError::Validation(format!(
+            "{context} completed without timings for group(s): {missing_groups:?}"
+        )));
+    }
+
+    Ok(all_timings
+        .into_iter()
+        .map(|timings| timings.expect("missing groups checked before collecting final FA timings"))
+        .collect())
+}
 
 // ---------------------------------------------------------------------------
 // Per-file FA processing
@@ -76,6 +99,27 @@ const CACHE_TASK: CacheTaskName = CacheTaskName::ForcedAlignment;
 pub(crate) async fn process_fa(
     chat_text: &str,
     audio: &AudioContext<'_>,
+    worker_lang: &crate::api::LanguageCode3,
+    services: PipelineServices<'_>,
+    fa_params: &FaParams,
+    progress: Option<&ProgressSender>,
+) -> Result<FaResult, ServerError> {
+    ForcedAlignmentWorkflow
+        .run(ForcedAlignmentWorkflowRequest {
+            chat_text: ChatText::from(chat_text),
+            audio,
+            worker_lang,
+            services,
+            params: fa_params,
+            progress,
+        })
+        .await
+}
+
+pub(crate) async fn run_fa_impl(
+    chat_text: &str,
+    audio: &AudioContext<'_>,
+    worker_lang: &crate::api::LanguageCode3,
     services: PipelineServices<'_>,
     fa_params: &FaParams,
     progress: Option<&ProgressSender>,
@@ -288,6 +332,7 @@ pub(crate) async fn process_fa(
                 groups: &groups,
                 miss_indices: &miss_indices,
                 audio_path: audio.audio_path,
+                worker_lang: worker_lang.into(),
                 engine: fa_params.engine,
                 timing_mode: fa_params.timing_mode,
             })
@@ -334,10 +379,7 @@ pub(crate) async fn process_fa(
         ));
     }
 
-    let final_timings: Vec<Vec<Option<WordTiming>>> = all_timings
-        .into_iter()
-        .map(|t| t.unwrap_or_default())
-        .collect();
+    let final_timings = collect_final_timings(all_timings, "forced alignment")?;
 
     // Snapshot pre-injection timings (before apply_fa_results consumes them)
     let pre_injection_timings: Vec<Vec<Option<TimingTrace>>> = final_timings
@@ -412,5 +454,16 @@ mod tests {
     #[test]
     fn cache_task_name_is_stable() {
         assert_eq!(CACHE_TASK.as_str(), "forced_alignment");
+    }
+
+    #[test]
+    fn collect_final_timings_rejects_missing_groups() {
+        let error = collect_final_timings(vec![Some(Vec::new()), None], "forced alignment")
+            .expect_err("missing timing groups should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("completed without timings for group(s): [1]")
+        );
     }
 }

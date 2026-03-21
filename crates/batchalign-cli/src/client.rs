@@ -8,6 +8,7 @@ use batchalign_app::api::{
     FileResult, HealthResponse, JobId, JobInfo, JobListItem, JobResultResponse, JobSubmission,
 };
 use reqwest::Client;
+use serde::Deserialize;
 use tracing::debug;
 
 use crate::error::CliError;
@@ -37,6 +38,11 @@ pub const MAX_POLL_FAILURES: u32 = 10;
 #[derive(Clone)]
 pub struct BatchalignClient {
     http: Client,
+}
+
+#[derive(Debug, Deserialize)]
+struct MediaListResponse {
+    files: Vec<String>,
 }
 
 impl BatchalignClient {
@@ -71,12 +77,7 @@ impl BatchalignClient {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let detail = resp
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
-                .unwrap_or_default();
+            let detail = read_http_error_detail(resp).await;
             return Err(CliError::ServerHttp { status, detail });
         }
 
@@ -100,12 +101,7 @@ impl BatchalignClient {
         }
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let detail = resp
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
-                .unwrap_or_default();
+            let detail = read_http_error_detail(resp).await;
             return Err(CliError::ServerHttp { status, detail });
         }
 
@@ -158,10 +154,8 @@ impl BatchalignClient {
             .await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            return Err(CliError::ServerHttp {
-                status,
-                detail: String::new(),
-            });
+            let detail = read_http_error_detail(resp).await;
+            return Err(CliError::ServerHttp { status, detail });
         }
         let jobs: Vec<JobListItem> = resp.json().await?;
         Ok(jobs)
@@ -181,17 +175,8 @@ impl BatchalignClient {
         let resp = self
             .request_with_retry(reqwest::Method::GET, &req_url, None::<&()>)
             .await?;
-        let data: serde_json::Value = resp.json().await?;
-        let files = data
-            .get("files")
-            .and_then(|f| f.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(files)
+        let data: MediaListResponse = resp.json().await?;
+        Ok(data.files)
     }
 
     /// `DELETE /jobs/{id}` — cancel a running job.
@@ -204,12 +189,7 @@ impl BatchalignClient {
             .await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let detail = resp
-                .json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
-                .unwrap_or_default();
+            let detail = read_http_error_detail(resp).await;
             return Err(CliError::ServerHttp { status, detail });
         }
         Ok(())
@@ -242,14 +222,7 @@ impl BatchalignClient {
                 Ok(resp) => {
                     if !resp.status().is_success() {
                         let status = resp.status().as_u16();
-                        let detail = resp
-                            .json::<serde_json::Value>()
-                            .await
-                            .ok()
-                            .and_then(|v| {
-                                v.get("detail").and_then(|d| d.as_str()).map(String::from)
-                            })
-                            .unwrap_or_default();
+                        let detail = read_http_error_detail(resp).await;
                         return Err(CliError::ServerHttp { status, detail });
                     }
                     return Ok(resp);
@@ -288,33 +261,79 @@ impl Default for BatchalignClient {
     }
 }
 
+async fn read_http_error_detail(resp: reqwest::Response) -> String {
+    let status = resp.status();
+    let status_text = status.canonical_reason().unwrap_or("").to_string();
+    match resp.text().await {
+        Ok(body) => summarize_http_error_body(&status_text, &body),
+        Err(error) if status_text.is_empty() => format!("failed to read error body: {error}"),
+        Err(error) => format!("{status_text} (failed to read error body: {error})"),
+    }
+}
+
+fn summarize_http_error_body(status_text: &str, body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return status_text.to_string();
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(detail) = value.get("detail").and_then(|d| d.as_str())
+        && !detail.trim().is_empty()
+    {
+        return detail.to_string();
+    }
+
+    trimmed.to_string()
+}
+
+/// Result of matching an input directory against the server's media mapping keys.
+///
+/// Replaces the anonymous `(String, String)` return that previously carried the
+/// mapping key and subdirectory.
+#[derive(Debug, Clone, Default)]
+pub struct MediaMapping {
+    /// Matched key from the server's `media_mapping_keys` (e.g. `"childes-data"`).
+    /// Empty when no mapping was detected.
+    pub key: String,
+    /// Subdirectory path under the mapping root (e.g. `"Eng-NA/MacWhinney"`).
+    /// Empty when no mapping was detected or the input is at the root.
+    pub subdir: String,
+}
+
 /// Detect media mapping from input path and server health response.
 ///
 /// Queries the server's `media_mapping_keys`, then checks if any key
 /// appears as a path component of `in_dir`.
-pub fn detect_media_mapping(in_dir: &std::path::Path, mapping_keys: &[String]) -> (String, String) {
+pub fn detect_media_mapping(
+    in_dir: &std::path::Path,
+    mapping_keys: &[String],
+) -> Result<MediaMapping, CliError> {
     if mapping_keys.is_empty() {
-        return (String::new(), String::new());
+        return Ok(MediaMapping::default());
     }
 
-    let abs = std::fs::canonicalize(in_dir).unwrap_or_else(|_| in_dir.to_path_buf());
-    let parts: Vec<&str> = abs
+    let abs = std::fs::canonicalize(in_dir).map_err(CliError::Io)?;
+    let parts: Vec<String> = abs
         .components()
-        .filter_map(|c| c.as_os_str().to_str())
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
         .collect();
 
     for key in mapping_keys {
-        if let Some(idx) = parts.iter().position(|&p| p == key.as_str()) {
+        if let Some(idx) = parts.iter().position(|p| p == key) {
             let subdir = if idx + 1 < parts.len() {
                 parts[idx + 1..].join("/")
             } else {
                 String::new()
             };
-            return (key.clone(), subdir);
+            return Ok(MediaMapping {
+                key: key.clone(),
+                subdir,
+            });
         }
     }
 
-    (String::new(), String::new())
+    Ok(MediaMapping::default())
 }
 
 /// Extract a short hostname label from a server URL (e.g. "myhost").
@@ -371,20 +390,24 @@ mod tests {
 
     #[test]
     fn detect_mapping_finds_key() {
-        let dir = std::path::Path::new("/data/childes-data/Eng-NA/test");
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("childes-data/Eng-NA/test");
+        std::fs::create_dir_all(&dir).unwrap();
         let keys = vec!["childes-data".to_string(), "other".to_string()];
-        let (key, sub) = detect_media_mapping(dir, &keys);
-        assert_eq!(key, "childes-data");
-        assert_eq!(sub, "Eng-NA/test");
+        let mapping = detect_media_mapping(&dir, &keys).unwrap();
+        assert_eq!(mapping.key, "childes-data");
+        assert_eq!(mapping.subdir, "Eng-NA/test");
     }
 
     #[test]
     fn detect_mapping_no_match() {
-        let dir = std::path::Path::new("/data/something/else");
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("something/else");
+        std::fs::create_dir_all(&dir).unwrap();
         let keys = vec!["childes-data".to_string()];
-        let (key, sub) = detect_media_mapping(dir, &keys);
-        assert!(key.is_empty());
-        assert!(sub.is_empty());
+        let mapping = detect_media_mapping(&dir, &keys).unwrap();
+        assert!(mapping.key.is_empty());
+        assert!(mapping.subdir.is_empty());
     }
 
     #[test]
@@ -407,11 +430,31 @@ mod tests {
 
     #[test]
     fn detect_mapping_empty_keys() {
-        let dir = std::path::Path::new("/data/something");
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("something");
+        std::fs::create_dir_all(&dir).unwrap();
         let keys: Vec<String> = vec![];
-        let (key, sub) = detect_media_mapping(dir, &keys);
-        assert_eq!(key, "");
-        assert_eq!(sub, "");
+        let mapping = detect_media_mapping(&dir, &keys).unwrap();
+        assert_eq!(mapping.key, "");
+        assert_eq!(mapping.subdir, "");
+    }
+
+    #[test]
+    fn summarize_http_error_body_prefers_json_detail() {
+        let detail = summarize_http_error_body("Bad Request", r#"{"detail":"bad config"}"#);
+        assert_eq!(detail, "bad config");
+    }
+
+    #[test]
+    fn summarize_http_error_body_falls_back_to_raw_body() {
+        let detail = summarize_http_error_body("Bad Request", "plain server failure");
+        assert_eq!(detail, "plain server failure");
+    }
+
+    #[test]
+    fn summarize_http_error_body_falls_back_to_status_text_when_empty() {
+        let detail = summarize_http_error_body("Bad Request", "   ");
+        assert_eq!(detail, "Bad Request");
     }
 
     #[test]

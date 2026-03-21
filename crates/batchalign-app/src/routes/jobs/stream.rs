@@ -8,6 +8,7 @@ use crate::api::{JobInfo, JobStatus};
 use axum::extract::{Path, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use tokio_stream::StreamExt;
+use tracing::warn;
 
 use crate::AppState;
 use crate::error::ServerError;
@@ -69,10 +70,7 @@ fn async_stream(
         "completed_files": initial_info.completed_files,
         "total_files": initial_info.total_files,
     });
-    let snapshot_event: Result<Event, Infallible> = Ok(Event::default()
-        .event("snapshot")
-        .json_data(snapshot_data)
-        .unwrap_or_else(|_| Event::default().event("snapshot").data("{}")));
+    let snapshot_event: Result<Event, Infallible> = Ok(build_json_event("snapshot", snapshot_data));
 
     // Check if the job is already terminal — if so, send snapshot + complete and close.
     let already_terminal = initial_info.status.is_terminal();
@@ -80,13 +78,13 @@ fn async_stream(
     let initial = tokio_stream::once(snapshot_event);
 
     if already_terminal {
-        let complete_event: Result<Event, Infallible> = Ok(Event::default()
-            .event("complete")
-            .json_data(serde_json::json!({
+        let complete_event: Result<Event, Infallible> = Ok(build_json_event(
+            "complete",
+            serde_json::json!({
                 "job_id": initial_info.job_id,
                 "status": initial_info.status,
-            }))
-            .unwrap_or_else(|_| Event::default().event("complete").data("{}")));
+            }),
+        ));
         // Return snapshot + complete, then stop.
         let tail = tokio_stream::once(complete_event);
         // Use StreamExt to chain, then take(2) to ensure bounded.
@@ -112,40 +110,44 @@ fn async_stream(
                     "file": file,
                     "completed_files": completed_files,
                 });
-                Some(Ok(Event::default()
-                    .event("file_update")
-                    .json_data(data)
-                    .unwrap_or_else(|_| {
-                        Event::default().event("file_update").data("{}")
-                    })))
+                Some(Ok(build_json_event("file_update", data)))
             }
             WsEvent::JobUpdate { job } => {
-                let event_job_id = job.get("job_id").and_then(|v| v.as_str()).unwrap_or("");
+                let Some(event_job_id) = job.get("job_id").and_then(|v| v.as_str()) else {
+                    warn!("Skipping malformed WS job_update without job_id");
+                    return None;
+                };
                 if event_job_id != job_id_clone {
                     return None;
                 }
-                let status_str = job.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                let is_terminal = status_str
-                    .parse::<JobStatus>()
-                    .map(|s| s.is_terminal())
-                    .unwrap_or(false);
+                let Some(status_str) = job.get("status").and_then(|v| v.as_str()) else {
+                    warn!(
+                        job_id = event_job_id,
+                        "Skipping malformed WS job_update without status"
+                    );
+                    return None;
+                };
+                let is_terminal = match status_str.parse::<JobStatus>() {
+                    Ok(status) => status.is_terminal(),
+                    Err(_) => {
+                        warn!(
+                            job_id = event_job_id,
+                            status = status_str,
+                            "Skipping WS job_update with invalid status"
+                        );
+                        return None;
+                    }
+                };
                 if is_terminal {
-                    Some(Ok(Event::default()
-                        .event("complete")
-                        .json_data(serde_json::json!({
+                    Some(Ok(build_json_event(
+                        "complete",
+                        serde_json::json!({
                             "job_id": event_job_id,
                             "status": status_str,
-                        }))
-                        .unwrap_or_else(|_| {
-                            Event::default().event("complete").data("{}")
-                        })))
+                        }),
+                    )))
                 } else {
-                    Some(Ok(Event::default()
-                        .event("job_update")
-                        .json_data(job.clone())
-                        .unwrap_or_else(|_| {
-                            Event::default().event("job_update").data("{}")
-                        })))
+                    Some(Ok(build_json_event("job_update", job.clone())))
                 }
             }
             _ => None,
@@ -155,6 +157,22 @@ fn async_stream(
     // The stream runs until the broadcast channel closes or the client disconnects.
     // The client closes on receiving a 'complete' event.
     EitherStream::Right(initial.chain(filtered))
+}
+
+fn build_json_event<T: serde::Serialize>(event_name: &'static str, payload: T) -> Event {
+    match Event::default().event(event_name).json_data(payload) {
+        Ok(event) => event,
+        Err(error) => {
+            warn!(event = event_name, error = %error, "Failed to serialize SSE payload");
+            let detail = serde_json::to_string(&serde_json::json!({
+                "detail": format!("failed to serialize {event_name} event: {error}")
+            }))
+            .unwrap_or_else(|_| {
+                "{\"detail\":\"failed to serialize SSE error payload\"}".to_string()
+            });
+            Event::default().event("error").data(detail)
+        }
+    }
 }
 
 /// Unifies two stream types so `async_stream` can return a bounded

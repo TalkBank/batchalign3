@@ -350,7 +350,7 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
                             &[&all_text],
                         )
                         .unwrap_or_else(|| "eng".to_string());
-                    LanguageCode3::from(detected_iso3)
+                    LanguageCode3::try_new(&detected_iso3).unwrap_or_else(|_| LanguageCode3::eng())
                 } else {
                     detected
                 }
@@ -575,7 +575,7 @@ mod tests {
             backend: AsrBackend::RustRevAi,
             diarize: true,
             speaker_backend,
-            lang: LanguageCode3::new("eng").into(),
+            lang: LanguageCode3::eng().into(),
             num_speakers: 2,
             with_utseg: false,
             with_morphosyntax: false,
@@ -611,7 +611,7 @@ mod tests {
                 speaker: Some("SPEAKER_1".into()),
                 confidence: None,
             }],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -649,7 +649,7 @@ mod tests {
                 speaker: None,
                 confidence: None,
             }],
-            lang: LanguageCode3::new("eng"),
+            lang: LanguageCode3::eng(),
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -697,7 +697,7 @@ mod tests {
                 speaker: None,
                 confidence: None,
             }],
-            lang: LanguageCode3::new("spa"),
+            lang: LanguageCode3::spa(),
         });
 
         // Run post-processing to generate utterances
@@ -747,7 +747,7 @@ mod tests {
             TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![],
-            lang: LanguageCode3::new("fra"),
+            lang: LanguageCode3::fra(),
         });
 
         stage_build_chat(&mut ctx).await.expect("build_chat");

@@ -1,13 +1,17 @@
 # Adding Inference Providers
 
 **Status:** Current
-**Last updated:** 2026-03-14
+**Last modified:** 2026-03-21 07:16 EDT
 
 Batchalign3 no longer has a public entry-point plugin system. New engines are
-added in-tree as built-in worker capabilities, usually behind optional extras in
-`pyproject.toml`.
+added in-tree as built-in worker capabilities.
 
 This page covers the current extension path.
+
+If you are adding a new command or workflow, decide the workflow family first
+and put the command's typed bundle or materializer in
+`crates/batchalign-app/src/workflow/`. Engine work should support that
+workflow; it should not define the workflow shape on its own.
 
 ## Choose the layer first
 
@@ -112,13 +116,9 @@ Add the engine's Python dependencies to the appropriate section in
   their dependencies in `dependencies` so that `uv tool install batchalign3`
   gives users everything.
 
-- **Regional or credential-gated engines** (e.g., HK/Cantonese): add as an
-  optional extra. That is the current pattern:
-
-  ```toml
-  [project.optional-dependencies]
-  my-engine = ["some-sdk>=1.0"]
-  ```
+- **Built-in engines with extra runtime dependencies**: add them to
+  `dependencies` if they are part of the supported built-in engine surface.
+  Credential-gated or region-specific does not imply a separate install tier.
 
   Users then install `batchalign3[my-engine]`.
 
@@ -143,6 +143,10 @@ In addition to those Rust-side changes, update these Python-side surfaces:
    runtime host for the new task if it depends on loaded model state or
    engine-specific wiring. Reserve **`batchalign/worker/_execute_v2.py`** for
    the small task router that dispatches to those prepared hosts.
+
+Remember: command semantics live in the workflow layer, not in the worker
+bootstrap layer. The worker layer should only know how to load engines and
+execute typed tasks.
 
 ## Public extension surfaces that are still supported
 

@@ -61,35 +61,17 @@ dependencies = [
     "nltk>=3.8",
     "praatio>=6.0.0",
     "num2words",
-]
-
-[project.optional-dependencies]
-# HK/Cantonese engines (selected via --engine-overrides)
-hk-tencent = [
+    # Built-in Cantonese / provider engines
     "tencentcloud-sdk-python-common",
     "tencentcloud-sdk-python-asr",
     "cos-python-sdk-v5",
-    "opencc-python-reimplemented",
-]
-hk-aliyun = [
     "aliyun-python-sdk-core>=2.13.3",
     "alibabacloud-nls-python-sdk>=1.0.0",
-    "opencc-python-reimplemented",
-]
-hk-funaudio = [
     "funasr",
-    "opencc-python-reimplemented",
-]
-hk-cantonese-fa = [
     "pycantonese",
 ]
-hk = [
-    "batchalign3[hk-tencent,hk-aliyun,hk-funaudio,hk-cantonese-fa]",
-]
-# All optional engines (HK/Cantonese)
-all = [
-    "batchalign3[hk]",
-]
+
+[project.optional-dependencies]
 train = [
     "accelerate>=0.27",
     "click>=8.1",
@@ -99,7 +81,7 @@ train = [
 docs = ["mkdocs-material", "mkdocs-click"]
 
 [project.scripts]
-batchalign3 = "batchalign_core:cli_main"
+batchalign3 = "batchalign._cli:main"
 
 [project.urls]
 Homepage = "https://talkbank.org/"

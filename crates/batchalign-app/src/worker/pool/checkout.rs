@@ -49,20 +49,32 @@ impl CheckedOutWorker {
     }
 }
 
+/// # Panics
+///
+/// Panics if the handle has been removed via [`CheckedOutWorker::take()`].
+/// This is a programming error -- callers must not dereference a guard
+/// after taking the worker out. The `Deref` trait cannot return `Result`,
+/// so a panic is the only signal available.
 impl Deref for CheckedOutWorker {
     type Target = WorkerHandle;
     fn deref(&self) -> &WorkerHandle {
-        self.handle
-            .as_ref()
-            .expect("CheckedOutWorker: handle taken")
+        self.handle.as_ref().expect(
+            "BUG: CheckedOutWorker dereferenced after take() -- \
+             the worker handle has been consumed and is no longer available",
+        )
     }
 }
 
+/// # Panics
+///
+/// Panics if the handle has been removed via [`CheckedOutWorker::take()`].
+/// See [`Deref`] impl for rationale.
 impl DerefMut for CheckedOutWorker {
     fn deref_mut(&mut self) -> &mut WorkerHandle {
-        self.handle
-            .as_mut()
-            .expect("CheckedOutWorker: handle taken")
+        self.handle.as_mut().expect(
+            "BUG: CheckedOutWorker dereferenced after take() -- \
+             the worker handle has been consumed and is no longer available",
+        )
     }
 }
 
@@ -70,7 +82,7 @@ impl Drop for CheckedOutWorker {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             // Return the worker to the idle queue and release a permit.
-            self.group.idle.lock().unwrap().push_back(handle);
+            super::lock_recovered(&self.group.idle).push_back(handle);
             self.group.available.add_permits(1);
         }
         // If handle was `None` (taken via `take()`), total was already

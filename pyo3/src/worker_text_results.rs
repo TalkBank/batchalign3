@@ -1,6 +1,6 @@
 //! Rust-owned normalization for worker-protocol V2 text-task batch results.
 
-use batchalign_types::worker::BatchInferResponse;
+use batchalign_types::worker::{BatchInferResponse, InferResponse};
 use batchalign_types::worker_v2::{
     CorefAnnotationV2, CorefChainRefV2, CorefItemResultV2, CorefResultV2, MorphosyntaxItemResultV2,
     MorphosyntaxResultV2, TranslationItemResultV2, TranslationResultV2, UtsegItemResultV2,
@@ -16,7 +16,7 @@ fn normalize_result_count<'a>(
     response: &'a BatchInferResponse,
     expected_count: usize,
     task: &str,
-) -> PyResult<&'a [batchalign_types::worker::InferResponse]> {
+) -> PyResult<&'a [InferResponse]> {
     let actual_count = response.results.len();
     if actual_count != expected_count {
         return Err(PyValueError::new_err(format!(

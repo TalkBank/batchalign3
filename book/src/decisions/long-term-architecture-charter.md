@@ -36,7 +36,7 @@ acceptable when they improve the long-term architecture.
 
 - `batchalign3` remains the stable host platform.
 - domain/provider-specific behaviors (e.g., HK/Cantonese engines) are built-in
-  optional extras, not core runtime defaults.
+  runtime capabilities, not a separate install tier.
 - engine contracts are versioned and treated as public compatibility surfaces.
 
 ### 2. Typed Contracts First
@@ -82,7 +82,7 @@ When evaluating alternatives, prefer options that:
 ## Immediate Implications
 
 1. Provider-specific extensions (e.g., HK/Cantonese engines) are built-in
-   optional extras with explicit dependency groups.
+   runtime capabilities inside the main package.
 2. server/dashboard/CLI roadmap items should be justified using this charter.
 3. any short-term shortcut that violates these principles requires an explicit
    exception note and sunset plan.

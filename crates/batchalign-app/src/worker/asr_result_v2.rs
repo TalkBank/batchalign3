@@ -123,7 +123,7 @@ fn resolve_worker_lang(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::DurationSeconds;
+    use crate::api::{DurationSeconds, LanguageCode3};
     use crate::types::worker_v2::{
         AsrElementKindV2, AsrElementV2, AsrMonologueV2, ExecuteOutcomeV2, ExecuteResponseV2,
         MonologueAsrResultV2, TaskResultV2, WhisperChunkResultV2, WhisperChunkSpanV2,
@@ -136,7 +136,7 @@ mod tests {
             request_id: WorkerRequestIdV2::from("req-asr-v2-1"),
             outcome: ExecuteOutcomeV2::Success,
             result: Some(TaskResultV2::WhisperChunkResult(WhisperChunkResultV2 {
-                lang: "eng".into(),
+                lang: LanguageCode3::eng(),
                 text: "hello world".into(),
                 chunks: vec![
                     WhisperChunkSpanV2 {
@@ -154,7 +154,7 @@ mod tests {
             elapsed_s: DurationSeconds(0.01),
         };
 
-        let parsed = parse_asr_response_v2(&response, &LanguageCode3::from("eng"))
+        let parsed = parse_asr_response_v2(&response, &LanguageCode3::eng())
             .expect("V2 ASR response should parse");
 
         assert_eq!(parsed.lang, "eng");
@@ -169,7 +169,7 @@ mod tests {
             request_id: WorkerRequestIdV2::from("req-asr-v2-provider"),
             outcome: ExecuteOutcomeV2::Success,
             result: Some(TaskResultV2::MonologueAsrResult(MonologueAsrResultV2 {
-                lang: "yue".into(),
+                lang: LanguageCode3::yue(),
                 monologues: vec![AsrMonologueV2 {
                     speaker: "1".into(),
                     elements: vec![
@@ -200,7 +200,7 @@ mod tests {
             elapsed_s: DurationSeconds(0.01),
         };
 
-        let parsed = parse_asr_response_v2(&response, &LanguageCode3::from("eng"))
+        let parsed = parse_asr_response_v2(&response, &LanguageCode3::eng())
             .expect("V2 monologue response should parse");
 
         assert_eq!(parsed.lang, "yue");

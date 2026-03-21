@@ -59,7 +59,7 @@ persist based on the job's `debug_traces` flag.
 
 ### FaResult
 
-Returned by `process_fa()` in `crates/batchalign-app/src/fa.rs`:
+Returned by `process_fa()` in `crates/batchalign-app/src/fa/`:
 
 ```rust
 pub struct FaResult {

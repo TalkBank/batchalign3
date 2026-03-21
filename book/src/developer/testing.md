@@ -1,7 +1,7 @@
 # Testing
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last modified:** 2026-03-21 07:16 EDT
 
 ## Philosophy
 
@@ -24,6 +24,33 @@ edit-compile-test.
 
 This mirrors the Python side, where `uv run pytest` excludes `golden`,
 `slow`, and `integration` markers by default.
+
+## Fast Contributor Loop
+
+For command-workflow edits, the shortest useful loop is usually:
+
+```bash
+cargo xtask affected-rust packages
+make build-python
+cargo build -p batchalign-cli
+cargo nextest run -p batchalign-app --test workflow_helpers
+cargo nextest run -p batchalign-cli --test cli
+uv run batchalign3 --help
+```
+
+Use the workflow-layer tests when you are changing:
+
+- command semantics
+- compare / benchmark behavior
+- materializers and typed intermediate bundles
+- workflow-family dispatch or composition
+
+Keep the broader ML tests for runtime changes that actually touch workers,
+models, or cache behavior.
+
+If you only changed docs or workflow metadata, start with
+`cargo xtask affected-rust packages` and the narrow CLI/help checks before
+running anything expensive.
 
 ### Why this matters
 
@@ -120,6 +147,7 @@ All ML tests live in one binary (`ml_golden`) with submodules:
 | Python unit tests | pytest | `uv run pytest` | None | ~2s | Yes |
 | Worker protocol | cargo | `cargo nextest run --test worker_protocol_matrix` | None (test-echo) | ~5s | Yes |
 | Server integration | cargo | `cargo nextest run --test integration` | None (test-echo) | ~5s | Yes |
+| Workflow helpers | cargo | `cargo nextest run -p batchalign-app --test workflow_helpers` | None | ~2s | Yes |
 | JSON compat | cargo | `cargo nextest run --test json_compat` | None | ~1s | Yes |
 | ML tests (all) | cargo | `cargo nextest run --profile ml` | Mixed | ~5min | **No** |
 | Python golden | pytest | `uv run pytest -m golden` | batchalign_core | ~10s | **No** |
@@ -133,6 +161,7 @@ Run ML tests based on what changed, not as a habit:
 | What you changed | Run |
 |-----------------|-----|
 | Rust unit logic (parser, DP, postprocess) | Fast tests only |
+| Workflow-family modules or compare/benchmark materializers | `workflow_helpers` + focused CLI tests |
 | Python inference module | `--profile ml` |
 | Worker protocol or IPC types | `worker_protocol_matrix` (fast) + `--profile ml` |
 | Worker pool, dispatch, or lifecycle | `--profile ml` |
@@ -186,6 +215,9 @@ cargo nextest run --manifest-path pyo3/Cargo.toml
 
 # Root workspace (fast tests only)
 cargo nextest run --workspace
+
+# Workflow layer
+cargo nextest run -p batchalign-app --test workflow_helpers
 
 # Focused suites
 cargo nextest run -p batchalign-cli --test cli

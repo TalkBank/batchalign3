@@ -1,7 +1,7 @@
 # Worker Tuning
 
 **Status:** Current
-**Last updated:** 2026-03-19
+**Last modified:** 2026-03-21 08:20 EDT
 
 This page explains how the server decides how many workers to run, how memory
 budgets work, and how to configure warmup and tuning for your hardware.
@@ -114,8 +114,8 @@ batchalign3 serve start --warmup align          # Only forced alignment
 batchalign3 serve start --warmup morphotag,align  # Both morphotag and align
 ```
 
-Without `--warmup`, the server uses the `warmup_policy` and `warmup_commands`
-from `server.yaml`, defaulting to `full`.
+Without `--warmup`, the server uses `warmup_commands` from `server.yaml`,
+defaulting to the built-in full preset (`morphotag`, `align`, `transcribe`).
 
 ### server.yaml warmup key
 
@@ -185,7 +185,8 @@ warmup_commands:
 ```yaml
 max_workers_per_job: 1
 memory_gate_mb: 2048
-warmup_policy: minimal          # Only morphotag — saves ~4 GB
+warmup_commands:
+  - morphotag
 worker_idle_timeout_s: 300      # Free memory faster
 ```
 
@@ -211,7 +212,10 @@ for memory-heavy commands and more for lightweight ones.
 ```yaml
 max_workers_per_job: 0          # Auto-tune — will pick 4-8 workers
 max_concurrent_jobs: 8
-warmup_policy: full
+warmup_commands:
+  - morphotag
+  - align
+  - transcribe
 worker_idle_timeout_s: 1800     # Keep workers loaded longer
 ```
 

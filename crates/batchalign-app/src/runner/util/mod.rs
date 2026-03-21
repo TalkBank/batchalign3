@@ -398,7 +398,7 @@ mod tests {
             },
             dispatch: RunnerDispatchConfig {
                 command: CommandName::from("align"),
-                lang: crate::api::LanguageSpec::Resolved(LanguageCode3::from("eng")),
+                lang: crate::api::LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Align(AlignOptions {
                     common: CommonOptions::default(),

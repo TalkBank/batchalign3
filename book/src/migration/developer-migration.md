@@ -15,6 +15,14 @@ Comparison anchors for this page:
 
 This page excludes transient unreleased migration-branch states.
 
+See also:
+
+- [BA2 Architecture Reference](ba2-architecture-reference.md) for the frozen Jan
+  9 baseline architecture
+- [Hybrid Workflow Architecture](../architecture/hybrid-workflow-architecture.md)
+  for the proposed BA3 direction informed by BA2 strengths and newer compare
+  workflow pressure
+
 ## Comparison discipline for contributors
 
 Contributor-facing parity and regression checks should anchor to the correct

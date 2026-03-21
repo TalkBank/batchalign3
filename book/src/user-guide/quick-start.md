@@ -1,5 +1,7 @@
 # Quick Start
 
+**Last modified:** 2026-03-21 08:20 EDT
+
 This chapter covers the most common `batchalign3` workflows from the terminal.
 The examples assume the `batchalign3` binary is installed and that local
 processing commands can reach a Python runtime with `batchalign.worker`

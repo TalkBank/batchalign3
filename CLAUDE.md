@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last modified:** 2026-03-21 15:30 EDT
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -42,13 +42,15 @@ make sync                    # Install Python deps + create venv
 make build                   # Build PyO3 extension + CLI (debug) + dashboard
 ```
 
-Day-to-day:
+Day-to-day (FAST dev loop — use these, not `cargo test`):
 
 ```bash
-make build                   # Rebuild everything
-./target/debug/batchalign3 transcribe input/ output/ --lang eng
+make check                   # Compile check only (~6s incremental)
+make test                    # Quick lib tests (~3s after first compile)
+make dev-ready               # Rebuild PyO3 extension + CLI (debug)
 
-# Or let cargo handle incremental rebuilds automatically:
+# Run the CLI:
+./target/debug/batchalign3 transcribe input/ output/ --lang eng
 cargo run -p batchalign-cli -- transcribe input/ output/ --lang eng
 
 # Release binary for large-scale work:
@@ -63,13 +65,43 @@ make build-release
 | Python code only (`batchalign/`) | Nothing — picked up automatically by workers |
 | Rust CLI (`crates/batchalign-cli/`, `crates/batchalign-app/`, etc.) | `cargo build -p batchalign-cli` or `make build-rust` |
 | PyO3 bridge or chat-ops (`pyo3/`, `crates/batchalign-chat-ops/`) | `make build-python` (rebuilds `batchalign_core` native extension) |
-| REST API types (`types/api.rs`, `ToSchema` derives) | `bash scripts/generate_dashboard_api_types.sh` (regenerates `openapi.json` + `frontend/src/generated/api.ts`) |
+| REST API types (`crates/batchalign-app/src/types/`, `crates/batchalign-types/`, `ToSchema` derives) | `bash scripts/generate_dashboard_api_types.sh` (regenerates `openapi.json` + `frontend/src/generated/api.ts`) |
 | Worker IPC types (`types/worker_v2.rs`, `morphosyntax/mod.rs`, etc.) | `make generate-ipc-types` (regenerates `ipc-schema/` + `batchalign/generated/`) |
 | Everything | `make build` |
 
 **API schema discipline:** When you modify any Rust struct with `#[derive(ToSchema)]` or change route signatures in `routes/`, you **must** run `bash scripts/generate_dashboard_api_types.sh` and commit the regenerated `openapi.json` and `frontend/src/generated/api.ts`. CI will fail on API drift otherwise. Verify with `bash scripts/check_dashboard_api_drift.sh`.
 
 **IPC type discipline:** When you modify any Rust struct with `#[derive(schemars::JsonSchema)]` that crosses the Python worker boundary, you **must** run `make generate-ipc-types` and commit the regenerated `ipc-schema/` and `batchalign/generated/` files. `make ci-local` and `make check-ipc-drift` verify schemas are current. See `book/src/developer/ipc-type-sync.md` for the full workflow and `book/src/developer/ipc-union-migration.md` for the roadmap to full codegen.
+
+## Test Tiers — Read This Before Running Tests
+
+Tests are split into tiers by safety and speed. **NEVER run bare `cargo test`.**
+See `docs/memory-safety.md` for the crash history and full rationale.
+
+```bash
+# FAST (every edit) — pure Rust, no Python, no ML, no OOM risk
+make check                   # Compile check only (~6s)
+make test                    # Library tests (~3s incremental)
+
+# EXTENDED (before pushing) — still safe, no ML models
+make test-rust               # Library + safe integration tests (~5s)
+make lint-rust               # Clippy on key crates only (~10s)
+
+# WORKER TESTS (when touching worker code) — spawns test-echo Python workers
+make test-workers            # Serialized, memory-guarded
+
+# SLOW (before releases / on CI)
+make lint                    # Full clippy + mypy
+make test-python             # pytest suite
+
+# ML GOLDEN TESTS — ONLY on net (256 GB RAM)
+make test-ml                 # Loads real Whisper/Stanza models
+
+# DANGEROUS — NEVER RUN THESE:
+# cargo test                 # Runs ALL binaries in parallel → OOM crash
+# cargo test -p batchalign-app --tests  # Same problem
+# cargo nextest run          # Same problem
+```
 
 **Docs and diagrams discipline:** When a change affects code structure,
 CLI options, data flow, or user-visible behavior, update **both** the
@@ -88,7 +120,7 @@ arguments in surrounding prose or code spans instead of raw Mermaid labels.
 
 ## Build and Test Commands
 
-**ML tests are excluded by default.** `cargo nextest run` and `uv run pytest` both run only fast unit tests. ML/golden tests must be opted into explicitly. See `book/src/developer/testing.md` for the full testing strategy.
+**ML tests are excluded by default.** `make test` runs only fast library tests. Worker and ML tests are opt-in via `make test-workers` and `make test-ml`. **Never use bare `cargo nextest run` on a developer machine** — it runs test binaries in parallel, which can spawn multiple ML workers and OOM-crash your machine. See `docs/memory-safety.md`.
 
 ```bash
 # Fast tests only (default — no models, safe, parallel)
@@ -150,6 +182,22 @@ contributor-facing documentation comments.
 - When refactoring architecture, update code comments in the same change so new
   contributors can follow the new seam without reading git history.
 
+### Code Organization and Browsability
+
+- **Types and traits are the first layer of documentation.** Favor named
+  structs, enums, request/result types, and workflow traits over explaining raw
+  primitives in comments.
+- **Keep modules small and role-shaped.** Split catch-all files once they
+  contain multiple workflows, ownership models, or unrelated helper families.
+  A contributor should be able to find inference, workflow, and CLI seams
+  quickly by directory layout.
+- **Prefer methods when they clarify ownership.** If behavior depends on a
+  type's invariants or owned state, keep it in an `impl`. Use free functions
+  for adapters, symmetric transforms, and orchestration glue that does not have
+  one natural owner.
+- **Update touched docs with timestamps.** Any documentation file modified in a
+  change must update its `Last modified` field with date and time.
+
 ### Boolean Blindness
 
 - **No boolean blindness.** Enums over bools for anything beyond simple on/off. Banned: 2+ bool params, 2+ related bool fields, opposite bool pairs (`foo`/`no_foo`), ambiguous bool returns. Use `enum.Enum` or `typing.Literal["option1", "option2"]` for multi-way choices. OK as bool: `verbose`, `force`, `quiet`, single on/off flags where the name is self-documenting.
@@ -161,6 +209,19 @@ contributor-facing documentation comments.
 - Domain types already defined in `_domain_types.py`: `AudioPath`, `NumSpeakers`, `SpeakerId`, `TimestampMs`. Use these instead of bare `str`/`int`.
 - Parse raw strings into typed values at the boundary (CLI args, IPC, file I/O). Interior code should never handle raw strings for typed values.
 - **No ad-hoc format parsing.** Use real parsers (JSON: `json`, XML: `xml.etree`, etc.) not regex or string splitting for structured formats. Regex is for flat text only (normalization, search, validation).
+
+### Boundary Hygiene
+
+- **No new tuple-packed domain boundaries.** Do not introduce signatures like
+  `(String, String)` or `Vec<(String, Result<String, String>)>` when the
+  fields have stable meaning. Name the shape with a struct or newtype.
+- **No new panic paths in server/runtime code.** Do not add `unwrap()`,
+  `expect()`, or equivalent panic-based control flow in server, worker, CLI
+  orchestration, persistence, or long-running background-task code.
+- **Use real domain errors.** New domain error types should use `thiserror`
+  instead of stringly `Result<_, String>` seams. If an old string error
+  boundary must remain temporarily, isolate it at the outermost compatibility
+  layer and do not copy it inward.
 
 ### Type Checking
 
@@ -251,8 +312,8 @@ Rust CLI (batchalign3) → Rust Server (crates/)
 
 1. Add the `Commands::Foo` variant to `crates/batchalign-cli/src/args/mod.rs`
 2. Add the match arm in `run_command()` in `crates/batchalign-cli/src/lib.rs` — this is the only dispatch site
-3. If the command needs server-side orchestration, add `infer_task_for_command()` and `command_requires_infer()` mappings in `crates/batchalign-app/src/runner/mod.rs`
-4. If it uses the batched infer path, add routing in `crates/batchalign-app/src/runner/dispatch/infer.rs`
+3. If the command needs server-side orchestration, register a `WorkflowDescriptor` in `crates/batchalign-app/src/workflow/registry.rs` (this drives `infer_task_for_command()` and `command_requires_infer()` in `crates/batchalign-app/src/runner/policy.rs`)
+4. If it uses the batched infer path, add routing in `crates/batchalign-app/src/runner/dispatch/infer_batched.rs`; for per-file audio paths, see `fa_pipeline.rs` or `transcribe_pipeline.rs` in the same directory
 5. Add typed `CommandOptions::Foo` in `crates/batchalign-app/src/types/options.rs` and the builder in `crates/batchalign-cli/src/args/options.rs`
 
 `main.rs` and `cli_entry.rs` must remain thin wrappers — tracing setup + `run_command()` call. No command-specific logic.
@@ -393,6 +454,8 @@ For all Rust code in `crates/` and `pyo3/`.
 ### Error Handling
 - **No panics for recoverable conditions.** Use typed errors (`thiserror`); use `miette` for rich diagnostics where appropriate.
 - **No silent swallowing.** No `.ok()`, `.unwrap_or_default()`, or silent fallbacks that hide bugs.
+- **No silent defaults via `unwrap_or` / `unwrap_or_else`.** If a value can fail validation, propagate the error with `?` — never silently substitute a default. Silent fallbacks hide bugs and violate the principle of least surprise. Use `unwrap_or` only when the fallback is explicitly documented and the caller understands the semantics (e.g., a documented default in a config struct).
+- **`From<T>` must be infallible.** Never implement `From<&str>` or `From<String>` on a type whose construction can fail. Use `TryFrom` instead. Panicking `From` impls are type holes — they bypass the type system's error tracking. If you need ergonomic construction for known-good compile-time values, provide named factory methods (e.g., `LanguageCode3::eng()`) instead.
 
 ### Output and Logging
 - **Library crates:** `tracing` macros — never `println!`/`eprintln!`.
@@ -408,11 +471,12 @@ For all Rust code in `crates/` and `pyo3/`.
 - Prefer explicit enums over ambiguous `Option` when there are multiple meaningful states.
 
 ### Newtypes Over Primitives
-- **No primitive obsession.** Use `string_id!`/`numeric_id!` macros from `types/macros.rs` for domain identifiers. Function signatures must be self-documenting through types, not parameter names.
+- **No primitive obsession.** Use `string_id!`/`numeric_id!` macros from `crates/batchalign-types/src/macros.rs` for domain identifiers. Function signatures must be self-documenting through types, not parameter names.
 - **String newtypes:** `JobId`, `CommandName`, `LanguageCode3`, `FileName`, `NodeId`, `EngineVersion`, `CorrelationId`. All auto-deref to `&str`.
 - **Numeric newtypes:** `NumSpeakers(u32)`, `UnixTimestamp(f64)`, `DurationSeconds(f64)`, `DurationMs(u64)`, `MemoryMb(u64)`, `WorkerPid(u32)`.
 - **File paths:** Use `std::path::Path`/`PathBuf`, not `&str`/`String`. Convert to strings only at IPC/JSON boundaries via `to_string_lossy()`.
-- **Boundary conversion:** Parse raw strings into newtypes at entry points (HTTP handlers, CLI flags, JSON deserialization). Interior code never handles raw primitives for typed values. `Deref<Target=str>` enables zero-friction coercion where `&str` is needed.
+- **Boundary conversion:** Parse raw strings into newtypes at entry points (HTTP handlers, CLI flags, JSON deserialization) using `TryFrom` or `try_new()`. Interior code never handles raw primitives for typed values. `Deref<Target=str>` enables zero-friction coercion where `&str` is needed.
+- **Well-known constants:** For frequently-used validated values, provide named factory methods (e.g., `LanguageCode3::eng()`, `LanguageCode3::spa()`) instead of `From<&str>`. These are infallible by construction and eliminate scattered string literals.
 - **No ad-hoc format parsing.** Use real parsers, not regex or string splitting for structured formats.
 - See `book/src/architecture/type-driven-design.md` for the full pattern catalog and boundary conversion recipes.
 

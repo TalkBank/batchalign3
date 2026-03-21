@@ -1,7 +1,7 @@
 # Dispatch System
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last modified:** 2026-03-21 07:16 EDT
 
 The dispatch router lives in `crates/batchalign-cli/src/dispatch/mod.rs`.
 The CLI never loads ML models directly. It always routes processing commands to
@@ -53,9 +53,9 @@ and writes files directly on the shared local filesystem.
 user passes `--server` for one of these commands, the CLI warns and falls back
 to the local daemon path instead of using the remote URL.
 
-`benchmark` can use either explicit remote dispatch or the local daemon,
-depending on how the command is invoked and what capabilities the daemon
-advertises.
+`benchmark` is a composite workflow that follows the same server-selection
+rules as other audio-dependent commands, but its internal execution is still
+Rust-owned (`transcribe` followed by `compare`).
 
 ### 4. No server available
 
@@ -84,4 +84,6 @@ Server-to-worker transport is stdio JSON-lines IPC. The Python worker entry
 point in `batchalign/worker/_main.py` still owns the process lifetime and
 read/write loop, but Rust now owns the generic stdio op validation and dispatch
 envelope through the `batchalign_core` PyO3 bridge. HTTP is not used between
-the Rust server and Python workers.
+the Rust server and Python workers. The current slim Python console-script vs
+full Rust CLI split is a packaging/build concern, not a dispatch concern, and
+should not be modeled here.

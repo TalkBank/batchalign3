@@ -1,0 +1,13 @@
+---
+source: crates/batchalign-app/tests/ml_golden/golden.rs
+assertion_line: 288
+expression: output
+---
+@UTF8
+@Begin
+@Languages:	eng
+@Participants:	PAR Participant
+@ID:	eng|test|PAR|||||Participant|||
+*PAR:	hello world .
+%xtra:	hello world
+@End

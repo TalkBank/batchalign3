@@ -79,7 +79,7 @@ current-side CLI bug.
 | `transcribe-fra-chloe-whisper-fixed` | `transcribe` | fixed | direct current, Jan 9 stock, and later master `transcribe` Whisper runs now all score `wer=0.2308 accuracy=0.7692` on Chloe; current also restores the legacy/documented `@Comment` header |
 | `transcribe-wallet-whisper-parity` | `transcribe` | complete | direct current `transcribe` on `wallet-trimmed.mp4` matches the benchmark story exactly: current scores `wer=0.0851 accuracy=0.9149`, while Jan 9 stock and later master both stay at `wer=0.2766 accuracy=0.7234` |
 | `benchmark-05b-tencent-current` | `benchmark` | complete | current `benchmark --engine-overrides '{"asr":"tencent"}'` on the tiny `05b` fixture completed cleanly and matched the fixed transcribe Tencent score: `wer=0.1923 accuracy=0.8077` |
-| `transcribe-05b-funaudio-current` | `transcribe` | complete | after installing the `hk-funaudio` extra and suppressing FunASR stdout chatter inside the worker host, current `--asr-engine-custom funaudio` transcribed the tiny `05b_clip` fixture and scored `wer=0.3462 accuracy=0.6538` |
+| `transcribe-05b-funaudio-current` | `transcribe` | complete | after syncing the repo venv to the current built-in HK dependency set and suppressing FunASR stdout chatter inside the worker host, current `--asr-engine-custom funaudio` transcribed the tiny `05b_clip` fixture and scored `wer=0.3462 accuracy=0.6538` |
 | `transcribe-05b-tencent-current-fixed` | `transcribe` | fixed | documented `--engine-overrides '{"asr":"tencent"}'` initially fell back to Rev.AI; after the override/preflight fix, the same tiny `05b_clip` run emitted `ASR Engine tencent` and scored `wer=0.1923 accuracy=0.8077` |
 | `transcribe-05b-aliyun-current` | `transcribe` | complete | current `--engine-overrides '{"asr":"aliyun"}'` completed cleanly on the tiny `05b_clip.wav` fixture, emitted `ASR Engine aliyun`, and scored `wer=0.5385 accuracy=0.4615` |
 | `compare-gold-companion-filter` | `compare` | fixed | current CLI initially submitted `*.gold.cha` companions as primary inputs; after the CLI filter fix and rebuild, the same live rerun dropped from `Found 2 file(s)` to `Found 1 file(s)` |
@@ -133,13 +133,13 @@ The parity effort has exercised these real command surfaces so far:
     (with copied real `.batchalign.ini` and `server.yaml`)
   - `transcribe --lang yue --asr-engine-custom funaudio --no-tui input_dir output_dir`
     (with copied real `.batchalign.ini`, `server.yaml`, and the repo venv synced
-    with `hk-funaudio`)
+    with the current built-in HK dependency set)
   - `transcribe --lang yue --engine-overrides '{"asr":"tencent"}' --no-tui input_dir output_dir`
     (with copied real `.batchalign.ini`, `server.yaml`, and the repo venv synced
-    with the full `hk` extra set)
+    with the current built-in HK dependency set)
   - `transcribe --lang yue --engine-overrides '{"asr":"aliyun"}' --no-tui input_dir output_dir`
-    (with copied real `.batchalign.ini`, `server.yaml`, and the repo venv synced
-    with the full `hk` extra set)
+    (with copied real `.batchalign.ini`, `server.yaml`, and the repo-managed
+    environment containing the built-in Cantonese/provider stack)
 - preserved legacy Jan 9 runners:
   - `batchalignhk benchmark --lang yue --whisper -n 1 input_dir output_dir`
   - `batchalign align input_dir output_dir`
@@ -478,8 +478,8 @@ batchalign-master-fd816d4 transcribe input_dir output_dir \
 **Interpretation**
 
 - The first live attempt failed honestly because the local project venv did not
-  yet include the optional `hk-funaudio` extra; syncing the repo venv with that
-  extra cleared the environment blocker.
+  yet include the then-missing FunASR dependency set; syncing the repo venv
+  with the current built-in HK dependency set cleared the environment blocker.
 - The next live attempt then exposed a real current-side bug: FunASR printed a
   raw `funasr version: ...` banner to stdout, which polluted the JSON-lines
   worker protocol stream and caused `failed to decode response` errors.

@@ -18,20 +18,7 @@ use utoipa::ToSchema;
 
 use crate::api::{JobId, NodeId, UnixTimestamp};
 use crate::worker::WorkerPid;
-
-// ---------------------------------------------------------------------------
-// Domain newtypes (scheduling-specific)
-// ---------------------------------------------------------------------------
-
-string_id!(
-    /// Stable identifier for a single attempt to execute a work unit.
-    pub AttemptId
-);
-
-string_id!(
-    /// Opaque identifier for a work unit within a job.
-    pub WorkUnitId
-);
+pub use batchalign_types::scheduling::{AttemptId, WorkUnitId};
 
 // `DurationMs` is defined in domain.rs alongside the other core numeric
 // newtypes and re-exported here so that `crate::scheduling::DurationMs`

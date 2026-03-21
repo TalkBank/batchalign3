@@ -188,7 +188,7 @@ class TestTranscribe:
 
 
 class TestProtocolSafety:
-    def test_get_model_reports_missing_extra(self, monkeypatch) -> None:
+    def test_get_model_reports_missing_dependency(self, monkeypatch) -> None:
         original_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):
@@ -198,7 +198,7 @@ class TestProtocolSafety:
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
 
-        with pytest.raises(ImportError, match="hk-funaudio"):
+        with pytest.raises(ImportError, match="funasr"):
             FunAudioRecognizer(lang="yue")._get_model()
 
     def test_get_model_suppresses_funasr_stdout(self, monkeypatch, capsys) -> None:

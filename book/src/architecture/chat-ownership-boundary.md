@@ -1,7 +1,7 @@
 # CHAT Ownership Boundary: Server-Side Orchestration
 
 **Status:** Current
-**Last updated:** 2026-03-14
+**Last updated:** 2026-03-21 15:30
 
 ## Overview
 
@@ -62,7 +62,7 @@ non-CHAT file is present for those commands, the job now fails instead of
 silently falling back to a Python command-runtime path.
 
 ```rust
-// runner/mod.rs — dispatch decision
+// runner/policy.rs — dispatch decision (simplified for illustration)
 fn command_requires_infer(command: &str, all_chat: bool) -> bool {
     match command {
         "morphotag" | "utseg" | "translate" | "coref" | "compare" => true,
@@ -163,7 +163,7 @@ Prepared-text batch items and response items are positionally matched
 
 | Aspect | Detail |
 |--------|--------|
-| **Rust module** | `crates/batchalign-chat-ops/src/morphosyntax/`, `crates/batchalign-app/src/morphosyntax.rs` |
+| **Rust module** | `crates/batchalign-chat-ops/src/morphosyntax/`, `crates/batchalign-app/src/morphosyntax/` |
 | **Granularity** | Per-utterance |
 | **Cross-file batching** | Yes — all cache misses across files pooled into one prepared-text `execute_v2` batch |
 | **Cache task** | `"morphosyntax"` |
@@ -319,7 +319,7 @@ reconstructs CHAT bracket notation from these typed chain refs.
 
 | Aspect | Detail |
 |--------|--------|
-| **Rust module** | `crates/batchalign-chat-ops/src/fa/`, `crates/batchalign-app/src/fa.rs` |
+| **Rust module** | `crates/batchalign-chat-ops/src/fa/`, `crates/batchalign-app/src/fa/` |
 | **Granularity** | Per-group (time-windowed utterance groups within a file) |
 | **Cross-file batching** | **No** — each file has its own audio, dispatched sequentially |
 | **Cache task** | `"forced_alignment"` |
@@ -456,16 +456,19 @@ batchalign-chat-ops (shared crate)
 └── retokenize.rs     — token retokenization
 
 batchalign-app
-├── morphosyntax.rs   — server-side morphosyntax orchestrator
+├── morphosyntax/     — server-side morphosyntax orchestrator
 ├── utseg.rs          — server-side utseg orchestrator
 ├── translate.rs      — server-side translate orchestrator
 ├── coref.rs          — server-side coref orchestrator
-├── fa.rs             — server-side FA orchestrator
+├── fa/               — server-side FA orchestrator (incremental, transport)
 ├── transcribe.rs     — server-side transcribe orchestrator
+├── workflow/         — workflow-family registry, descriptors, traits
+│   └── registry.rs   — command → WorkflowDescriptor mapping (source of truth)
 └── runner/           — dispatch router
-    ├── mod.rs        — spawn_job(), command_requires_infer(), infer_task mapping
-    ├── dispatch/     — dispatch_batched_infer(), dispatch_fa_infer(), dispatch_transcribe_infer()
-    └── util.rs       — helpers (worker count, media validation, file state)
+    ├── mod.rs        — spawn_job(), job lifecycle
+    ├── policy.rs     — infer_task_for_command(), command_requires_infer()
+    ├── dispatch/     — infer_batched, fa_pipeline, transcribe_pipeline, benchmark_pipeline, etc.
+    └── util/         — helpers (worker count, media validation, file state, auto-tune)
 ```
 
 ## Capability Discovery
@@ -530,7 +533,7 @@ if is_dummy(&chat_file) {
 The `@Languages` header in each CHAT file determines the language for that file, **not** the job-level `--lang` parameter. This matters for mixed-language corpora where different files declare different languages.
 
 ```rust
-// morphosyntax.rs — uses declared_languages() for per-file language
+// morphosyntax/ — uses declared_languages() for per-file language
 let primary = LanguageCode::new(lang);  // job-level --lang
 let langs = declared_languages(&chat_file, &primary);  // reads @Languages header
 // If @Languages: spa, the batch item gets lang="spa" even if --lang eng

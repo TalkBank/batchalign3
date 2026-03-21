@@ -188,7 +188,7 @@ class TestInferCantoneseFa:
         assert resp.results[0].result["indexed_timings"] == []
 
 
-def test_load_cantonese_fa_reports_missing_extra(monkeypatch) -> None:
+def test_load_cantonese_fa_reports_missing_dependency(monkeypatch) -> None:
     original_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -198,7 +198,7 @@ def test_load_cantonese_fa_reports_missing_extra(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="hk-cantonese-fa"):
+    with pytest.raises(ImportError, match="pycantonese"):
         load_cantonese_fa("yue", None)
 
 

@@ -5,6 +5,9 @@
 
 This document describes the input/output flow for every batchalign command,
 comparing local CLI dispatch with the server-based (`--server`) dispatch.
+For implementation details, treat the typed workflow layer under
+`crates/batchalign-app/src/workflow/` as the source of truth for command
+semantics. The CLI and runner layers should stay thin.
 
 For each command: what goes in, where it comes from, what gets written, and
 whether files are mutated in place.
@@ -31,6 +34,15 @@ Exceptions:
 
 For legacy readability, the tables below still use `IN_DIR`/`OUT_DIR` shorthand.
 Interpret `IN_DIR` as "input path set" in current CLI usage.
+
+When you are adding a new command or changing an existing one, remember the
+current architecture split:
+
+- CLI args live in `crates/batchalign-cli`
+- workflow semantics live in `crates/batchalign-app/src/workflow/`
+- job lifecycle / queueing live in `crates/batchalign-app/src/runner/`
+- output materialization belongs with the workflow family that owns the
+  command shape
 
 When output resolves to the same path as input, mutating commands overwrite the
 original `.cha` file (no automatic backup).
@@ -203,9 +215,16 @@ counts, total word counts).
 automatically skipped as inputs (they are companions). If no gold file is
 found, the file is marked as failed with an error message.
 
-**Pipeline:** morphosyntax → DP alignment (Hirschberg) → `%xsrep` injection →
-serialize. The morphosyntax step ensures both files have consistent tokenization
-before alignment.
+**Pipeline:** morphosyntax → local projection/alignment bundle construction →
+materialization. The workflow layer now models compare as a reference
+projection workflow rather than "just another per-file mutator." The
+implementation may still call into morphosyntax and DP alignment helpers, but
+the semantic unit is the comparison bundle, not a flat text rewrite.
+
+**Output shapes:** compare can materialize more than one view of the same
+comparison bundle. The current default is main-shaped output with `%xsrep`
+injection, but the architecture also supports gold-shaped projection output as a
+first-class materializer path.
 
 **No media involved.** This is a text-only operation.
 
@@ -226,6 +245,10 @@ before alignment.
 **Same I/O pattern as transcribe** — creates new `.cha` files with audio
 extension renamed. Additionally includes evaluation metrics from comparing
 ASR output against reference transcripts.
+
+`benchmark` is a composite workflow: it runs transcribe and then compare via
+typed workflow composition. If you are changing benchmark behavior, look at
+the workflow layer first rather than adding logic in CLI dispatch.
 
 ---
 

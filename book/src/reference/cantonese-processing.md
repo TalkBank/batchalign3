@@ -7,7 +7,7 @@ batchalign3. This page covers the **core pipeline** behavior — for the
 HK-specific ASR/FA engines (Tencent, Aliyun, FunASR), see
 [HK/Cantonese Engines](../architecture/hk-cantonese-engines.md).
 
-## What's in Core vs. HK Engines
+## What's in Core vs. Cantonese Provider Engines
 
 ```mermaid
 flowchart TD
@@ -18,7 +18,7 @@ flowchart TD
         utseg["Utterance Segmentation\n(PolyU BERT model)"]
     end
 
-    subgraph hk["HK Engines (optional extras)"]
+    subgraph hk["Cantonese Provider Engines (built-in)"]
         tencent["Tencent Cloud ASR"]
         aliyun["Aliyun NLS ASR"]
         funasr["FunASR/SenseVoice ASR"]
@@ -30,7 +30,7 @@ flowchart TD
 
 The core normalization runs on **all** ASR output when `lang=yue`, regardless
 of which engine produced it. You get correct Cantonese text even with just
-`--asr-engine whisper` or Rev.AI — no separate plugin package is involved.
+`--asr-engine whisper` or Rev.AI — there is no separate HK install tier.
 
 ## Text Normalization Pipeline
 
@@ -233,7 +233,7 @@ Python HK engines call these functions — no OpenCC Python dependency needed.
 | `batchalign-chat-ops/src/asr_postprocess/mod.rs:134-137` | Pipeline integration (Stage 4b) |
 | `pyo3/src/pyfunctions.rs:471-477` | PyO3 bridge |
 | `batchalign/inference/hk/_common.py` | Python delegation to Rust |
-| `batchalign/inference/hk/_cantonese_fa.py` | Jyutping FA (optional HK/Cantonese extra) |
+| `batchalign/inference/hk/_cantonese_fa.py` | Jyutping FA provider |
 
 ## Test Coverage
 

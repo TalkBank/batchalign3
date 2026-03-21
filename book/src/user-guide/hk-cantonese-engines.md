@@ -5,7 +5,7 @@
 
 Batchalign includes alternative ASR and forced alignment engines for Hong Kong
 Cantonese. These are built-in modules activated via `--engine-overrides` and
-installed through optional dependency extras.
+shipped in the base package.
 
 ## Available Engines
 
@@ -18,40 +18,14 @@ installed through optional dependency extras.
 
 ## Installation
 
-Install with the extras for the engine you need:
+The standard install already includes these engines:
 
 ```bash
-# Individual engines
-uv tool install "batchalign3[hk-tencent]"
-uv tool install "batchalign3[hk-aliyun]"
-uv tool install "batchalign3[hk-funaudio]"
-uv tool install "batchalign3[hk-cantonese-fa]"
-
-# All HK engines at once
-uv tool install "batchalign3[hk]"
+uv tool install batchalign3
 ```
 
-If you installed `batchalign3` as a library in a virtual environment
-instead of as a standalone tool, use `uv pip install` in place of
-`uv tool install`.
-
-For a source checkout using the repo-managed `.venv`, sync the extras into that
-environment instead:
-
-```bash
-# From the batchalign3 repo root
-uv sync --group dev --extra hk          # all HK engines
-uv sync --group dev --extra hk-tencent  # one engine family only
-```
-
-`uv sync` is declarative: a later sync only includes the extras named on that
-command. If you need multiple HK engines in the same repo venv, include all of
-them together (for example `--extra hk`, or the full set of specific extras)
-rather than assuming extras accumulate across separate `uv sync` runs.
-
-The core `batchalign3` package includes the Cantonese text normalization engine
-(implemented in Rust) regardless of which extras are installed. Only the
-provider SDKs (Tencent SDK, Aliyun NLS, FunASR, pycantonese) are optional.
+For a source checkout, `make sync` provisions the same built-in engine surface.
+No separate HK-specific extras are required.
 
 ## Usage
 

@@ -14,18 +14,21 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::oneshot;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::WorkerPid;
 use crate::worker::error::WorkerError;
 use crate::worker::handle::{WorkerConfig, WorkerHandle};
+
+use super::lock_recovered;
 
 /// A GPU worker that supports concurrent V2 request dispatch.
 ///
@@ -33,6 +36,10 @@ use crate::worker::handle::{WorkerConfig, WorkerHandle};
 /// up a background response router. The worker process itself runs Python's
 /// `_serve_stdio_concurrent()` which dispatches requests to a thread pool.
 pub(super) struct SharedGpuWorker {
+    /// Owned child process handle. Unlike the TCP shared worker, the stdio
+    /// variant is the lifecycle owner and must supervise shutdown/kill.
+    child: tokio::sync::Mutex<Option<Child>>,
+
     /// Serialized writes to worker stdin. Multiple async tasks may send
     /// requests concurrently; the mutex ensures JSON lines don't interleave.
     stdin: tokio::sync::Mutex<ChildStdin>,
@@ -55,6 +62,10 @@ pub(super) struct SharedGpuWorker {
 
     /// Worker configuration (for logs and restarts).
     config: WorkerConfig,
+
+    /// Prevents new requests once shutdown starts and serializes lifecycle
+    /// teardown across explicit shutdown and Drop.
+    shutdown_started: AtomicBool,
 }
 
 /// Non-V2 responses routed via the control channel.
@@ -82,6 +93,7 @@ impl SharedGpuWorker {
         let parts = handle.into_parts();
 
         let stdin = tokio::sync::Mutex::new(parts.stdin);
+        let child = tokio::sync::Mutex::new(Some(parts.child));
         let pending = Arc::new(std::sync::Mutex::new(HashMap::<
             String,
             oneshot::Sender<ExecuteResponseV2>,
@@ -99,12 +111,14 @@ impl SharedGpuWorker {
         });
 
         Self {
+            child,
             stdin,
             pending,
             control,
             reader_task,
             pid,
             config,
+            shutdown_started: AtomicBool::new(false),
         }
     }
 
@@ -116,13 +130,17 @@ impl SharedGpuWorker {
         &self,
         request: &ExecuteRequestV2,
     ) -> Result<ExecuteResponseV2, WorkerError> {
+        if self.shutdown_started.load(Ordering::Acquire) {
+            return Err(WorkerError::Protocol("GPU worker is shutting down".into()));
+        }
+
         let request_id = request.request_id.to_string();
         let (tx, rx) = oneshot::channel();
 
         // Register the pending response channel before writing the request,
         // so the reader task can route the response as soon as it arrives.
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = super::lock_recovered(&self.pending);
             pending.insert(request_id.clone(), tx);
         }
 
@@ -138,11 +156,11 @@ impl SharedGpuWorker {
             line.push('\n');
             if let Err(e) = stdin.write_all(line.as_bytes()).await {
                 // Remove the pending entry on write failure.
-                self.pending.lock().unwrap().remove(&request_id);
+                super::lock_recovered(&self.pending).remove(&request_id);
                 return Err(e.into());
             }
             if let Err(e) = stdin.flush().await {
-                self.pending.lock().unwrap().remove(&request_id);
+                super::lock_recovered(&self.pending).remove(&request_id);
                 return Err(e.into());
             }
         }
@@ -163,7 +181,7 @@ impl SharedGpuWorker {
             }
             Err(_) => {
                 // Timeout — remove the pending entry.
-                self.pending.lock().unwrap().remove(&request_id);
+                super::lock_recovered(&self.pending).remove(&request_id);
                 Err(WorkerError::Protocol(format!(
                     "timeout ({timeout_s}s) waiting for GPU execute_v2 response (request_id={request_id})"
                 )))
@@ -176,6 +194,12 @@ impl SharedGpuWorker {
     pub(super) async fn health_check(
         &self,
     ) -> Result<crate::worker::WorkerHealthResponse, WorkerError> {
+        if self.shutdown_started.load(Ordering::Acquire) {
+            return Err(WorkerError::HealthCheckFailed(
+                "GPU worker is shutting down".into(),
+            ));
+        }
+
         let (tx, rx) = oneshot::channel();
         {
             let mut ctrl = self.control.lock().await;
@@ -192,10 +216,9 @@ impl SharedGpuWorker {
 
         match tokio::time::timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(WorkerControlResponse::Health(response))) => {
-                if response.status != "ok" {
+                if !response.status.is_ok() {
                     return Err(WorkerError::HealthCheckFailed(format!(
-                        "status={}",
-                        response.status
+                        "status={}", response.status
                     )));
                 }
                 Ok(response)
@@ -217,26 +240,78 @@ impl SharedGpuWorker {
 
     /// Gracefully shut down the GPU worker.
     pub(super) async fn shutdown(&self) {
-        // Layer 3: remove PID file before shutting down.
-        super::reaper::remove_worker_pid(self.pid.0);
-
-        // Send shutdown request.
+        if self
+            .shutdown_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
         {
-            let mut stdin = self.stdin.lock().await;
-            let _ = stdin.write_all(b"{\"op\":\"shutdown\"}\n").await;
-            let _ = stdin.flush().await;
+            return;
         }
 
-        // Abort the reader task — it will exit when stdout closes.
-        self.reader_task.abort();
+        info!(
+            target = %self.config.profile.label(),
+            pid = %self.pid,
+            "Shutting down shared GPU worker"
+        );
 
-        // Fail all pending requests.
-        {
-            let mut pending = self.pending.lock().unwrap();
-            for (_, tx) in pending.drain() {
-                drop(tx); // Receiver will get RecvError
+        let shutdown_ack = {
+            let (tx, rx) = oneshot::channel();
+            let mut ctrl = self.control.lock().await;
+            if ctrl.is_some() {
+                warn!(
+                    pid = %self.pid,
+                    "Overriding in-flight GPU worker control request during shutdown"
+                );
+            }
+            *ctrl = Some(tx);
+            rx
+        };
+
+        let wrote_shutdown = {
+            let mut stdin = self.stdin.lock().await;
+            match stdin.write_all(b"{\"op\":\"shutdown\"}\n").await {
+                Ok(()) => match stdin.flush().await {
+                    Ok(()) => true,
+                    Err(error) => {
+                        warn!(
+                            pid = %self.pid,
+                            error = %error,
+                            "Failed to flush shared GPU shutdown request"
+                        );
+                        false
+                    }
+                },
+                Err(error) => {
+                    warn!(
+                        pid = %self.pid,
+                        error = %error,
+                        "Failed to write shared GPU shutdown request"
+                    );
+                    false
+                }
+            }
+        };
+
+        if wrote_shutdown {
+            match tokio::time::timeout(Duration::from_secs(2), shutdown_ack).await {
+                Ok(Ok(WorkerControlResponse::Shutdown)) => {}
+                Ok(Ok(other)) => {
+                    warn!(
+                        pid = %self.pid,
+                        response = ?other,
+                        "Shared GPU worker returned unexpected shutdown response"
+                    );
+                }
+                Ok(Err(_)) => {
+                    debug!(pid = %self.pid, "Shared GPU shutdown ack channel closed");
+                }
+                Err(_) => {
+                    debug!(pid = %self.pid, "Timed out waiting for shared GPU shutdown ack");
+                }
             }
         }
+
+        self.finish_shutdown().await;
     }
 
     /// The worker process ID.
@@ -251,7 +326,7 @@ impl SharedGpuWorker {
 
     /// The worker's language code.
     pub(super) fn lang(&self) -> &str {
-        &self.config.lang
+        self.config.lang.as_worker_arg()
     }
 
     /// Background reader loop that routes responses from worker stdout.
@@ -278,7 +353,7 @@ impl SharedGpuWorker {
             match reader.read_line(&mut line).await {
                 Ok(0) => {
                     debug!(pid = %pid, "GPU worker stream closed (EOF)");
-                    let mut pending = pending.lock().unwrap();
+                    let mut pending = lock_recovered(&pending);
                     for (id, tx) in pending.drain() {
                         debug!(pid = %pid, request_id = %id, "Failing pending request (worker stream closed)");
                         drop(tx);
@@ -313,7 +388,7 @@ impl SharedGpuWorker {
                             ) {
                                 Ok(envelope) => {
                                     let request_id = envelope.response.request_id.to_string();
-                                    let mut pending = pending.lock().unwrap();
+                                    let mut pending = lock_recovered(&pending);
                                     if let Some(tx) = pending.remove(&request_id) {
                                         let _ = tx.send(envelope.response);
                                     } else {
@@ -387,6 +462,85 @@ impl SharedGpuWorker {
                     break;
                 }
             }
+        }
+    }
+
+    async fn finish_shutdown(&self) {
+        // Layer 3: remove PID file before killing.
+        super::reaper::remove_worker_pid(self.pid.0);
+
+        let mut child = {
+            let mut child_slot = self.child.lock().await;
+            child_slot.take()
+        };
+
+        if let Some(mut child) = child.take() {
+            #[cfg(unix)]
+            {
+                let _ = child.id().map(|pid| {
+                    // SAFETY: the worker was spawned as its own process group.
+                    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) };
+                });
+            }
+
+            match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(Ok(status)) => {
+                    info!(pid = %self.pid, ?status, "Shared GPU worker exited gracefully");
+                }
+                Ok(Err(error)) => {
+                    warn!(pid = %self.pid, error = %error, "Error waiting for shared GPU worker");
+                }
+                Err(_) => {
+                    warn!(
+                        pid = %self.pid,
+                        "Shared GPU worker didn't exit in 5s, killing process group"
+                    );
+                    #[cfg(unix)]
+                    {
+                        let _ = child.id().map(|pid| {
+                            // SAFETY: the worker was spawned as its own process group.
+                            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+                        });
+                    }
+                    let _ = child.kill().await;
+                }
+            }
+        }
+
+        self.reader_task.abort();
+        self.fail_pending_requests();
+        let mut ctrl = self.control.lock().await;
+        ctrl.take();
+    }
+
+    fn fail_pending_requests(&self) {
+        let mut pending = super::lock_recovered(&self.pending);
+        for (_, tx) in pending.drain() {
+            drop(tx);
+        }
+    }
+}
+
+impl Drop for SharedGpuWorker {
+    fn drop(&mut self) {
+        self.shutdown_started.store(true, Ordering::Release);
+        super::reaper::remove_worker_pid(self.pid.0);
+        self.reader_task.abort();
+        self.fail_pending_requests();
+
+        if let Ok(mut child_slot) = self.child.try_lock()
+            && let Some(child) = child_slot.as_mut()
+        {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = child.id() {
+                    // SAFETY: the worker was spawned as its own process group.
+                    unsafe {
+                        libc::killpg(pid as libc::pid_t, libc::SIGTERM);
+                    }
+                }
+            }
+            let _ = child.start_kill();
         }
     }
 }
@@ -494,7 +648,7 @@ impl SharedGpuTcpWorker {
         let (tx, rx) = oneshot::channel();
 
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = super::lock_recovered(&self.pending);
             pending.insert(request_id.clone(), tx);
         }
 
@@ -508,11 +662,11 @@ impl SharedGpuTcpWorker {
                 .map_err(|e| WorkerError::Protocol(format!("failed to encode request: {e}")))?;
             line.push('\n');
             if let Err(e) = writer.write_all(line.as_bytes()).await {
-                self.pending.lock().unwrap().remove(&request_id);
+                super::lock_recovered(&self.pending).remove(&request_id);
                 return Err(e.into());
             }
             if let Err(e) = writer.flush().await {
-                self.pending.lock().unwrap().remove(&request_id);
+                super::lock_recovered(&self.pending).remove(&request_id);
                 return Err(e.into());
             }
         }
@@ -526,7 +680,7 @@ impl SharedGpuTcpWorker {
                 "TCP GPU worker response channel closed (worker may have exited)".into(),
             )),
             Err(_) => {
-                self.pending.lock().unwrap().remove(&request_id);
+                super::lock_recovered(&self.pending).remove(&request_id);
                 Err(WorkerError::Protocol(format!(
                     "timeout ({timeout_s}s) waiting for TCP GPU execute_v2 response (request_id={request_id})"
                 )))
@@ -543,7 +697,7 @@ impl SharedGpuTcpWorker {
         }
         self.reader_task.abort();
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = super::lock_recovered(&self.pending);
             for (_, tx) in pending.drain() {
                 drop(tx);
             }

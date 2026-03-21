@@ -1,26 +1,31 @@
 # Command Lifecycles
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last modified:** 2026-03-21 07:16 EDT
 
 End-to-end sequence diagrams showing how jobs flow through the system,
-from CLI invocation to output files. Every batchalign command follows one
-of four **dispatch shapes** — one diagram per shape covers the full
-architecture. For per-command option-driven flowcharts, see
-[Command Flowcharts](command-flowcharts.md).
+from CLI invocation to output files. Every batchalign command now fits one
+of the explicit **workflow families** surfaced in the new contributor-facing
+architecture: per-file transform, cross-file batch transform, reference
+projection, composite workflow, or media analysis. For per-command
+option-driven flowcharts, see [Command Flowcharts](command-flowcharts.md).
 
-## Dispatch Shapes Overview
+Contributor rule of thumb: if you are adding new command semantics, start in
+`crates/batchalign-app/src/workflow/`. `runner/` owns lifecycle and queueing;
+`dispatch/` should remain thin.
 
-| Dispatch Shape | Commands | Parallelism | Key Trait |
-|----------------|----------|-------------|-----------|
-| **Batched FA Infer** | `align` | Concurrent files (semaphore-bounded by `num_workers`) | Per-file, audio-aware; groups utterances into time windows, caches per-group |
-| **Batched Text Infer** | `morphotag`, `utseg`, `translate`, `coref`, `compare` | Cross-file batching (all utterances pooled into one GPU batch) | Single batched `execute_v2` call with one prepared-text artifact; maximizes model batch efficiency |
-| **Transcribe Infer** | `transcribe`, `transcribe_s` | Concurrent files (semaphore-bounded by `num_workers`) | Creates CHAT from scratch; ASR → optional speaker diarization → post-processing → CHAT assembly |
-| **Benchmark Infer** | `benchmark` | Concurrent files (semaphore-bounded by `num_workers`) | Composes Rust transcribe + compare around one ASR worker capability |
-| **Media Analysis V2** | `opensmile`, `avqi` | Concurrent files (semaphore-bounded by `num_workers`) | Rust prepares audio, sends typed `execute_v2` requests, Python returns raw analysis payloads |
+## Workflow Families Overview
 
-All five shapes are server-side orchestrated or Rust-owned at the request
-boundary.
+| Workflow Family | Commands | Parallelism | Key Trait |
+|------------------|----------|-------------|-----------|
+| **Per-file transform** | `align`, `transcribe`, `transcribe_s` | Concurrent files (semaphore-bounded by `num_workers`) | One file in, one primary output out |
+| **Cross-file batch transform** | `morphotag`, `utseg`, `translate`, `coref` | Cross-file batching (all utterances pooled into one GPU batch) | One prepared-text batch per task; maximizes model batch efficiency |
+| **Reference projection** | `compare` | Concurrent files, but with two primary CHAT inputs per file | Gold-scaffolded compare bundle plus materializers |
+| **Composite workflow** | `benchmark` | Concurrent files (semaphore-bounded by `num_workers`) | Transcribe first, then compare via typed workflow composition |
+| **Media analysis V2** | `opensmile`, `avqi` | Concurrent files (semaphore-bounded by `num_workers`) | Rust prepares audio, sends typed `execute_v2` requests, Python returns raw analysis payloads |
+
+All workflow families are server-side orchestrated or Rust-owned at the
+request boundary.
 
 ## Parallelism Model
 
@@ -50,15 +55,19 @@ operator-facing display string.
 Batched text commands (`morphotag`, `utseg`, `translate`, `coref`) take a
 different approach: they **pool all utterances from all files** into a single
 batched `execute_v2` call backed by one prepared-text artifact. The one worker
-call handles all files at once while keeping the model batch intact.
+call handles all files at once while keeping the model batch intact. `compare`
+does not use this pooled-text shape any more; it is its own reference
+projection workflow because it needs both a main transcript and a gold
+companion per file. `benchmark` is a composite workflow that composes
+transcribe and compare rather than inventing its own third orchestration style.
 
 | Shape | File-level parallelism | Within-file parallelism |
 |-------|------------------------|-------------------------|
-| FA Infer | Supervised tasks + `Semaphore(N)` | Sequential groups within each file |
-| Transcribe | Supervised tasks + `Semaphore(N)` | Single worker call per file |
-| Benchmark Infer | Supervised tasks + `Semaphore(N)` | Single ASR worker call plus Rust compare per file |
-| Per-File Process | Supervised tasks + `Semaphore(N)` | Single worker call per file |
-| Batched Text | N/A (single batch) | One GPU batch call covers all files |
+| Per-file transform | Supervised tasks + `Semaphore(N)` | Single worker call or Rust composition per file |
+| Reference projection | Supervised tasks + `Semaphore(N)` | Main+gold comparison bundle per file |
+| Composite workflow | Supervised tasks + `Semaphore(N)` | Transcribe then compare per file |
+| Cross-file batch transform | N/A (single batch) | One GPU batch call covers all files |
+| Media analysis V2 | Supervised tasks + `Semaphore(N)` | Single worker call per file |
 
 ---
 
@@ -259,9 +268,10 @@ sequenceDiagram
    Stanza batch, and returns typed raw UD annotations.
 5. Responses are **repartitioned** back to their source files using the tracked
    start indices, then injected into each file's AST.
-6. This same shape handles `utseg`, `translate`, `coref`, and `compare`.
+6. This same cross-file batch shape handles `utseg`, `translate`, and `coref`.
    The only differences are: which tiers are injected, what the cache key
-   includes, and which Stanza/translation pipeline runs.
+   includes, and which Stanza/translation pipeline runs. `compare` is separate
+   now because it is a reference-projection workflow with a main/gold pair.
 
 ---
 

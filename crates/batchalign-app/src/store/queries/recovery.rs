@@ -6,7 +6,7 @@ use crate::api::{
     ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::super::job::{
     Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity, JobLeaseState,
@@ -30,6 +30,89 @@ struct RecoveredJobPersistence {
     requeued_files: Vec<String>,
 }
 
+fn append_recovery_note(existing: Option<String>, note: impl Into<String>) -> Option<String> {
+    let note = format!("[recovery] {}", note.into());
+    match existing {
+        Some(existing) if existing.trim().is_empty() => Some(note),
+        Some(existing) => Some(format!("{existing}\n{note}")),
+        None => Some(note),
+    }
+}
+
+fn recover_job_status(job_id: &str, raw_status: &str) -> (JobStatus, Option<String>) {
+    match raw_status.parse() {
+        Ok(status) => (status, None),
+        Err(error) => {
+            warn!(
+                job_id,
+                raw_status,
+                %error,
+                "Invalid persisted job status during crash recovery",
+            );
+            (
+                JobStatus::Failed,
+                Some(format!(
+                    "invalid persisted job status '{raw_status}' was coerced to 'failed'"
+                )),
+            )
+        }
+    }
+}
+
+fn recover_file_status(
+    job_id: &str,
+    filename: &str,
+    raw_status: &str,
+) -> (FileStatusKind, Option<String>) {
+    match raw_status.parse() {
+        Ok(status) => (status, None),
+        Err(error) => {
+            warn!(
+                job_id,
+                filename,
+                raw_status,
+                %error,
+                "Invalid persisted file status during crash recovery",
+            );
+            (
+                FileStatusKind::Error,
+                Some(format!(
+                    "invalid persisted file status '{raw_status}' was coerced to 'error'"
+                )),
+            )
+        }
+    }
+}
+
+fn recover_failure_category(
+    job_id: &str,
+    filename: &str,
+    raw_category: Option<&str>,
+) -> (Option<crate::scheduling::FailureCategory>, Option<String>) {
+    let Some(raw_category) = raw_category else {
+        return (None, None);
+    };
+
+    match raw_category.parse() {
+        Ok(category) => (Some(category), None),
+        Err(error) => {
+            warn!(
+                job_id,
+                filename,
+                raw_category,
+                %error,
+                "Invalid persisted failure category during crash recovery",
+            );
+            (
+                None,
+                Some(format!(
+                    "invalid persisted error_category '{raw_category}' was ignored"
+                )),
+            )
+        }
+    }
+}
+
 impl JobStore {
     /// Load jobs from DB into memory (crash recovery).
     pub async fn load_from_db(&self) -> Result<usize, ServerError> {
@@ -51,22 +134,33 @@ impl JobStore {
                         continue;
                     }
 
-                    let status: JobStatus = row.status.parse().unwrap_or(JobStatus::Failed);
+                    let (status, job_status_note) = recover_job_status(&row.job_id, &row.status);
 
                     let mut file_statuses = HashMap::new();
+                    let mut results: Vec<FileResultEntry> = Vec::new();
                     for fs_row in &row.file_statuses {
-                        let fs_status: FileStatusKind =
-                            fs_row.status.parse().unwrap_or(FileStatusKind::Error);
+                        let (fs_status, status_note) =
+                            recover_file_status(&row.job_id, &fs_row.filename, &fs_row.status);
+                        let (error_category, category_note) = recover_failure_category(
+                            &row.job_id,
+                            &fs_row.filename,
+                            fs_row.error_category.as_deref(),
+                        );
+                        let mut file_error = fs_row.error.clone();
+                        if let Some(note) = status_note {
+                            file_error = append_recovery_note(file_error, note);
+                        }
+                        if let Some(note) = category_note {
+                            file_error = append_recovery_note(file_error, note);
+                        }
+
                         file_statuses.insert(
                             fs_row.filename.clone(),
                             FileStatus {
                                 filename: FileName::from(fs_row.filename.clone()),
                                 status: fs_status,
-                                error: fs_row.error.clone(),
-                                error_category: fs_row
-                                    .error_category
-                                    .as_deref()
-                                    .and_then(|raw| raw.parse().ok()),
+                                error: file_error.clone(),
+                                error_category,
                                 error_codes: None,
                                 error_line: None,
                                 bug_report_id: fs_row.bug_report_id.clone(),
@@ -79,17 +173,7 @@ impl JobStore {
                                 progress_stage: None,
                             },
                         );
-                    }
 
-                    let completed_files = file_statuses
-                        .values()
-                        .filter(|file_status| file_status.status.is_terminal())
-                        .count() as i64;
-
-                    let mut results: Vec<FileResultEntry> = Vec::new();
-                    for fs_row in &row.file_statuses {
-                        let fs_status: FileStatusKind =
-                            fs_row.status.parse().unwrap_or(FileStatusKind::Error);
                         if fs_status.is_terminal() {
                             results.push(FileResultEntry {
                                 filename: FileName::from(fs_row.filename.clone()),
@@ -98,12 +182,21 @@ impl JobStore {
                                     "text" => ContentType::Text,
                                     _ => ContentType::Chat,
                                 },
-                                error: fs_row.error.clone(),
+                                error: file_error,
                             });
                         }
                     }
 
+                    let completed_files = file_statuses
+                        .values()
+                        .filter(|file_status| file_status.status.is_terminal())
+                        .count() as i64;
+
                     let job_id_newtype = JobId::from(row.job_id.clone());
+                    let mut job_error = row.error.clone();
+                    if let Some(note) = job_status_note {
+                        job_error = append_recovery_note(job_error, note);
+                    }
                     let mut job = Job {
                         identity: JobIdentity {
                             job_id: job_id_newtype.clone(),
@@ -141,7 +234,7 @@ impl JobStore {
                             status,
                             file_statuses,
                             results,
-                            error: row.error,
+                            error: job_error,
                             completed_files,
                         },
                         schedule: JobScheduleState {
@@ -389,5 +482,75 @@ mod tests {
         assert_eq!(rows[0].status, "completed");
         assert!(rows[0].lease_expires_at.is_none());
         assert!(rows[0].lease_heartbeat_at.is_none());
+    }
+
+    /// Recovery preserves invalid persisted job status evidence instead of silently dropping it.
+    #[tokio::test]
+    async fn load_from_db_preserves_invalid_job_status_evidence() {
+        let (store, db, _dir) = test_store_with_db().await;
+        db.insert_job(&make_job_record(
+            "job-bad-status",
+            "mystery_status",
+            vec!["a.cha".into()],
+        ))
+        .await
+        .unwrap();
+
+        store.load_from_db().await.unwrap();
+
+        let info = store.get(&JobId::from("job-bad-status")).await.unwrap();
+        assert_eq!(info.status, JobStatus::Failed);
+        let error = info
+            .error
+            .expect("recovery should preserve invalid status evidence");
+        assert!(error.contains("invalid persisted job status 'mystery_status'"));
+    }
+
+    /// Recovery preserves invalid per-file persistence evidence instead of silently normalizing it.
+    #[tokio::test]
+    async fn load_from_db_preserves_invalid_file_persistence_evidence() {
+        let (store, db, _dir) = test_store_with_db().await;
+        db.insert_job(&make_job_record(
+            "job-bad-file-status",
+            "queued",
+            vec!["bad.cha".into()],
+        ))
+        .await
+        .unwrap();
+        db.update_file_status(
+            "job-bad-file-status",
+            "bad.cha",
+            "mystery_file_status",
+            Some("original failure"),
+            Some("mystery_category"),
+            None,
+            None,
+            Some(10.0),
+            Some(11.0),
+            None,
+        )
+        .await
+        .unwrap();
+
+        store.load_from_db().await.unwrap();
+
+        let info = store
+            .get(&JobId::from("job-bad-file-status"))
+            .await
+            .unwrap();
+        let file = info
+            .file_statuses
+            .iter()
+            .find(|file| file.filename.as_ref() == "bad.cha")
+            .expect("recovered file status");
+        assert_eq!(file.status, FileStatusKind::Error);
+        assert!(file.error_category.is_none());
+        let error = file
+            .error
+            .clone()
+            .expect("recovery should preserve invalid file persistence evidence");
+        assert!(error.contains("original failure"));
+        assert!(error.contains("invalid persisted file status 'mystery_file_status'"));
+        assert!(error.contains("invalid persisted error_category 'mystery_category'"));
     }
 }

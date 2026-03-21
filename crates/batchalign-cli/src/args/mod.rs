@@ -23,6 +23,7 @@ pub use commands::*;
 pub use global_opts::GlobalOpts;
 pub use options::*;
 
+use batchalign_app::api::ReleasedCommand;
 use clap::{Args, Parser, Subcommand};
 
 /// batchalign3 — process .cha and/or audio files.
@@ -117,16 +118,33 @@ pub enum Commands {
     Worker(WorkerArgs),
 }
 
+/// Stable processing-command metadata derived from parsed CLI args.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandProfile<'a> {
+    /// Typed released command sent to the server/runtime.
+    pub command: ReleasedCommand,
+    /// Primary language argument for this command.
+    pub lang: &'a str,
+    /// Requested speaker count for this command.
+    pub num_speakers: u32,
+    /// File extensions this command should discover.
+    pub extensions: &'static [&'static str],
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 impl CommonOpts {
-    /// Extract the command name, language, num_speakers, and file extensions
-    /// that this command operates on. Returns `(command, lang, num_speakers, extensions)`.
-    pub fn command_meta(cmd: &Commands) -> (&'static str, &str, u32, &'static [&'static str]) {
+    /// Extract the stable processing profile for one command.
+    pub fn command_profile(cmd: &Commands) -> CommandProfile<'_> {
         match cmd {
-            Commands::Align(_) => ("align", "eng", 1, &["cha"]),
+            Commands::Align(_) => CommandProfile {
+                command: ReleasedCommand::Align,
+                lang: "eng",
+                num_speakers: 1,
+                extensions: &["cha"],
+            },
             Commands::Transcribe(a) => {
                 let diarize = if a.diarize {
                     true
@@ -135,28 +153,66 @@ impl CommonOpts {
                 } else {
                     a.diarization == DiarizationMode::Enabled
                 };
-                let cmd = if diarize {
-                    "transcribe_s"
+                let command = if diarize {
+                    ReleasedCommand::TranscribeS
                 } else {
-                    "transcribe"
+                    ReleasedCommand::Transcribe
                 };
-                (cmd, &a.lang, a.num_speakers, &["mp3", "mp4", "wav"])
+                CommandProfile {
+                    command,
+                    lang: &a.lang,
+                    num_speakers: a.num_speakers,
+                    extensions: &["mp3", "mp4", "wav"],
+                }
             }
-            Commands::Translate(a) => {
-                ("translate", a.lang.as_deref().unwrap_or("eng"), 1, &["cha"])
-            }
-            Commands::Morphotag(a) => {
-                ("morphotag", a.lang.as_deref().unwrap_or("eng"), 1, &["cha"])
-            }
-            Commands::Coref(a) => ("coref", a.lang.as_deref().unwrap_or("eng"), 1, &["cha"]),
-            Commands::Compare(a) => ("compare", &a.lang, a.num_speakers, &["cha"]),
-            Commands::Utseg(a) => ("utseg", &a.lang, a.num_speakers, &["cha"]),
-            Commands::Benchmark(a) => {
-                let cmd = "benchmark";
-                (cmd, &a.lang, a.num_speakers, &["mp3", "mp4", "wav"])
-            }
-            Commands::Opensmile(a) => ("opensmile", &a.lang, 1, &["mp3", "mp4", "wav"]),
-            Commands::Avqi(a) => ("avqi", &a.lang, 1, &["mp3", "mp4", "wav"]),
+            Commands::Translate(a) => CommandProfile {
+                command: ReleasedCommand::Translate,
+                lang: a.lang.as_deref().unwrap_or("eng"),
+                num_speakers: 1,
+                extensions: &["cha"],
+            },
+            Commands::Morphotag(a) => CommandProfile {
+                command: ReleasedCommand::Morphotag,
+                lang: a.lang.as_deref().unwrap_or("eng"),
+                num_speakers: 1,
+                extensions: &["cha"],
+            },
+            Commands::Coref(a) => CommandProfile {
+                command: ReleasedCommand::Coref,
+                lang: a.lang.as_deref().unwrap_or("eng"),
+                num_speakers: 1,
+                extensions: &["cha"],
+            },
+            Commands::Compare(a) => CommandProfile {
+                command: ReleasedCommand::Compare,
+                lang: &a.lang,
+                num_speakers: a.num_speakers,
+                extensions: &["cha"],
+            },
+            Commands::Utseg(a) => CommandProfile {
+                command: ReleasedCommand::Utseg,
+                lang: &a.lang,
+                num_speakers: a.num_speakers,
+                extensions: &["cha"],
+            },
+            Commands::Benchmark(a) => CommandProfile {
+                command: ReleasedCommand::Benchmark,
+                lang: &a.lang,
+                num_speakers: a.num_speakers,
+                extensions: &["mp3", "mp4", "wav"],
+            },
+            Commands::Opensmile(a) => CommandProfile {
+                command: ReleasedCommand::Opensmile,
+                lang: &a.lang,
+                num_speakers: 1,
+                extensions: &["mp3", "mp4", "wav"],
+            },
+            Commands::Avqi(a) => CommandProfile {
+                command: ReleasedCommand::Avqi,
+                lang: &a.lang,
+                num_speakers: 1,
+                extensions: &["mp3", "mp4", "wav"],
+            },
             _ => unreachable!("not a processing command"),
         }
     }

@@ -43,6 +43,21 @@ pub struct PreparedWorkers {
     test_echo_mode: bool,
 }
 
+/// A command + language pair to pre-warm at server startup.
+///
+/// Replaces the anonymous `(String, String)` tuples that previously flowed
+/// from config resolution through `probe_workers` into `WorkerPool::warmup`.
+///
+/// Both fields are already validated at construction time so downstream
+/// consumers do not need to re-parse or handle invalid values.
+#[derive(Debug, Clone)]
+pub struct WarmupTarget {
+    /// Command name to warm (validated from config at construction).
+    pub command: crate::api::CommandName,
+    /// Language to warm the command for (validated from config at construction).
+    pub lang: crate::api::WorkerLanguage,
+}
+
 impl PreparedWorkers {
     /// Return the released command surface discovered during worker probing.
     pub fn capabilities(&self) -> &[String] {
@@ -105,10 +120,10 @@ pub async fn prepare_workers(
     config: &ServerConfig,
     pool_config: PoolConfig,
 ) -> Result<PreparedWorkers, error::ServerError> {
-    let (prepared, pairs) = probe_workers(config, pool_config).await?;
+    let (prepared, targets) = probe_workers(config, pool_config).await?;
 
-    if !pairs.is_empty() {
-        prepared.pool.warmup(&pairs).await;
+    if !targets.is_empty() {
+        prepared.pool.warmup(&targets).await;
     }
     prepared.pool.mark_warmup_complete();
 
@@ -125,13 +140,13 @@ pub async fn prepare_workers_background(
     config: &ServerConfig,
     pool_config: PoolConfig,
 ) -> Result<PreparedWorkers, error::ServerError> {
-    let (prepared, pairs) = probe_workers(config, pool_config).await?;
+    let (prepared, targets) = probe_workers(config, pool_config).await?;
 
-    if !pairs.is_empty() {
+    if !targets.is_empty() {
         prepared.pool.mark_warmup_started();
         let warmup_pool = prepared.pool.clone();
         tokio::spawn(async move {
-            warmup_pool.warmup(&pairs).await;
+            warmup_pool.warmup(&targets).await;
             warmup_pool.mark_warmup_complete();
             info!("Background warmup complete");
         });
@@ -148,7 +163,7 @@ pub async fn prepare_workers_background(
 async fn probe_workers(
     config: &ServerConfig,
     pool_config: PoolConfig,
-) -> Result<(PreparedWorkers, Vec<(String, String)>), error::ServerError> {
+) -> Result<(PreparedWorkers, Vec<WarmupTarget>), error::ServerError> {
     let test_echo_mode = pool_config.test_echo;
     let pool = Arc::new(WorkerPool::new(pool_config));
     pool.start_background_tasks();
@@ -175,16 +190,20 @@ async fn probe_workers(
     }
 
     let warmup_cmds = config.resolved_warmup_commands();
-    let pairs: Vec<(String, String)> = warmup_cmds
+    let default_lang = crate::api::WorkerLanguage::from(config.default_lang.clone());
+    let targets: Vec<WarmupTarget> = warmup_cmds
         .iter()
         .filter(|cmd| capabilities.contains(cmd))
-        .map(|cmd| (cmd.clone(), config.default_lang.to_string()))
+        .map(|cmd| WarmupTarget {
+            command: crate::api::CommandName::from(cmd.as_str()),
+            lang: default_lang.clone(),
+        })
         .collect();
 
-    if pairs.is_empty() {
+    if targets.is_empty() {
         info!("Worker warmup disabled or no warmable capabilities");
     } else {
-        info!(commands = ?pairs, "Warmup commands resolved");
+        info!(commands = ?targets, "Warmup commands resolved");
     }
 
     Ok((
@@ -195,7 +214,7 @@ async fn probe_workers(
             engine_versions,
             test_echo_mode,
         },
-        pairs,
+        targets,
     ))
 }
 
@@ -340,6 +359,10 @@ pub async fn serve(
 }
 
 /// Start serving with an explicit runtime layout for state-owned paths.
+///
+/// Writes a PID file on startup so that `daemon.rs::detect_manual_server()`
+/// can discover us, and removes it on exit (including after signal-driven
+/// shutdown). This is the single lifecycle owner for foreground servers.
 pub async fn serve_with_runtime(
     config: ServerConfig,
     pool_config: PoolConfig,
@@ -350,13 +373,23 @@ pub async fn serve_with_runtime(
     let port = config.port;
 
     let (router, state) =
-        create_app_with_runtime(config, pool_config, layout, None, None, build_hash).await?;
+        create_app_with_runtime(config, pool_config, layout.clone(), None, None, build_hash)
+            .await?;
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(error::ServerError::Io)?;
     info!(addr = %addr, "Server listening");
+
+    // Write PID file so daemon.rs can discover this foreground server.
+    // Best-effort: if the write fails (e.g. read-only filesystem), log
+    // and continue -- the server still works, just won't be auto-discovered.
+    let pid_path = layout.server_pid_path();
+    if let Err(error) = write_pid_file(&pid_path) {
+        warn!(path = %pid_path.display(), error = %error,
+            "Failed to write server PID file; daemon auto-discovery may not work");
+    }
 
     axum::serve(
         listener,
@@ -380,39 +413,66 @@ pub async fn serve_with_runtime(
         .runtime
         .shutdown(tokio::time::Duration::from_secs(15))
         .await;
-    if shutdown_summary.timed_out {
-        warn!(
-            remaining = shutdown_summary.remaining_jobs,
-            "Some job tasks did not finish in time"
-        );
-    } else if shutdown_summary.remaining_jobs > 0 {
-        info!(
-            remaining = shutdown_summary.remaining_jobs,
-            "Job runtime shut down with remaining tracked jobs"
-        );
+    match shutdown_summary {
+        Ok(shutdown_summary) => {
+            if shutdown_summary.timed_out {
+                warn!(
+                    remaining = shutdown_summary.remaining_jobs,
+                    "Some job tasks did not finish in time"
+                );
+            } else if shutdown_summary.remaining_jobs > 0 {
+                info!(
+                    remaining = shutdown_summary.remaining_jobs,
+                    "Job runtime shut down with remaining tracked jobs"
+                );
+            }
+        }
+        Err(error) => {
+            warn!(error = %error, "Runtime supervisor failed to report shutdown status");
+        }
     }
 
     // 3. Shut down the worker pool (gracefully shuts down all workers)
     state.workers.pool.shutdown().await;
+
+    // 4. Remove PID file so stale detection works on next startup.
+    remove_pid_file(&pid_path);
     info!("Shutdown complete");
 
     Ok(())
 }
 
 /// Wait for a shutdown signal (SIGINT or SIGTERM).
+///
+/// If signal handlers fail to install (rare, but possible in constrained
+/// environments like containers without a proper init), the server logs the
+/// failure and falls through to a pending future that never resolves --
+/// meaning the server stays up until the process is killed externally. This
+/// is safer than panicking the server on startup.
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install CTRL+C handler");
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(error) => {
+                warn!(error = %error, "Failed to install CTRL+C handler; \
+                    server will not respond to SIGINT");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                warn!(error = %error, "Failed to install SIGTERM handler; \
+                    server will not respond to SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -421,5 +481,32 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => info!("Received SIGINT, shutting down"),
         () = terminate => info!("Received SIGTERM, shutting down"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PID file helpers
+// ---------------------------------------------------------------------------
+
+/// Write the current process PID to a file (atomic via temp + rename).
+fn write_pid_file(path: &std::path::Path) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("pid.tmp");
+    std::fs::write(&tmp, std::process::id().to_string())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Remove a PID file. Best-effort: missing file is not an error.
+fn remove_pid_file(path: &std::path::Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => info!(path = %path.display(), "Removed server PID file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            warn!(path = %path.display(), error = %error,
+                "Failed to remove server PID file");
+        }
     }
 }

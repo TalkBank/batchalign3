@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use batchalign_app::ReleasedCommand;
 use batchalign_app::options::{
     AlignOptions, BenchmarkOptions, CommandOptions, CommonOptions, CompareOptions, CorefOptions,
     MorphotagOptions, OpensmileOptions, TranscribeOptions, TranslateOptions, UtrEngine,
@@ -14,18 +15,25 @@ use crate::args::{BenchArgs, BenchTarget, GlobalOpts};
 use crate::dispatch;
 use crate::error::CliError;
 
-fn metadata(target: BenchTarget) -> (&'static str, &'static str, u32, &'static [&'static str]) {
+fn metadata(
+    target: BenchTarget,
+) -> (ReleasedCommand, &'static str, u32, &'static [&'static str]) {
     match target {
-        BenchTarget::Align => ("align", "eng", 1, &["cha"]),
-        BenchTarget::Transcribe => ("transcribe", "eng", 1, &["wav", "mp3", "mp4"]),
-        BenchTarget::TranscribeS => ("transcribe_s", "eng", 1, &["wav", "mp3", "mp4"]),
-        BenchTarget::Morphotag => ("morphotag", "eng", 1, &["cha"]),
-        BenchTarget::Translate => ("translate", "eng", 1, &["cha"]),
-        BenchTarget::Utseg => ("utseg", "eng", 1, &["cha"]),
-        BenchTarget::Benchmark => ("benchmark", "eng", 1, &["wav", "mp3", "mp4"]),
-        BenchTarget::Opensmile => ("opensmile", "eng", 1, &["wav", "mp3", "mp4"]),
-        BenchTarget::Coref => ("coref", "eng", 1, &["cha"]),
-        BenchTarget::Compare => ("compare", "eng", 1, &["cha"]),
+        BenchTarget::Align => (ReleasedCommand::Align, "eng", 1, &["cha"]),
+        BenchTarget::Transcribe => (ReleasedCommand::Transcribe, "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::TranscribeS => (
+            ReleasedCommand::TranscribeS,
+            "eng",
+            1,
+            &["wav", "mp3", "mp4"],
+        ),
+        BenchTarget::Morphotag => (ReleasedCommand::Morphotag, "eng", 1, &["cha"]),
+        BenchTarget::Translate => (ReleasedCommand::Translate, "eng", 1, &["cha"]),
+        BenchTarget::Utseg => (ReleasedCommand::Utseg, "eng", 1, &["cha"]),
+        BenchTarget::Benchmark => (ReleasedCommand::Benchmark, "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::Opensmile => (ReleasedCommand::Opensmile, "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::Coref => (ReleasedCommand::Coref, "eng", 1, &["cha"]),
+        BenchTarget::Compare => (ReleasedCommand::Compare, "eng", 1, &["cha"]),
     }
 }
 
@@ -127,25 +135,25 @@ pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> 
     for idx in 0..args.runs {
         let start = Instant::now();
 
-        dispatch::dispatch(
+        dispatch::dispatch(dispatch::DispatchRequest {
             command,
             lang,
             num_speakers,
             extensions,
-            global.server.as_deref(),
-            &inputs,
-            Some(&args.out_dir),
-            Some(build_options(global, args)),
-            None,
-            None,
-            None,
-            false,
-            global.open_dashboard && !global.no_open_dashboard,
-            global.force_cpu,
-            None,
-            global.workers,
-            global.timeout,
-        )
+            server_arg: global.server.as_deref(),
+            inputs: &inputs,
+            out_dir: Some(&args.out_dir),
+            options: Some(build_options(global, args)),
+            bank: None,
+            subdir: None,
+            lexicon: None,
+            use_tui: false,
+            open_dashboard: global.open_dashboard && !global.no_open_dashboard,
+            force_cpu: global.force_cpu,
+            before: None,
+            workers: global.workers,
+            timeout: global.timeout,
+        })
         .await?;
 
         let elapsed = start.elapsed().as_secs_f64();
@@ -157,7 +165,7 @@ pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> 
             json!({
                 "run": idx + 1,
                 "elapsed_s": (elapsed * 100.0).round() / 100.0,
-                "command": command,
+                "command": command.as_wire_name(),
                 "dataset": dataset,
                 "dispatch_mode": if global.server.is_some() { "server" } else { "auto" },
             })
@@ -214,7 +222,7 @@ mod tests {
     #[test]
     fn metadata_align() {
         let (cmd, lang, n, exts) = metadata(BenchTarget::Align);
-        assert_eq!(cmd, "align");
+        assert_eq!(cmd, ReleasedCommand::Align);
         assert_eq!(lang, "eng");
         assert_eq!(n, 1);
         assert_eq!(exts, &["cha"]);

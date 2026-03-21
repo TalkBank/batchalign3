@@ -1,6 +1,6 @@
 //! Read/load operations on the `jobs`, `file_statuses`, and `attempts` tables.
 
-use crate::api::{CommandName, JobId, NodeId, UnixTimestamp};
+use crate::api::{JobId, NodeId, UnixTimestamp};
 use crate::options::CommandOptions;
 use crate::scheduling::{AttemptId, AttemptRecord, FailureCategory, WorkUnitId};
 use crate::worker::WorkerPid;
@@ -40,17 +40,16 @@ impl JobDB {
             let output_paths_json: String = row.try_get("output_paths")?;
             let paths_mode_int: i32 = row.try_get("paths_mode")?;
 
+            let job_id: String = row.try_get("job_id")?;
             let command: String = row.try_get("command")?;
-
-            // Deserialize options as CommandOptions JSON.
-            let options: CommandOptions =
-                serde_json::from_str(&options_json).unwrap_or_else(|_| {
-                    // Fallback: construct a default for this command
-                    default_options_for_command(&CommandName::from(command.as_str()))
-                });
+            let options: CommandOptions = deserialize_job_field(&job_id, "options", &options_json)?;
+            let filenames = deserialize_job_field(&job_id, "filenames", &filenames_json)?;
+            let has_chat = deserialize_job_field(&job_id, "has_chat", &has_chat_json)?;
+            let source_paths = deserialize_job_field(&job_id, "source_paths", &source_paths_json)?;
+            let output_paths = deserialize_job_field(&job_id, "output_paths", &output_paths_json)?;
 
             let job = JobRow {
-                job_id: row.try_get("job_id")?,
+                job_id,
                 correlation_id: row.try_get("correlation_id")?,
                 command,
                 lang: row.try_get("lang")?,
@@ -58,8 +57,8 @@ impl JobDB {
                 status: row.try_get("status")?,
                 error: row.try_get("error")?,
                 staging_dir: row.try_get("staging_dir")?,
-                filenames: serde_json::from_str(&filenames_json).unwrap_or_default(),
-                has_chat: serde_json::from_str(&has_chat_json).unwrap_or_default(),
+                filenames,
+                has_chat,
                 options,
                 media_mapping: row.try_get("media_mapping")?,
                 media_subdir: row.try_get("media_subdir")?,
@@ -74,8 +73,8 @@ impl JobDB {
                 lease_expires_at: row.try_get("lease_expires_at")?,
                 lease_heartbeat_at: row.try_get("lease_heartbeat_at")?,
                 paths_mode: paths_mode_int != 0,
-                source_paths: serde_json::from_str(&source_paths_json).unwrap_or_default(),
-                output_paths: serde_json::from_str(&output_paths_json).unwrap_or_default(),
+                source_paths,
+                output_paths,
                 file_statuses: Vec::new(),
             };
             jobs.push(job);
@@ -209,60 +208,14 @@ impl TryFrom<AttemptRow> for AttemptRecord {
     }
 }
 
-/// Construct a default `CommandOptions` for a given command name.
-/// Used as a fallback when the DB `options` column cannot be deserialized
-/// (e.g. corrupted row).
-fn default_options_for_command(command: &CommandName) -> CommandOptions {
-    use crate::options::*;
-    match command.as_ref() {
-        "align" => CommandOptions::Align(AlignOptions::default()),
-        "transcribe" => CommandOptions::Transcribe(TranscribeOptions {
-            common: CommonOptions::default(),
-            asr_engine: "rev".into(),
-            diarize: false,
-            wor: false.into(),
-            merge_abbrev: false.into(),
-            batch_size: 8,
-        }),
-        "transcribe_s" => CommandOptions::TranscribeS(TranscribeOptions {
-            common: CommonOptions::default(),
-            asr_engine: "rev".into(),
-            diarize: true,
-            wor: false.into(),
-            merge_abbrev: false.into(),
-            batch_size: 8,
-        }),
-        "translate" => CommandOptions::Translate(TranslateOptions {
-            common: CommonOptions::default(),
-            merge_abbrev: false.into(),
-        }),
-        "coref" => CommandOptions::Coref(CorefOptions {
-            common: CommonOptions::default(),
-            merge_abbrev: false.into(),
-        }),
-        "utseg" => CommandOptions::Utseg(UtsegOptions {
-            common: CommonOptions::default(),
-            merge_abbrev: false.into(),
-        }),
-        "benchmark" => CommandOptions::Benchmark(BenchmarkOptions {
-            common: CommonOptions::default(),
-            asr_engine: "rev".into(),
-            wor: false.into(),
-            merge_abbrev: false.into(),
-        }),
-        "opensmile" => CommandOptions::Opensmile(OpensmileOptions {
-            common: CommonOptions::default(),
-            feature_set: "eGeMAPSv02".into(),
-        }),
-        "avqi" => CommandOptions::Avqi(AvqiOptions {
-            common: CommonOptions::default(),
-        }),
-        // Unknown command — use morphotag as a safe default
-        _ => CommandOptions::Morphotag(MorphotagOptions {
-            common: CommonOptions::default(),
-            retokenize: false,
-            skipmultilang: false,
-            merge_abbrev: false.into(),
-        }),
-    }
+fn deserialize_job_field<T: serde::de::DeserializeOwned>(
+    job_id: &str,
+    field_name: &str,
+    raw_json: &str,
+) -> Result<T, ServerError> {
+    serde_json::from_str(raw_json).map_err(|error| {
+        ServerError::Persistence(format!(
+            "failed to deserialize jobs.{field_name} for job {job_id}: {error}; raw={raw_json}"
+        ))
+    })
 }

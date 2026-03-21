@@ -86,7 +86,7 @@ pub struct JobSubmission {
 }
 
 pub(crate) fn default_lang() -> LanguageSpec {
-    LanguageSpec::Resolved(LanguageCode3::from("eng"))
+    LanguageSpec::Resolved(LanguageCode3::eng())
 }
 
 pub(crate) fn default_num_speakers() -> NumSpeakers {
@@ -271,7 +271,7 @@ mod tests {
     fn morphotag_submission(lang: &str) -> JobSubmission {
         JobSubmission {
             command: CommandName::from("morphotag"),
-            lang: LanguageSpec::Resolved(LanguageCode3::from(lang)),
+            lang: LanguageSpec::Resolved(LanguageCode3::try_new(lang).expect("test lang")),
             num_speakers: NumSpeakers(1),
             files: vec![],
             media_files: vec![],
@@ -296,7 +296,7 @@ mod tests {
     fn utseg_submission(lang: &str) -> JobSubmission {
         JobSubmission {
             command: CommandName::from("utseg"),
-            lang: LanguageSpec::Resolved(LanguageCode3::from(lang)),
+            lang: LanguageSpec::Resolved(LanguageCode3::try_new(lang).expect("test lang")),
             num_speakers: NumSpeakers(1),
             files: vec![],
             media_files: vec![],

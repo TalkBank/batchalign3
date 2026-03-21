@@ -10,7 +10,7 @@ mod common;
 
 use batchalign_app::api::{
     FilePayload, FileResult, HealthResponse, HealthStatus, JobInfo, JobListItem, JobResultResponse,
-    JobStatus, JobSubmission, MemoryMb, NumSpeakers,
+    JobStatus, JobSubmission, LanguageCode3, LanguageSpec, MemoryMb, NumSpeakers,
 };
 use batchalign_app::config::ServerConfig;
 use batchalign_app::create_app;
@@ -157,7 +157,7 @@ async fn start_test_server_with_config(
 fn test_submission(files: Vec<FilePayload>) -> JobSubmission {
     JobSubmission {
         command: "transcribe".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
@@ -225,9 +225,7 @@ async fn submit_and_get_job() {
     assert_eq!(info.command, "transcribe");
     assert_eq!(
         info.lang,
-        batchalign_app::api::LanguageSpec::Resolved(batchalign_app::api::LanguageCode3::from(
-            "eng"
-        ))
+        LanguageSpec::Resolved(LanguageCode3::eng())
     );
     assert_eq!(info.total_files, 1);
     let job_id = info.job_id.clone();
@@ -808,7 +806,7 @@ async fn paths_mode_job() {
 
     let submission = JobSubmission {
         command: "transcribe".into(),
-        lang: "eng".into(),
+        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],

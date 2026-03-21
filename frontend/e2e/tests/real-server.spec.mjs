@@ -154,7 +154,7 @@ async function startRealServer() {
     [
       "host: 127.0.0.1",
       `port: ${port}`,
-      "warmup: false",
+      "warmup_commands: []",
       "max_concurrent_jobs: 2",
       "rate_limit_per_second: 1000",
       "rate_limit_burst: 1000",
