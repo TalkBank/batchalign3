@@ -35,8 +35,7 @@ lives in `batchalign-chat-ops` and is called directly by the Rust server.
 
 | Module | Purpose |
 |--------|---------|
-| `lib.rs` | Module registration (~95 lines) |
-| `cli_entry.rs` | PyPI console_scripts entry point |
+| `lib.rs` | Module registration (~80 lines) |
 | `worker_protocol.rs` | IPC message dispatch (health, capabilities, infer, execute_v2) |
 | `worker_asr_exec.rs` | ASR execution (Whisper, HK providers) |
 | `worker_fa_exec.rs` | Forced alignment execution |
@@ -45,7 +44,6 @@ lives in `batchalign-chat-ops` and is called directly by the Rust server.
 | `worker_artifacts.rs` | Prepared artifact loading from IPC attachments |
 | `hk_asr_bridge.rs` | HK/Cantonese provider projection + normalization |
 | `py_json_bridge.rs` | Python→JSON conversion utility |
-| `revai/` | Rev.AI native client wrappers (feature-gated) |
 
 ## Key PyO3 Entry Points
 
@@ -72,8 +70,6 @@ lives in `batchalign-chat-ops` and is called directly by the Rust server.
 | `normalize_cantonese(...)` | Simplified → HK traditional + domain replacements |
 | `cantonese_char_tokens(...)` | Per-character tokenization for Cantonese FA |
 | HK bridge functions | Project FunASR/Tencent/Aliyun output into common shapes |
-| Rev.AI functions | Native HTTP client (feature-gated) |
-| `cli_main()` | CLI entry point for PyPI console_scripts |
 
 ### Removed APIs (2026-03-21)
 

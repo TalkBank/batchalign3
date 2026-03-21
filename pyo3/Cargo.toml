@@ -14,8 +14,6 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 extension-module = ["pyo3/extension-module"]
-cli-entry = ["dep:batchalign-cli"]
-revai-bridge = ["dep:batchalign-revai"]
 
 [dependencies]
 numpy = "0.28"
@@ -28,8 +26,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Shared batchalign crates
 batchalign-types = { path = "../crates/batchalign-types" }
 batchalign-chat-ops = { path = "../crates/batchalign-chat-ops" }
-batchalign-revai = { path = "../crates/batchalign-revai", optional = true }
-batchalign-cli = { path = "../crates/batchalign-cli", optional = true, default-features = false }
 
 [profile.dev]
 split-debuginfo = "unpacked"

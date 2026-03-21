@@ -183,10 +183,9 @@ Two UTR engines exist:
 
 ### Rev.AI UTR (alternative)
 
-- Rev.AI UTR uses the Rust-owned `batchalign-revai` client in server mode
-- Direct Python workflows may still call `batchalign_core.rev_get_timed_words`
+- Rev.AI UTR uses the Rust-owned `batchalign-revai` client directly
 - Same API key as the Rev.AI ASR engine
-- Hands timed words to `batchalign_core.add_utterance_timing` (Rust)
+- Timed words are handled entirely in Rust (server-side)
 
 ## Post-Processing Pipeline
 
@@ -264,6 +263,6 @@ use, not at CLI startup.
 
 ### What would not change
 
-- **Rev.AI engine**: Already fully Rust (`batchalign_core.rev_transcribe` backed by `crates/batchalign-revai/`).
+- **Rev.AI engine**: Already fully Rust (`crates/batchalign-revai/`, called directly by the server).
 - **Post-processing pipeline**: Already Rust (`batchalign-chat-ops/src/asr_postprocess/`).
-- **CHAT generation**: Already Rust (`batchalign_core.build_chat`).
+- **CHAT generation**: Already Rust (`batchalign-chat-ops`).

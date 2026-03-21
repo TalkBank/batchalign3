@@ -102,6 +102,8 @@ profile = "dev"
 include = [
     { path = "batchalign/runtime_constants.toml", format = "sdist" },
     { path = "batchalign/runtime_constants.toml", format = "wheel" },
+    { path = "batchalign/_bin/batchalign3", format = "wheel" },
+    { path = "batchalign/_bin/batchalign3.exe", format = "wheel" },
 ]
 
 [dependency-groups]

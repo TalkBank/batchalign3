@@ -308,7 +308,7 @@ Rust CLI (batchalign3) → Rust Server (crates/)
 
 ### CLI Command Dispatch (Single Source of Truth)
 
-**`batchalign_cli::run_command()`** in `crates/batchalign-cli/src/lib.rs` is the single canonical command router. Both the standalone binary (`main.rs`) and the PyO3 console_scripts entry point (`pyo3/src/cli_entry.rs`) call it. **Never duplicate this match block.** If you need to add a new CLI command:
+**`batchalign_cli::run_command()`** in `crates/batchalign-cli/src/lib.rs` is the single canonical command router. The standalone binary (`main.rs`) calls it. The Python console_scripts entry point (`batchalign/_cli.py`) execs the binary directly. **Never duplicate this match block.** If you need to add a new CLI command:
 
 1. Add the `Commands::Foo` variant to `crates/batchalign-cli/src/args/mod.rs`
 2. Add the match arm in `run_command()` in `crates/batchalign-cli/src/lib.rs` — this is the only dispatch site
@@ -316,7 +316,7 @@ Rust CLI (batchalign3) → Rust Server (crates/)
 4. If it uses the batched infer path, add routing in `crates/batchalign-app/src/runner/dispatch/infer_batched.rs`; for per-file audio paths, see `fa_pipeline.rs` or `transcribe_pipeline.rs` in the same directory
 5. Add typed `CommandOptions::Foo` in `crates/batchalign-app/src/types/options.rs` and the builder in `crates/batchalign-cli/src/args/options.rs`
 
-`main.rs` and `cli_entry.rs` must remain thin wrappers — tracing setup + `run_command()` call. No command-specific logic.
+`main.rs` must remain a thin wrapper — tracing setup + `run_command()` call. No command-specific logic.
 
 ### Python/Rust Ownership Boundary
 

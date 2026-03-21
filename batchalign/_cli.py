@@ -1,9 +1,9 @@
 """Python-owned console entry point for ``batchalign3``.
 
-This keeps packaging and script wiring on the Python side while the actual
-CLI implementation stays in Rust. In a source checkout, the wrapper can fall
-back to the repo CLI when the embedded Rust bridge is intentionally omitted
-for a faster extension-only rebuild.
+Locates and execs the standalone Rust CLI binary. The binary is either:
+1. Packaged inside the wheel at ``batchalign/_bin/batchalign3`` (PyPI install)
+2. Pre-built at ``target/{debug,release}/batchalign3`` (source checkout)
+3. Compiled on the fly via ``cargo run`` (source checkout, not yet built)
 """
 
 from __future__ import annotations
@@ -13,79 +13,61 @@ import shutil
 import sys
 from pathlib import Path
 
+_BIN_NAME = "batchalign3.exe" if sys.platform == "win32" else "batchalign3"
+
+
+def _exec_binary(binary: Path) -> None:
+    """Replace this process with the Rust binary."""
+    if sys.platform == "win32":
+        import subprocess
+
+        raise SystemExit(subprocess.call([str(binary), *sys.argv[1:]]))
+    os.execv(str(binary), [str(binary), *sys.argv[1:]])
+
 
 def _repo_root() -> Path | None:
     """Return the repo root when running from a checkout, else ``None``."""
-
     root = Path(__file__).resolve().parent.parent
     if (root / "Cargo.toml").exists() and (root / "crates" / "batchalign-cli").exists():
         return root
     return None
 
 
-def _exec_repo_cli_fallback() -> None:
-    """Exec the standalone Rust CLI from a repo checkout.
+def main() -> None:
+    """Run the installed ``batchalign3`` command."""
 
-    This is the fast local-dev path: it keeps ``uv run batchalign3`` usable
-    after ``make build-python`` without forcing the heavier packaged bridge.
-    """
+    # 1. Packaged binary (PyPI / wheel install)
+    packaged = Path(__file__).resolve().parent / "_bin" / _BIN_NAME
+    if packaged.is_file():
+        _exec_binary(packaged)
 
+    # 2. Dev checkout: pre-built binary
     root = _repo_root()
-    if root is None:
-        raise SystemExit(
-            "batchalign3 could not find the embedded Rust CLI bridge, and this "
-            "environment does not look like a batchalign3 source checkout."
-        )
+    if root is not None:
+        for profile in ("debug", "release"):
+            candidate = root / "target" / profile / _BIN_NAME
+            if candidate.is_file():
+                _exec_binary(candidate)
 
-    built_binary = root / "target" / "debug" / "batchalign3"
-    if built_binary.exists():
-        os.execv(str(built_binary), [str(built_binary), *sys.argv[1:]])
-
-    cargo = shutil.which("cargo")
-    if cargo:
-        os.execvp(
-            cargo,
-            [
+        # 3. Dev checkout: compile on the fly
+        cargo = shutil.which("cargo")
+        if cargo:
+            os.execvp(
                 cargo,
-                "run",
-                "-q",
-                "-p",
-                "batchalign-cli",
-                "--bin",
-                "batchalign3",
-                "--",
-                *sys.argv[1:],
-            ],
-        )
+                [
+                    cargo,
+                    "run",
+                    "-q",
+                    "-p",
+                    "batchalign-cli",
+                    "--bin",
+                    "batchalign3",
+                    "--",
+                    *sys.argv[1:],
+                ],
+            )
 
     raise SystemExit(
-        "batchalign3 was built without the embedded CLI bridge for faster local "
-        "maturin iteration, but neither a compiled target/debug/batchalign3 nor "
-        "a cargo executable was available. For the fastest loop, run "
-        "`cargo build -p batchalign-cli` or `make build-rust`; otherwise "
-        "rebuild with `make build-python-full`."
+        "batchalign3 CLI binary not found. Reinstall batchalign3 or, "
+        "in a source checkout, run `cargo build -p batchalign-cli`."
     )
-
-
-def main() -> None:
-    """Run the installed ``batchalign3`` command.
-
-    The current implementation delegates to the native Rust CLI bridge exposed
-    by ``batchalign_core``. Keeping the console entry point in Python gives us
-    a stable seam for future packaging and boundary refactors.
-    """
-
-    try:
-        from batchalign_core import cli_main
-    except ImportError as exc:  # pragma: no cover - environment-specific failure
-        if _repo_root() is not None:
-            _exec_repo_cli_fallback()
-        raise SystemExit(
-            "batchalign3 could not import the native batchalign_core module. "
-            "Reinstall batchalign3 or rebuild the local environment. In a "
-            "source checkout, use `make build-python` for the fast extension "
-            "build or `make build-python-full` to restore the embedded CLI "
-            "bridge."
-        ) from exc
-
-    cli_main()

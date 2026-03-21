@@ -32,20 +32,20 @@ cargo nextest run --manifest-path pyo3/Cargo.toml
 ## CLI Command Dispatch (Single Source of Truth)
 
 `batchalign_cli::run_command()` in `crates/batchalign-cli/src/lib.rs` is the
-**single canonical command router**. Both the standalone binary (`main.rs`)
-and the native CLI bridge (`pyo3/src/cli_entry.rs`) call it. The installed
-`batchalign3` console command is a tiny Python wrapper that delegates to that
-native bridge, and in a source checkout it can fall back to the repo CLI
-binary when the embedded bridge is intentionally omitted.
+**single canonical command router**. The standalone binary (`main.rs`) calls it.
+The installed `batchalign3` console command is a tiny Python wrapper
+(`batchalign/_cli.py`) that finds and execs the standalone binary — either
+packaged in the wheel at `batchalign/_bin/batchalign3`, or from
+`target/debug/batchalign3` in a source checkout.
 
 ```
-main.rs          → batchalign_cli::run_command(cli)
-batchalign/_cli.py → batchalign_core.cli_main()
-cli_entry.rs       → batchalign_cli::run_command(cli)
+main.rs            → batchalign_cli::run_command(cli)
+batchalign/_cli.py → os.execv(batchalign/_bin/batchalign3)  [installed]
+                   → os.execv(target/debug/batchalign3)      [dev checkout]
 ```
 
-`main.rs`, `batchalign/_cli.py`, and `cli_entry.rs` are thin wrappers.
-No command-specific logic lives in any of them.
+`main.rs` and `batchalign/_cli.py` are thin wrappers.
+No command-specific logic lives in either of them.
 
 The CLI layer now exposes two contributor-facing named seams:
 

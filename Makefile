@@ -34,11 +34,12 @@ build-release:
 
 # Fast local-dev rebuild: extension-only PyO3.
 build-python:
-	uv run maturin develop -m pyo3/Cargo.toml --no-default-features -F pyo3/extension-module
+	uv run maturin develop -m pyo3/Cargo.toml -F pyo3/extension-module
 
-# Full packaged rebuild: extension + CLI bridge + Rev.AI bridge.
-build-python-full:
-	uv run maturin develop -m pyo3/Cargo.toml --no-default-features -F pyo3/extension-module,cli-entry,revai-bridge
+# Full packaged rebuild: extension + CLI binary copied into package.
+build-python-full: build-rust
+	cp target/debug/batchalign3 batchalign/_bin/batchalign3
+	uv run maturin develop -m pyo3/Cargo.toml -F pyo3/extension-module
 
 # Build React dashboard and deploy to ~/.batchalign3/dashboard/.
 build-dashboard:

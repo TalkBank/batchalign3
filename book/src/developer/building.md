@@ -29,8 +29,10 @@ make build
 
 If you do not need the dashboard build during iteration, you can rebuild just
 the Rust/PyO3 surfaces with `make build-python` and `make build-rust`.
-For the fastest contributor loop, `make build-python` is the slim local-dev
-profile and `make build-python-full` is the packaged-release surface.
+For the fastest contributor loop, `make build-python` rebuilds only the PyO3
+extension. `make build-python-full` also copies the pre-built CLI binary into
+`batchalign/_bin/` so `uv run batchalign3` uses the packaged binary instead of
+the dev fallback.
 
 The expected directory layout:
 
@@ -100,20 +102,20 @@ The repo-native rebuild path is:
 make build-python
 ```
 
-This is the **slim local-dev** PyO3 profile. It skips the heavy CLI-entry and
-Rev.AI bridge features so local rebuilds do not always drag those crates into
-the extension build graph. In a source checkout, the Python wrapper falls back
-to the repo CLI when the embedded bridge is absent.
+This rebuilds only the PyO3 worker runtime extension (~320 crates). The pyo3
+crate has no feature gates beyond `extension-module` — no heavy CLI or Rev.AI
+dependencies. In a source checkout, `batchalign/_cli.py` falls back to
+`target/debug/batchalign3` when the packaged binary isn't present.
 
-When you need to verify the packaged-release feature set, use:
+When you want the CLI binary packaged alongside the extension:
 
 ```bash
 make build-python-full
 ```
 
-That target builds the fuller extension profile used by the packaged install
-path, including the embedded CLI bridge and Rev.AI bridge. Use it when you are
-changing the packaging contract, not for ordinary workflow development.
+That target first builds the Rust CLI binary, copies it to `batchalign/_bin/`,
+then rebuilds the extension. Use it when testing the installed-package
+experience locally.
 
 ## Where Command Logic Should Live
 

@@ -1,157 +1,103 @@
 # Maturin Build and PyO3 Dependency Surface
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last updated:** 2026-03-21 16:15 EDT
 
 ## Overview
 
 The `batchalign_core` Python extension is built by **maturin** from `pyo3/Cargo.toml`.
-This page documents the Rust crate dependencies that maturin must compile, the
-rationale for each, and the roadmap for shrinking the build surface further.
+The crate has exactly one feature gate: `extension-module` (required by PyO3 for
+cdylib linking). No other features exist — the extension is always slim.
 
-## Current Dependency Graph (post-extraction)
+## Dependency Graph
 
 ```
-batchalign-pyo3 (the .so)
+batchalign-pyo3 (the .so, ~2,730 lines, 9 files)
   |
   +-- batchalign-types          (newtypes, worker IPC types)
-  +-- batchalign-chat-ops       (CHAT parse/inject/align/postprocess)
-  +-- batchalign-revai          (Rev.AI transcript projection)
-  +-- batchalign-cli            (console_scripts entry point)
-  |     +-- batchalign-app      (HTTP server, SQLite, dashboard, worker pool)
-  |
-  +-- talkbank-model            (CHAT AST, model types)
-  +-- talkbank-parser           (tree-sitter parser)
-  +-- talkbank-transform        (AST transforms)
+  +-- batchalign-chat-ops       (HK ASR projection, Cantonese normalization,
+  |                              tokenizer realignment, text task normalization)
+  +-- pyo3, numpy, serde, serde_json, tracing
 ```
+
+That's it. ~319 crates in the full dependency tree. No server, no CLI, no
+Rev.AI, no talkbank-model, no talkbank-parser.
 
 ### Why each dependency exists
 
 | Crate | Used by pyo3 for | Could be removed? |
 |-------|-------------------|-------------------|
-| `batchalign-types` | Domain newtypes (`DurationMs`, `LanguageCode3`), worker IPC types (`ExecuteRequestV2`, etc.) | No - these are the core shared types |
-| `batchalign-chat-ops` | CHAT parsing, morphosyntax injection, FA injection, DP alignment, retokenization, ASR postprocessing | No - this is the main Rust logic |
-| `batchalign-revai` | Rev.AI transcript projection to CHAT AST | No - needed by pyfunction wrappers |
-| `batchalign-cli` | `run_command()` + `Cli` struct for `uv tool install batchalign3` console_scripts | **Yes** - see roadmap below |
-| `batchalign-app` | **Not directly** - pulled transitively by `batchalign-cli` | **Yes** - see roadmap below |
-| `talkbank-*` | CHAT AST types, parser, transforms | No - fundamental |
+| `batchalign-types` | Domain newtypes, worker IPC types (`ExecuteRequestV2`, etc.) | No — core shared types |
+| `batchalign-chat-ops` | HK ASR projection, Cantonese normalization, tokenizer realignment, coref types, text result normalization | No — worker-side Rust logic |
+| `pyo3` / `numpy` | PyO3 bridge, NumPy array handling for audio | No — fundamental |
+| `serde` / `serde_json` | JSON serialization for IPC | No — fundamental |
 
-### What was removed (2026-03-20)
+### What was removed
 
-Before the `batchalign-types` extraction, pyo3 directly depended on
-`batchalign-app` for domain newtypes and worker IPC types. This pulled in
-axum, SQLite, moka, tower-http, dashmap, and the entire server stack into every
-`uv run maturin develop` cold build.
+| Removed dep | When | Why |
+|-------------|------|-----|
+| `batchalign-cli` (+ transitive `batchalign-app`) | 2026-03-21 | CLI binary shipped as package data instead of compiled into .so |
+| `batchalign-revai` | 2026-03-21 | Dead code — server uses Rev.AI directly |
+| `talkbank-model` | 2026-03-21 | Only used by deleted ParsedChat class |
+| `talkbank-parser` | 2026-03-21 | Only used by deleted parse helpers |
+| `indexmap`, `thiserror` | 2026-03-21 | Only used by deleted standalone functions |
 
-Now pyo3 imports these types from `batchalign-types` (3 deps: serde, utoipa,
-schemars). The `batchalign-app` dependency remains only as a transitive
-dependency through `batchalign-cli`.
+## CLI Binary Distribution
 
-## Build commands
+The `batchalign3` CLI is a standalone Rust binary (`crates/batchalign-cli`).
+It is **not** compiled into the .so extension. Instead:
+
+- **PyPI wheels**: The binary is pre-built and included as package data at
+  `batchalign/_bin/batchalign3`. The console_scripts entry point
+  (`batchalign/_cli.py`) finds and execs it.
+- **Dev checkout**: `_cli.py` falls back to `target/debug/batchalign3` or
+  `cargo run -p batchalign-cli`.
+
+This eliminates the old `cli-entry` feature gate that dragged 741 extra crates
+(the entire server stack) into the extension build.
+
+## Build Commands
 
 ```bash
-# Development rebuild (debug, fast iteration)
-uv run maturin develop -m pyo3/Cargo.toml
+# Development rebuild (debug, fast — ~7s incremental)
+make build-python
+# equivalent: uv run maturin develop -m pyo3/Cargo.toml -F pyo3/extension-module
 
-# Release wheel (for distribution)
-uv run maturin build --release -m pyo3/Cargo.toml -i python3.12
+# Full package (extension + CLI binary in batchalign/_bin/)
+make build-python-full
+
+# Release wheel for deployment
+cargo build --release -p batchalign-cli --bin batchalign3
+cp target/release/batchalign3 batchalign/_bin/batchalign3
+uv run maturin build --release -m pyo3/Cargo.toml -F pyo3/extension-module --out dist/
 
 # Check compilation without building wheel
 cargo check --manifest-path pyo3/Cargo.toml
 ```
 
-## Roadmap: Removing batchalign-cli from pyo3
-
-The remaining heavy dependency is `batchalign-cli`, which pulls in
-`batchalign-app` (the full server). pyo3 needs `batchalign-cli` for exactly
-two symbols:
-
-1. **`Cli`** struct (clap derive) - parsed by `cli_entry.rs` for console_scripts
-2. **`run_command()`** - the command dispatch function
-
-### Option A: Extract `batchalign-cli-entry` (small, focused)
-
-Create a tiny crate `batchalign-cli-entry` with just the `Cli` struct and
-`run_command()`. This crate would depend on `batchalign-app` but pyo3 would
-depend on `batchalign-cli-entry` instead of `batchalign-cli`.
-
-**Problem:** `run_command()` calls into the full server (e.g. `transcribe`
-starts an axum server). So this crate would still need `batchalign-app`.
-
-### Option B: Feature-gate the server in batchalign-cli
-
-Split `batchalign-cli` into:
-- Core CLI parsing (clap, args) - no server dependency
-- `server` feature that enables commands requiring the server
-
-pyo3 would use `batchalign-cli` with `default-features = false`, excluding
-server commands. The console_scripts entry point would only support a subset
-of commands that don't need the server.
-
-**Problem:** Most commands need the server (transcribe, morphotag, align,
-etc.). Only `validate`, `check`, and `convert` are server-free.
-
-### Option C: Separate the console_scripts binary (recommended)
-
-Instead of embedding `run_command()` in the pyo3 `.so`, ship a separate
-`batchalign3` binary via the wheel's `[project.scripts]` entry. maturin
-supports this via `bindings = "bin"` for a separate binary crate.
-
-The pyo3 `.so` would only contain the `batchalign_core` Python module
-(CHAT parsing, injection, alignment). The CLI binary would be a separate
-build artifact.
-
-**Impact:**
-- pyo3 compilation drops `batchalign-cli` and `batchalign-app` entirely
-- Cold build time drops to ~1-2 minutes (just chat-ops + types + talkbank-*)
-- `uv tool install batchalign3` still gets the CLI binary
-- Incremental `uv run maturin develop` is nearly instant
-
-**Complexity:** Moderate. Requires restructuring the wheel packaging to include
-both the `.so` and the CLI binary. maturin supports mixed bindings but the
-`pyproject.toml` and build pipeline need updates.
-
-### Option D: Process-spawn the CLI (simplest)
-
-Instead of calling `run_command()` from Python, have the console_scripts
-entry point spawn `batchalign3` as a subprocess. The binary is installed
-alongside the wheel.
-
-**Impact:** Same as Option C for build times. Simpler implementation but
-adds process-spawn overhead for CLI invocations via `uv tool install`.
-
 ## What NOT to do
 
-- **Do not vendor types.** Never copy-paste type definitions between crates.
-  Always use path dependencies. `batchalign-types` is the single source of
-  truth for domain newtypes and worker IPC types.
+- **Do not add server deps to pyo3.** The extension is for the worker process.
+  If the server needs Rust functionality, use `batchalign-chat-ops` or
+  `batchalign-app` directly — not through pyo3.
 
-- **Do not add server deps to pyo3.** If pyo3 needs a new type, check if it
-  belongs in `batchalign-types` first. Only add deps to pyo3/Cargo.toml if
-  they are genuinely needed by the Python extension.
+- **Do not vendor types.** Use path dependencies. `batchalign-types` is the
+  single source of truth for domain newtypes and worker IPC types.
 
-- **Do not add `batchalign-app` back to pyo3.** If you need app types in
-  pyo3, move them to `batchalign-types` instead.
+- **Do not add feature gates.** The extension should always build the same way.
+  If something is optional, it probably doesn't belong in pyo3.
+
+- **Do not compile the CLI into the .so.** The binary is shipped as package
+  data. If you need to change how the CLI is invoked, modify `_cli.py`.
 
 ## Verification checklist
 
 After any dependency change to `pyo3/Cargo.toml`:
 
 ```bash
-# 1. pyo3 compiles without batchalign-app as a direct dep
 cargo check --manifest-path pyo3/Cargo.toml
-
-# 2. pyo3 compiles without the dashboard
-mv frontend/dist frontend/dist.bak
-cargo check --manifest-path pyo3/Cargo.toml
-mv frontend/dist.bak frontend/dist
-
-# 3. pyo3 tests pass
 cargo nextest run --manifest-path pyo3/Cargo.toml
-
-# 4. maturin builds the wheel
-uv run maturin develop -m pyo3/Cargo.toml
-
-# 5. Python tests pass
+uv run maturin develop -m pyo3/Cargo.toml -F pyo3/extension-module
+uv run batchalign3 --help
 uv run pytest
 ```

@@ -6,21 +6,15 @@
 //!
 //! - `worker_protocol` — IPC message dispatch (health, capabilities, infer,
 //!   batch_infer, execute_v2)
-//! - `worker_asr_exec` — ASR execution (Whisper, HK providers, Rev.AI)
+//! - `worker_asr_exec` — ASR execution (Whisper, HK providers)
 //! - `worker_fa_exec` — Forced alignment execution
 //! - `worker_media_exec` — Speaker diarization, OpenSMILE, AVQI
-//! - `worker_text_results` — Text task result normalization
+//! - `worker_text_results` — Text task result normalization + token alignment
 //! - `worker_artifacts` — Prepared artifact loading from IPC attachments
 //! - `hk_asr_bridge` — HK/Cantonese provider projection + normalization
-//! - `revai` — Rev.AI native client wrappers
-//! - `cli_entry` — PyPI console_scripts entry point
 
 mod hk_asr_bridge;
-#[cfg(feature = "cli-entry")]
-mod cli_entry;
 pub(crate) mod py_json_bridge;
-#[cfg(feature = "revai-bridge")]
-mod revai;
 mod worker_artifacts;
 mod worker_asr_exec;
 mod worker_fa_exec;
@@ -75,22 +69,6 @@ fn batchalign_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hk_asr_bridge::aliyun_sentences_to_asr, m)?)?;
     m.add_function(wrap_pyfunction!(hk_asr_bridge::normalize_cantonese, m)?)?;
     m.add_function(wrap_pyfunction!(hk_asr_bridge::cantonese_char_tokens, m)?)?;
-
-    // Rev.AI native client
-    #[cfg(feature = "revai-bridge")]
-    m.add_function(wrap_pyfunction!(revai::rev_transcribe, m)?)?;
-    #[cfg(feature = "revai-bridge")]
-    m.add_function(wrap_pyfunction!(revai::rev_get_timed_words, m)?)?;
-    #[cfg(feature = "revai-bridge")]
-    m.add_function(wrap_pyfunction!(revai::rev_submit, m)?)?;
-    #[cfg(feature = "revai-bridge")]
-    m.add_function(wrap_pyfunction!(revai::rev_poll, m)?)?;
-    #[cfg(feature = "revai-bridge")]
-    m.add_function(wrap_pyfunction!(revai::rev_poll_timed_words, m)?)?;
-
-    // CLI entry point (used by [project.scripts] console command)
-    #[cfg(feature = "cli-entry")]
-    m.add_function(wrap_pyfunction!(cli_entry::cli_main, m)?)?;
 
     Ok(())
 }

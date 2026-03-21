@@ -107,15 +107,14 @@ Python HK engines call back into Rust for output projection:
 ## Rev.AI Native HTTP Client
 
 The shared Rust crate `crates/batchalign-revai/` provides Rev.AI HTTP calls.
-PyO3 exposes `rev_transcribe`, `rev_submit`, `rev_poll`, `rev_get_timed_words`,
-`rev_poll_timed_words` for direct Python workflows. In server mode, Rev.AI
-calls go through the Rust server directly without Python.
+The Rust server uses this crate directly for all Rev.AI operations (transcribe,
+UTR, pre-submission). No Rev.AI functions are exposed to Python — the PyO3
+wrappers were removed as dead code (2026-03-21).
 
 ## Module Layout (`pyo3/src/`)
 
 ```
-lib.rs                  — module registration (~95 lines)
-cli_entry.rs            — PyPI console_scripts entry point
+lib.rs                  — module registration (~80 lines)
 worker_protocol.rs      — IPC message dispatch
 worker_asr_exec.rs      — ASR execution (Whisper, HK providers)
 worker_fa_exec.rs       — forced alignment execution
@@ -124,7 +123,6 @@ worker_text_results.rs  — text task normalization + align_tokens
 worker_artifacts.rs     — prepared artifact loading from IPC
 hk_asr_bridge.rs        — HK/Cantonese provider projection + normalization
 py_json_bridge.rs       — Python→JSON conversion utility
-revai/                  — Rev.AI native client wrappers (feature-gated)
 ```
 
 ## GIL Strategy

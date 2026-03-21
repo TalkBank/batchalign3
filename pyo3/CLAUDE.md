@@ -1,7 +1,7 @@
 # batchalign-core — Rust Worker Runtime
 
 **Status:** Current
-**Last modified:** 2026-03-21 14:32 EDT
+**Last modified:** 2026-03-21 16:15 EDT
 
 ## Overview
 
@@ -29,8 +29,7 @@ pyo3/src/
 ├── worker_text_results.rs  # Text task normalization + token alignment
 ├── worker_artifacts.rs     # Prepared artifact loading from IPC
 ├── hk_asr_bridge.rs        # HK/Cantonese provider projection + normalization
-├── py_json_bridge.rs       # Python→JSON conversion utility
-└── revai/                  # Rev.AI native client wrappers (feature-gated)
+└── py_json_bridge.rs       # Python→JSON conversion utility
 ```
 
 ## Key Commands
