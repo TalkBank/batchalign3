@@ -249,3 +249,42 @@ pub(crate) fn normalize_text_task_result(
         ))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Token alignment (used by Python morphosyntax tokenizer realignment)
+// ---------------------------------------------------------------------------
+
+/// Align Stanza tokenizer output back to original CHAT words.
+///
+/// Returns a Python list: plain `str` for unchanged tokens,
+/// `(str, bool)` tuples for MWT expansion hints.
+#[pyfunction]
+pub(crate) fn align_tokens(
+    py: Python<'_>,
+    original_words: Vec<String>,
+    stanza_tokens: Vec<String>,
+    alpha2: String,
+) -> PyResult<Py<pyo3::types::PyList>> {
+    use batchalign_chat_ops::tokenizer_realign::{self, PatchedToken};
+    use pyo3::types::{PyBool, PyList, PyString, PyTuple};
+
+    let patched =
+        py.detach(|| tokenizer_realign::align_tokens(&original_words, &stanza_tokens, &alpha2));
+
+    let result = PyList::empty(py);
+    for tok in &patched {
+        match tok {
+            PatchedToken::Plain(s) => {
+                result.append(PyString::new(py, s))?;
+            }
+            PatchedToken::Hint(s, expand) => {
+                let s_any: Py<PyAny> = PyString::new(py, s).unbind().into_any();
+                let b_any: Py<PyAny> = PyBool::new(py, *expand).to_owned().unbind().into_any();
+                let tup = PyTuple::new(py, [s_any.bind(py), b_any.bind(py)])?;
+                result.append(tup)?;
+            }
+        }
+    }
+
+    Ok(result.unbind())
+}

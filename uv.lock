@@ -976,7 +976,7 @@ name = "cuda-bindings"
 version = "12.9.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cuda-pathfinder" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/c1/dabe88f52c3e3760d861401bb994df08f672ec893b8f7592dc91626adcf3/cuda_bindings-12.9.4-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fda147a344e8eaeca0c6ff113d2851ffca8f7dfc0a6c932374ee5c47caa649c8", size = 12151019, upload-time = "2025-10-21T14:51:43.167Z" },
@@ -2519,7 +2519,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.10.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cublas-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/51/e123d997aa098c61d029f76663dedbfb9bc8dcf8c60cbd6adbe42f76d049/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:949452be657fa16687d0930933f032835951ef0892b37d2d53824d1a84dc97a8", size = 706758467, upload-time = "2025-06-06T21:54:08.597Z" },
@@ -2530,7 +2530,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4d2dd21ec0b88cf61b62e6b43564355e5222e4a3fb394cac0db101f2dd0d4f74", size = 193118695, upload-time = "2025-03-07T01:45:27.821Z" },
@@ -2557,9 +2557,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "nvidia-cusparse-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cusparse-cu12" },
+    { name = "nvidia-nvjitlink-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/48/9a13d2975803e8cf2777d5ed57b87a0b6ca2cc795f9a4f59796a910bfb80/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:4376c11ad263152bd50ea295c05370360776f8c3427b30991df774f9fb26c450", size = 267506905, upload-time = "2025-03-07T01:47:16.273Z" },
@@ -2570,7 +2570,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/f5/e1854cb2f2bcd4280c44736c93550cc300ff4b8c95ebe370d0aa7d2b473d/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1ec05d76bbbd8b61b06a80e1eaf8cf4959c3d4ce8e711b65ebd0443bb0ebb13b", size = 288216466, upload-time = "2025-03-07T01:48:13.779Z" },
@@ -3883,15 +3883,15 @@ wheels = [
 
 [[package]]
 name = "rustling"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/cf/4d/bff634229e601ba2cf155f82c4d930dcc6068111f7b2ac1367f506581b24/rustling-0.7.0.tar.gz", hash = "sha256:bf67d9a286750e37eff4211e5a3f56133a00b956ed46515f6dd631fc51e70c19", size = 203925, upload-time = "2026-03-14T18:58:02.944Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/1c/1dfeec8ecc0ff0d70d2be4c34dee45078c4ee7706214320f49c13c8f24ab/rustling-0.8.0.tar.gz", hash = "sha256:04d769e50ff2c8b0bc5fb178f0a1dba578427b6a7d9027253366d1ac8922e1fd", size = 347788, upload-time = "2026-03-20T23:18:50.52Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c5/95/3b4038ebc44978afa6ee79b30f0dbea80038852b9f2117b1ffd81c13a171/rustling-0.7.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:48b1e38c37f42e0887455fab91640ed3068f26c0731dd5c44e821fd9efc1008a", size = 2447732, upload-time = "2026-03-14T18:57:53.823Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/94/928852488c02fcce9febff3088486affa51c6b46c13bb879c91d5d335865/rustling-0.7.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:10b116dea56e64f832965b53e245403b6e93698e3e6a5ffbcf7d0d63b0459aa9", size = 2269693, upload-time = "2026-03-14T18:57:55.576Z" },
-    { url = "https://files.pythonhosted.org/packages/66/e5/99bb7461d5b2ed43bb5e76bdccfa2fbe1ce1612999aa44b15c2df6fa7f60/rustling-0.7.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:51c8712fd539df9541dbb2bf1f4cc5ae6f93d3902a1bff43f32e6b0f81f3454f", size = 2547853, upload-time = "2026-03-14T18:57:57.209Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/51/48e693433e2197e892a291fc04ad58a066f2d40d97c9fce560945cd8e9ea/rustling-0.7.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cbfcf3aeb7f8eaa3986ac571e47fd6e4f876108cdc8d9c1e3dcb2bc33cbadca8", size = 2646522, upload-time = "2026-03-14T18:57:59.362Z" },
-    { url = "https://files.pythonhosted.org/packages/d7/5b/30a9007f449fde9411f763c4e9b3e0a6b691d5edece79321e53bd18ca661/rustling-0.7.0-cp310-abi3-win_amd64.whl", hash = "sha256:e68bcfbc970750cb7e1bb276002f8681fc2ac521d28acc5eccaa87291299318f", size = 2093657, upload-time = "2026-03-14T18:58:01.02Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/e5/8dc326d9392f075b67daedd8ef2798c07670c847e4eaff7a99c9b7be441c/rustling-0.8.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:61982a84e6fd86e7d4f9216ab1fecfa908e58234350e72d311c0203bee0e2b51", size = 2908881, upload-time = "2026-03-20T23:18:41.541Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/58/b9f98fa259c4fc6d207bf32b72903594e347c4902f62cc76eedad7d6ffea/rustling-0.8.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:242dd1ae5436c8dffcfac53a4ef53b3a414ba660525f166c568f5835d9519409", size = 2710893, upload-time = "2026-03-20T23:18:43.79Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/ee/25b826bea0cae86d5e15107658630705a93bd58cc0fc38fd1cbfc942b433/rustling-0.8.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e7a5a869dec90d7c1737a4f698763103155b9b15dce652907de25772b51d71f3", size = 3015972, upload-time = "2026-03-20T23:18:45.599Z" },
+    { url = "https://files.pythonhosted.org/packages/da/2b/751f023690043ac5c5f62b19506906651da9c27c1ce8afb6c760e23e70f4/rustling-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:321ef6768275c50bab28661d5d5c50747ccde33c138e3afa53281b5cb5ca628d", size = 3106500, upload-time = "2026-03-20T23:18:47.438Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/63/a683d35eea2f1bc1d0ad69902d15f22697a51473e1c3d11e14cfbc995648/rustling-0.8.0-cp310-abi3-win_amd64.whl", hash = "sha256:24b89b166e621b26d1c7a7a32e2ed31343112a482647af6128eb61e989c1b9a8", size = 2532713, upload-time = "2026-03-20T23:18:49.214Z" },
 ]
 
 [[package]]

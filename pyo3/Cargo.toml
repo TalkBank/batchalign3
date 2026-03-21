@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Franklin Chen <franklinchen@franklinchen.com>"]
 license = "BSD-3-Clause"
 repository = "https://github.com/TalkBank/batchalign3"
-description = "Rust-powered CHAT handling for Batchalign"
+description = "Rust worker runtime for batchalign3"
 publish = false
 
 [lib]
@@ -18,12 +18,10 @@ cli-entry = ["dep:batchalign-cli"]
 revai-bridge = ["dep:batchalign-revai"]
 
 [dependencies]
-indexmap = { version = "2.13", features = ["serde"] }
 numpy = "0.28"
-pyo3 = { version = "0.28", features = ["multiple-pymethods"] }
-serde = { version = "1.0", features = ["derive", "rc"] }
+pyo3 = { version = "0.28" }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "^2.0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -32,13 +30,6 @@ batchalign-types = { path = "../crates/batchalign-types" }
 batchalign-chat-ops = { path = "../crates/batchalign-chat-ops" }
 batchalign-revai = { path = "../crates/batchalign-revai", optional = true }
 batchalign-cli = { path = "../crates/batchalign-cli", optional = true, default-features = false }
-
-# TalkBank crates — path deps to talkbank-tools
-talkbank-model = { path = "../../talkbank-tools/crates/talkbank-model" }
-talkbank-parser = { path = "../../talkbank-tools/crates/talkbank-parser" }
-
-[dev-dependencies]
-serde_json = "1.0"
 
 [profile.dev]
 split-debuginfo = "unpacked"

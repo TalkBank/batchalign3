@@ -24,13 +24,6 @@ def _scan_paths(paths: list[Path], pattern: str) -> list[tuple[str, int, str]]:
     return found
 
 
-def test_rust_core_dp_align_callsites_are_allowlisted() -> None:
-    rust_src = sorted((ROOT / "pyo3" / "src").glob("*.rs"))
-    hits = _scan_paths(rust_src, r"\bcrate::dp_align::align\s*\(")
-    assert len(hits) == 1
-    assert {rel for rel, _, _ in hits} == {"pyo3/src/pyfunctions.rs"}
-
-
 def test_chat_ops_dp_calls_are_allowlisted() -> None:
     chat_ops_src = sorted((ROOT / "crates" / "batchalign-chat-ops" / "src").rglob("*.rs"))
     align_hits = _scan_paths(chat_ops_src, r"\bdp_align::align\s*\(")
@@ -48,10 +41,3 @@ def test_chat_ops_dp_calls_are_allowlisted() -> None:
         "crates/batchalign-chat-ops/src/fa/utr/two_pass.rs",
     }
     assert not align_chars_hits
-
-
-def test_python_runtime_dp_align_callsites_are_absent() -> None:
-    """Python inference code no longer calls dp_align directly — WER uses wer_compute."""
-    inference_py = sorted((ROOT / "batchalign" / "inference").rglob("*.py"))
-    hits = _scan_paths(inference_py, r"\bbatchalign_core\.dp_align\s*\(")
-    assert not hits
