@@ -8,12 +8,13 @@
 //! - Tencent result-detail projection into monologues and timed words
 //! - Aliyun sentence-result projection and fallback tokenization
 //! - Cantonese normalization at the provider boundary
+//! - Cantonese character tokenization for per-character timestamp alignment
 //!
 //! Python code now forwards raw provider output into these helpers instead of
 //! reimplementing the projection loops itself.
 
+use batchalign_chat_ops::asr_postprocess::cantonese as cantonese_ops;
 use crate::py_json_bridge::py_to_json_value;
-use batchalign_chat_ops::asr_postprocess::cantonese::{cantonese_char_tokens, normalize_cantonese};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use serde::{Deserialize, Serialize};
@@ -175,7 +176,7 @@ fn parse_timestamp_pair_inner(value: &serde_json::Value) -> (Option<i64>, Option
 /// Normalize one provider token for the requested language.
 fn normalize_provider_token(token: &str, lang: &str) -> String {
     if lang == "yue" {
-        normalize_cantonese(token)
+        cantonese_ops::normalize_cantonese(token)
     } else {
         token.to_string()
     }
@@ -184,7 +185,7 @@ fn normalize_provider_token(token: &str, lang: &str) -> String {
 /// Tokenize one cleaned FunASR segment according to the provider language.
 fn tokenize_funaudio_segment(cleaned: &str, lang: &str) -> Vec<String> {
     if lang == "yue" {
-        cantonese_char_tokens(cleaned)
+        cantonese_ops::cantonese_char_tokens(cleaned)
     } else {
         cleaned
             .split_whitespace()
@@ -198,7 +199,7 @@ fn tokenize_funaudio_segment(cleaned: &str, lang: &str) -> Vec<String> {
 /// language. Cantonese keeps the Rust-owned normalization/tokenization path.
 fn tokenize_sentence_fallback(text: &str, lang: &str) -> Vec<String> {
     if lang == "yue" {
-        cantonese_char_tokens(text)
+        cantonese_ops::cantonese_char_tokens(text)
     } else {
         text.split_whitespace()
             .filter(|token| !token.is_empty())
@@ -522,6 +523,29 @@ pub(crate) fn aliyun_sentences_to_asr(
         serde_json::to_string(&project_aliyun_sentences(sentences, &lang))
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
     })
+}
+
+// ---------------------------------------------------------------------------
+// Cantonese text normalization
+// ---------------------------------------------------------------------------
+
+/// Normalize Cantonese text: simplified → HK traditional + domain replacements.
+///
+/// Uses `zhconv` (pure Rust, OpenCC + MediaWiki rulesets) for s2hk conversion,
+/// then applies a domain replacement table for Cantonese-specific character
+/// corrections.
+#[pyfunction]
+pub(crate) fn normalize_cantonese(py: Python<'_>, text: &str) -> String {
+    py.detach(|| cantonese_ops::normalize_cantonese(text))
+}
+
+/// Normalize Cantonese text and split into per-character tokens.
+///
+/// Strips CJK punctuation and whitespace after normalization.
+/// Used by FunASR Cantonese to align per-character timestamps.
+#[pyfunction]
+pub(crate) fn cantonese_char_tokens(py: Python<'_>, text: &str) -> Vec<String> {
+    py.detach(|| cantonese_ops::cantonese_char_tokens(text))
 }
 
 #[cfg(test)]
