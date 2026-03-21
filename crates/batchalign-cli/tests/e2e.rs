@@ -132,7 +132,7 @@ async fn e2e_empty_input() {
         source_dir: String::new(),
         options: CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -266,7 +266,7 @@ async fn e2e_override_cache_option() {
             override_cache: true,
             ..CommonOptions::default()
         },
-        asr_engine: "rev".into(),
+        asr_engine: batchalign_app::options::AsrEngineName::RevAi,
         diarize: false,
         wor: false.into(),
         merge_abbrev: false.into(),
@@ -293,7 +293,7 @@ async fn e2e_retokenize_option() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions::default(),
-        asr_engine: "rev".into(),
+        asr_engine: batchalign_app::options::AsrEngineName::RevAi,
         diarize: false,
         wor: false.into(),
         merge_abbrev: false.into(),
@@ -431,7 +431,7 @@ async fn e2e_invalid_command_rejected() {
         source_dir: String::new(),
         options: CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -654,7 +654,7 @@ async fn e2e_cancel_job() {
         source_dir: String::new(),
         options: CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -724,7 +724,7 @@ async fn e2e_job_status_lifecycle() {
         source_dir: String::new(),
         options: CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),

@@ -264,7 +264,9 @@ pub(in crate::runner) fn apply_result_filename(
 mod tests {
     use super::should_preflight;
     use crate::api::CommandName;
-    use crate::options::{BenchmarkOptions, CommandOptions, CommonOptions, TranscribeOptions};
+    use crate::options::{
+        AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, TranscribeOptions,
+    };
 
     #[test]
     fn transcribe_asr_override_disables_rev_preflight() {
@@ -274,7 +276,7 @@ mod tests {
             .insert("asr".into(), "tencent".into());
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -295,7 +297,7 @@ mod tests {
             .insert("asr".into(), "aliyun".into());
         let opts = CommandOptions::Benchmark(BenchmarkOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             wor: true.into(),
             merge_abbrev: false.into(),
         });

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use batchalign_app::options::{
     AlignOptions, AsrEngineName, AvqiOptions, BenchmarkOptions, CommandOptions, CommonOptions,
-    CompareOptions, CorefOptions, CustomEngineName, FaEngineName, MorphotagOptions,
+    CompareOptions, CorefOptions, FaEngineName, MorphotagOptions,
     OpensmileOptions, TranscribeOptions, TranslateOptions, UtrEngine as AppUtrEngine,
     UtrOverlapStrategy as AppUtrOverlapStrategy, UtsegOptions,
 };
@@ -107,7 +107,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
     match cmd {
         Commands::Align(a) => {
             let fa_engine = if let Some(engine) = a.fa_engine_custom.as_deref() {
-                FaEngineName::Custom(CustomEngineName::new(engine))
+                FaEngineName::from_wire_name(&engine).ok()?
             } else if a.whisper_fa {
                 // BA2 compat alias
                 FaEngineName::Whisper
@@ -119,7 +119,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
             };
             let utr_engine = if a.utr && !a.no_utr {
                 let utr = if let Some(engine) = a.utr_engine_custom.as_deref() {
-                    AppUtrEngine::Custom(CustomEngineName::new(engine))
+                    AppUtrEngine::from_wire_name(&engine).ok()?
                 } else if a.whisper && !a.rev {
                     // BA2 compat alias
                     AppUtrEngine::Whisper
@@ -166,7 +166,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
         }
         Commands::Transcribe(a) => {
             let asr_engine = if let Some(engine) = a.asr_engine_custom.as_deref() {
-                AsrEngineName::Custom(CustomEngineName::new(engine))
+                AsrEngineName::from_wire_name(&engine).ok()?
             } else if a.whisperx {
                 // BA2 compat alias
                 AsrEngineName::WhisperX
@@ -232,7 +232,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
         })),
         Commands::Benchmark(a) => {
             let asr_engine = if let Some(engine) = a.asr_engine_custom.as_deref() {
-                AsrEngineName::Custom(CustomEngineName::new(engine))
+                AsrEngineName::from_wire_name(&engine).ok()?
             } else if a.whisper_oai {
                 // BA2 compat alias
                 AsrEngineName::WhisperOai

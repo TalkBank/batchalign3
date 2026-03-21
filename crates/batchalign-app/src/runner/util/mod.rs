@@ -32,6 +32,7 @@ pub(super) use media::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::{AsrEngineName, FaEngineName};
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -176,7 +177,7 @@ mod tests {
         use crate::options::{CommonOptions, TranscribeOptions};
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -193,7 +194,7 @@ mod tests {
         use crate::options::{CommonOptions, TranscribeOptions};
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "whisper".into(),
+            asr_engine: AsrEngineName::Whisper,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -220,7 +221,7 @@ mod tests {
         use crate::options::{AlignOptions, CommonOptions};
         let opts = CommandOptions::Align(AlignOptions {
             common: CommonOptions::default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -394,7 +395,7 @@ mod tests {
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Align(AlignOptions {
                     common: CommonOptions::default(),
-                    fa_engine: "wav2vec_fa".into(),
+                    fa_engine: FaEngineName::Wave2Vec,
                     utr_engine: Some(UtrEngine::RevAi),
                     utr_overlap_strategy: Default::default(),
                     utr_two_pass: Default::default(),

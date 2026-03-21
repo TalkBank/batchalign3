@@ -96,6 +96,7 @@ fn unix_now() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::UnixTimestamp;
     use crate::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
     use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
@@ -113,7 +114,7 @@ mod tests {
     fn align_options() -> CommandOptions {
         CommandOptions::Align(AlignOptions {
             common: CommonOptions::default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),

@@ -21,7 +21,7 @@
 use crate::api::DurationMs;
 #[allow(unused_imports)]
 use crate::options::{
-    AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, CustomEngineName,
+    AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions,
     MorphotagOptions, OpensmileOptions, TranscribeOptions, UtrEngine, UtrOverlapStrategy,
 };
 use crate::params::{CachePolicy, FaParams, MergeAbbrevPolicy, WorTierPolicy};
@@ -204,6 +204,7 @@ pub(crate) fn extract_opensmile_dispatch_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::{AsrEngineName, FaEngineName};
     use std::collections::BTreeMap;
 
     fn common_default() -> CommonOptions {
@@ -230,7 +231,7 @@ mod tests {
     ) -> CommandOptions {
         CommandOptions::Align(AlignOptions {
             common: common_default(),
-            fa_engine: fa_engine.into(),
+            fa_engine: FaEngineName::from_wire_name(fa_engine).expect("test fa_engine"),
             utr_engine,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -312,7 +313,7 @@ mod tests {
         let p3 = extract_fa_dispatch_params(
             &align_opts(
                 "wav2vec_fa",
-                Some(UtrEngine::Custom(CustomEngineName::new("tencent_utr"))),
+                Some(UtrEngine::HkTencent),
                 false,
                 true,
                 false,
@@ -322,7 +323,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             p3.utr_engine,
-            Some(UtrEngine::Custom(CustomEngineName::new("tencent_utr")))
+            Some(UtrEngine::HkTencent)
         );
     }
 
@@ -330,7 +331,7 @@ mod tests {
     fn fa_dispatch_reads_merge_abbrev() {
         let opts = CommandOptions::Align(AlignOptions {
             common: common_default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -347,7 +348,7 @@ mod tests {
     fn fa_dispatch_passes_cache_policy() {
         let opts = CommandOptions::Align(AlignOptions {
             common: common_default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -368,7 +369,7 @@ mod tests {
     fn transcribe_dispatch_reads_all_fields() {
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common: common_with_cache_override(),
-            asr_engine: "whisperx".into(),
+            asr_engine: AsrEngineName::WhisperX,
             diarize: false,
             wor: true.into(),
             merge_abbrev: true.into(),
@@ -387,7 +388,7 @@ mod tests {
     fn transcribe_s_dispatch_reads_all_fields() {
         let opts = CommandOptions::TranscribeS(TranscribeOptions {
             common: common_default(),
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: true,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -410,7 +411,7 @@ mod tests {
             .insert("asr".into(), "tencent".into());
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -420,7 +421,7 @@ mod tests {
         let params = extract_transcribe_dispatch_params(&opts).unwrap();
         assert_eq!(
             params.asr_engine,
-            AsrEngineName::Custom(CustomEngineName::new("tencent"))
+            AsrEngineName::HkTencent
         );
     }
 
@@ -469,7 +470,7 @@ mod tests {
     fn benchmark_dispatch_reads_all_fields() {
         let opts = CommandOptions::Benchmark(BenchmarkOptions {
             common: common_with_cache_override(),
-            asr_engine: "whisper_oai".into(),
+            asr_engine: AsrEngineName::WhisperOai,
             wor: true.into(),
             merge_abbrev: true.into(),
         });
@@ -488,7 +489,7 @@ mod tests {
             .insert("asr".into(), "aliyun".into());
         let opts = CommandOptions::Benchmark(BenchmarkOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             wor: true.into(),
             merge_abbrev: false.into(),
         });
@@ -496,7 +497,7 @@ mod tests {
         let params = extract_benchmark_dispatch_params(&opts).unwrap();
         assert_eq!(
             params.asr_engine,
-            AsrEngineName::Custom(CustomEngineName::new("aliyun"))
+            AsrEngineName::HkAliyun
         );
     }
 
@@ -522,7 +523,7 @@ mod tests {
     fn wrong_command_returns_none() {
         let align = CommandOptions::Align(AlignOptions {
             common: common_default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -538,7 +539,7 @@ mod tests {
 
         let transcribe = CommandOptions::Transcribe(TranscribeOptions {
             common: common_default(),
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -567,7 +568,7 @@ mod tests {
         let variants: Vec<CommandOptions> = vec![
             CommandOptions::Align(AlignOptions {
                 common: common.clone(),
-                fa_engine: "wav2vec_fa".into(),
+                fa_engine: FaEngineName::Wave2Vec,
                 utr_engine: None,
                 utr_overlap_strategy: Default::default(),
                 utr_two_pass: Default::default(),
@@ -578,7 +579,7 @@ mod tests {
             }),
             CommandOptions::Transcribe(TranscribeOptions {
                 common: common.clone(),
-                asr_engine: "rev".into(),
+                asr_engine: AsrEngineName::RevAi,
                 diarize: false,
                 wor: false.into(),
                 merge_abbrev: false.into(),

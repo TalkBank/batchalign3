@@ -48,4 +48,4 @@ node_modules/
 lcov*.info
 
 # Emacs Autosave
-\#*#
+\#*#*.out

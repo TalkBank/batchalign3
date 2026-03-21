@@ -282,6 +282,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{CommandName, JobId, LanguageCode3, NumSpeakers};
     use crate::options::{
         BenchmarkOptions, CommandOptions, CommonOptions, MorphotagOptions, OpensmileOptions,
@@ -373,7 +374,7 @@ mod tests {
             CommandName::from("transcribe"),
             CommandOptions::Transcribe(TranscribeCommand {
                 common,
-                asr_engine: "aliyun".into(),
+                asr_engine: AsrEngineName::HkAliyun,
                 diarize: true,
                 wor: false.into(),
                 merge_abbrev: true.into(),
@@ -410,7 +411,7 @@ mod tests {
             CommandName::from("transcribe_s"),
             CommandOptions::TranscribeS(TranscribeCommand {
                 common: CommonOptions::default(),
-                asr_engine: "rev".into(),
+                asr_engine: AsrEngineName::RevAi,
                 diarize: true,
                 wor: false.into(),
                 merge_abbrev: false.into(),
@@ -447,7 +448,7 @@ mod tests {
                     override_cache: true,
                     ..Default::default()
                 },
-                asr_engine: "rev".into(),
+                asr_engine: AsrEngineName::RevAi,
                 wor: true.into(),
                 merge_abbrev: true.into(),
             }),

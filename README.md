@@ -209,9 +209,8 @@ the remote/local tradeoffs.
 
 ### For developers
 
-- [Python API](book/src/user-guide/python-api.md) — programmatic access to parsing, validation, and pipelines
+- [Python API](book/src/user-guide/python-api.md) — CLI-first usage, removed legacy APIs
 - [Building & Development](book/src/developer/building.md) — Rust toolchain, dev rebuilds, test matrix
-- [Batchalign2 compatibility shim](batchalign/compat.py) — drop-in for `CHATFile`, `Document`, `BatchalignPipeline`
 
 ## Development
 

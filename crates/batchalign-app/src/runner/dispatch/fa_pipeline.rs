@@ -9,7 +9,7 @@ use crate::api::{
     UnixTimestamp,
 };
 use crate::cache::UtteranceCache;
-use crate::options::CommandOptions;
+use crate::options::{CommandOptions, EngineBackend as _};
 use crate::params::{AudioContext, FaParams};
 use crate::pipeline::PipelineServices;
 use crate::runner::debug_dumper::DebugDumper;
@@ -373,7 +373,7 @@ async fn process_one_fa_file(
 
     // Get total audio duration via ffprobe (optional -- for untimed utterance estimation)
     let total_audio_ms = get_audio_duration_ms(&audio_path_str).await;
-    let utr_audio_path = if utr_engine.is_some_and(crate::options::UtrEngine::is_rust_owned) {
+    let utr_audio_path = if utr_engine.as_ref().is_some_and(|e| e.is_rust_owned()) {
         original_audio_path.as_path()
     } else {
         audio_path.as_path()

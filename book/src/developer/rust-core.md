@@ -1,7 +1,7 @@
 # Rust Core (batchalign_core)
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-21 14:47 EDT
 
 For new contributors, start with:
 
@@ -12,16 +12,9 @@ For new contributors, start with:
 
 The PyO3 bridge lives in `pyo3/` within the batchalign3 repository. This is a
 single-crate project (`batchalign-pyo3`) that builds the `batchalign_core`
-Python extension module. It depends on `batchalign-chat-ops` (same workspace)
-and on `talkbank-*` crates via path dependencies pointing to the sibling
-`talkbank-tools` repo — they are **not** vendored copies.
-
-Recent cleanup narrowed that boundary slightly: `batchalign-pyo3` no longer
-depends on `talkbank-transform` just to implement `extract_timed_tiers`; that
-path now uses `talkbank-parser` plus `talkbank-model` validation directly.
-Python-tagged string extraction wrappers also moved out of `talkbank-model`
-and into `pyo3/src/pytypes.rs`, which keeps PyO3 glue at the binding edge
-instead of in the shared model crate.
+Python extension module. It depends on `batchalign-chat-ops` and
+`batchalign-types` (same workspace). It does **not** depend on `talkbank-model`
+or `talkbank-parser` — all CHAT manipulation is handled by the Rust server.
 
 The default editable build is intentionally slim. It builds only the extension
 surface, leaving the embedded CLI bridge and Rev.AI bridge for the full
@@ -30,141 +23,68 @@ still run `batchalign3` by falling back to the repo CLI.
 
 | Crate | Location | Purpose |
 |-------|----------|---------|
-| `batchalign-pyo3` | `pyo3/src/` | PyO3 bridge — what Python imports as `batchalign_core` |
+| `batchalign-pyo3` | `pyo3/src/` | Worker runtime — what Python imports as `batchalign_core` |
 | `batchalign-chat-ops` | `crates/batchalign-chat-ops/` | CHAT lifecycle: parsing, injection, extraction, alignment, post-processing |
-| `talkbank-model` | `../talkbank-tools/crates/talkbank-model/` | Shared data model (path dep) |
-| `talkbank-parser` | `../talkbank-tools/crates/talkbank-parser/` | Tree-sitter parser (path dep) |
-| `talkbank-direct-parser` | `../talkbank-tools/crates/talkbank-direct-parser/` | Chumsky parser (path dep) |
+| `batchalign-types` | `crates/batchalign-types/` | Shared domain types, worker IPC types |
+| `batchalign-app` | `crates/batchalign-app/` | Rust server — owns all CHAT orchestration |
 
 ## Module Organization
 
-The PyO3 crate is organized by domain. `pyo3/src/lib.rs` declares:
-
-**Core CHAT operations (delegated to `batchalign-chat-ops`):**
-
-| Module | Purpose |
-|--------|---------|
-| `dp_align` | Hirschberg DP alignment (WER, retokenization) |
-| `extract` | NLP word extraction from AST (domains: mor, wor, pho, sin) |
-| `forced_alignment` | FA grouping, timing injection, %wor tier generation |
-| `inject` | Morphosyntax/retokenize injection from callback response |
-| `retokenize` | Maps Stanza re-tokenized output back to CHAT words |
-| `utterance_segmentation` | Utterance splitting based on segmentation callback |
-| `nlp` | NLP mapping/validation (re-exports from `batchalign-chat-ops`) |
-
-**`ParsedChat` method implementations (split by domain):**
-
-| Module | Methods |
-|--------|---------|
-| `parsed_chat/mod.rs` | Constructors (`parse`, `parse_lenient`, `build`), serialization, validation, metadata, simple mutations |
-| `parsed_chat/morphosyntax.rs` | `add_morphosyntax`, `add_morphosyntax_batched`, `extract_morphosyntax_payloads`, `inject_morphosyntax_from_cache`, `extract_morphosyntax_strings` |
-| `parsed_chat/fa.rs` | `add_forced_alignment` |
-| `parsed_chat/text.rs` | `add_translation`, `add_utterance_segmentation`, `add_utterance_segmentation_batched` |
-| `parsed_chat/speakers.rs` | `reassign_speakers` shim, `add_utterance_timing` |
-| `parsed_chat/cleanup.rs` | `add_disfluency_markers`, `add_retrace_markers` |
-
-**Inner function modules (business logic called by `ParsedChat` methods):**
+The PyO3 crate (~2,950 lines) is a slim worker runtime. All CHAT manipulation
+lives in `batchalign-chat-ops` and is called directly by the Rust server.
 
 | Module | Purpose |
 |--------|---------|
-| `morphosyntax_ops` | Per-utterance and batched morphosyntax orchestration |
-| `fa_ops` | Forced alignment orchestration |
-| `text_ops` | Translation and utterance segmentation inner functions |
-| `speaker_ops` | Speaker shim (delegates to `batchalign-chat-ops::speaker`) and utterance timing |
-| `cleanup_ops` | Disfluency and retrace markers |
-| `tier_ops` | Dependent tier management |
-
-**Other modules:**
-
-| Module | Purpose |
-|--------|---------|
-| `build` | Build CHAT files from JSON transcript descriptions |
-| `parse` | Pure-Rust parse helpers |
-| `metadata` | Metadata extraction from CHAT headers |
-| `pyfunctions` | Standalone `#[pyfunction]`s (see below) |
-| `cli_entry` | Native CLI bridge called by the Python `batchalign3` wrapper |
-| `py_json_bridge` | JSON serialization/deserialization for Python ↔ Rust |
-| `revai` | Rev.AI native HTTP client |
-
-Shared speaker reassignment now lives in
-`crates/batchalign-chat-ops/src/speaker.rs`, so the PyO3 speaker modules keep
-only the Python-facing shim plus the utterance-timing helper.
+| `lib.rs` | Module registration (~95 lines) |
+| `cli_entry.rs` | PyPI console_scripts entry point |
+| `worker_protocol.rs` | IPC message dispatch (health, capabilities, infer, execute_v2) |
+| `worker_asr_exec.rs` | ASR execution (Whisper, HK providers) |
+| `worker_fa_exec.rs` | Forced alignment execution |
+| `worker_media_exec.rs` | Speaker diarization, OpenSMILE, AVQI |
+| `worker_text_results.rs` | Text task normalization + `align_tokens` |
+| `worker_artifacts.rs` | Prepared artifact loading from IPC attachments |
+| `hk_asr_bridge.rs` | HK/Cantonese provider projection + normalization |
+| `py_json_bridge.rs` | Python→JSON conversion utility |
+| `revai/` | Rev.AI native client wrappers (feature-gated) |
 
 ## Key PyO3 Entry Points
 
-### `ParsedChat` methods
+### Worker Protocol
 
-**Parsing and serialization:**
-- `ParsedChat.parse(text)` — strict parse; rejects files with errors
-- `ParsedChat.parse_lenient(text)` — error-recovery parse; used by alignment
-- `ParsedChat.build(...)` — construct CHAT from structured data
-- `handle.serialize()` — serialize the AST back to valid CHAT text
+- `dispatch_protocol_message(...)` — route IPC messages to typed Python handlers
 
-**Validation:**
-- `handle.validate()` — list of validation error strings
-- `handle.validate_structured()` — structured validation results
-- `handle.validate_chat_structured()` — CHAT-specific structured validation
-- `handle.parse_warnings()` — warnings from the parse phase
-
-**Morphosyntax:**
-- `add_morphosyntax(callback)` — inject %mor/%gra (per-utterance callback)
-- `add_morphosyntax_batched(callback)` — batched variant (one callback call)
-- `extract_morphosyntax_payloads()` — get utterance texts and cache keys
-- `inject_morphosyntax_from_cache(...)` — inject cached %mor/%gra strings
-- `extract_morphosyntax_strings()` — extract final %mor/%gra for cache storage
-- `clear_morphosyntax()` — remove existing %mor/%gra tiers
-
-**Forced alignment and timing:**
-- `add_forced_alignment(callback)` — inject word-level timing
-- `add_utterance_timing(asr_words)` — inject timed ASR words
-
-**Text analysis:**
-- `add_translation(callback)` — inject %xtra translation tiers
-- `add_utterance_segmentation(callback)` — split/merge utterance boundaries
-- `add_utterance_segmentation_batched(callback)` — batched variant
-
-**Speaker and cleanup:**
-- `reassign_speakers(...)` — compatibility shim over `batchalign-chat-ops::speaker`
-- `add_disfluency_markers(...)` — inject disfluency markers
-- `add_retrace_markers(...)` — inject retrace markers
-
-**Metadata and utilities:**
-- `extract_nlp_words(...)` — extract words from the AST for NLP processing
-- `extract_metadata()` — extract header metadata
-- `extract_languages()` — extract declared languages
-- `is_ca()` — check if file uses conversation-analysis conventions
-- `is_no_align()` — check if file has `@Options: noalign`
-- `strip_timing()` — remove all timing bullets
-- `add_dependent_tiers(...)` — add/replace dependent tiers
-- `add_comment(...)` — add a comment header
-
-### Standalone `#[pyfunction]`s
-
-These are module-level functions, not methods on `ParsedChat`:
+### Worker V2 Executors
 
 | Function | Purpose |
 |----------|---------|
-| `parse_and_serialize(text)` | Round-trip parse and serialize |
-| `extract_nlp_words(...)` | Extract words (also available as method) |
-| `build_chat(...)` | Build CHAT and return as string (vs. `ParsedChat.build` which returns a handle) |
-| `add_dependent_tiers(...)` | Add tiers to CHAT text directly |
-| `extract_timed_tiers(...)` | Extract timed tier data |
-| `py_dp_align(...)` | DP alignment exposed to Python |
-| `chat_terminators()` | List valid CHAT terminators |
-| `chat_mor_punct()` | List MOR punctuation items |
-| `align_tokens(...)` | Token alignment |
-| `wer_conform(...)` | Word normalization for WER evaluation |
-| `wer_compute(...)` | Full WER computation |
-| `normalize_cantonese(...)` | Cantonese text normalization (simplified → HK traditional) |
-| `cantonese_char_tokens(...)` | Cantonese character tokenization |
+| `execute_asr_request_v2(...)` | Load prepared audio, call Whisper/HK provider |
+| `execute_forced_alignment_request_v2(...)` | Load prepared audio+text, call FA model |
+| `execute_speaker_request_v2(...)` | Load prepared audio, call pyannote/NeMo |
+| `execute_opensmile_request_v2(...)` | Load prepared audio, extract acoustic features |
+| `execute_avqi_request_v2(...)` | Load paired audio, calculate voice quality |
+| `normalize_text_task_result(...)` | Reshape BatchInferResponse → typed V2 results |
 
-### Callback Pattern
+### Utilities
 
-Most mutation methods accept a Python callback. The Rust side collects data
-from the AST, calls the Python callback with that data (typically as JSON),
-and injects the results back into the AST. For batched variants, Rust
-collects all utterance payloads in a single pass, calls the callback once
-with a JSON array, then injects all results.
+| Function | Purpose |
+|----------|---------|
+| `align_tokens(...)` | Map Stanza tokenizer output back to CHAT words |
+| `normalize_cantonese(...)` | Simplified → HK traditional + domain replacements |
+| `cantonese_char_tokens(...)` | Per-character tokenization for Cantonese FA |
+| HK bridge functions | Project FunASR/Tencent/Aliyun output into common shapes |
+| Rev.AI functions | Native HTTP client (feature-gated) |
+| `cli_main()` | CLI entry point for PyPI console_scripts |
+
+### Removed APIs (2026-03-21)
+
+The following were removed when the Rust server made them redundant:
+
+- `ParsedChat` class and all callback methods (parse, serialize, add_morphosyntax, add_forced_alignment, etc.)
+- `run_provider_pipeline()` and provider pipeline helpers
+- Standalone functions: `build_chat`, `parse_and_serialize`, `extract_nlp_words`, `wer_compute`, `wer_metrics`, `dp_align`, etc.
+- All inner function modules: `morphosyntax_ops`, `fa_ops`, `text_ops`, `speaker_ops`, `cleanup_ops`, `tier_ops`
+
+All domain logic is now tested in `batchalign-chat-ops` (548 inline tests) and exercised through the Rust server.
 
 ## Tree-Sitter Grammar
 

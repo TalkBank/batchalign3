@@ -63,7 +63,7 @@ fn snapshot_job_submission_with_files() {
         source_dir: "/data/corpus".into(),
         options: CommandOptions::Align(AlignOptions {
             common: CommonOptions::default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: batchalign_app::options::FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),

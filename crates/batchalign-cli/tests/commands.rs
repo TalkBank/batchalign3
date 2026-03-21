@@ -30,7 +30,7 @@ fn test_submission(files: Vec<FilePayload>) -> JobSubmission {
         source_dir: String::new(),
         options: CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),

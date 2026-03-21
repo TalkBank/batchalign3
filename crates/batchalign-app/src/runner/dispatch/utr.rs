@@ -453,7 +453,7 @@ async fn infer_utr_asr_response(
                 lang: context.lang.clone(),
             })
         }
-        UtrEngine::Whisper | UtrEngine::Custom(_) => {
+        UtrEngine::Whisper | UtrEngine::HkTencent => {
             crate::transcribe::infer_asr(
                 context.services.pool,
                 &crate::transcribe::AsrInferParams {

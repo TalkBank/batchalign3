@@ -165,13 +165,25 @@ pub(super) fn dashboard_auto_open_enabled(cli_enabled: bool, no_browser_env: boo
 }
 
 /// Launch the submitted job's dashboard URL in the local browser when enabled.
+///
+/// Only opens the browser on macOS when all of:
+/// - the CLI flag is enabled (default on, `--no-open-dashboard` suppresses)
+/// - `BATCHALIGN_NO_BROWSER` env var is not set
+/// - stderr is a TTY (interactive terminal, not piped/cron/ssh)
 pub(super) fn maybe_open_dashboard(dashboard_url: &str, cli_enabled: bool) {
     #[cfg(target_os = "macos")]
     {
+        use std::io::IsTerminal;
+
         if !dashboard_auto_open_enabled(
             cli_enabled,
             std::env::var_os("BATCHALIGN_NO_BROWSER").is_some(),
         ) {
+            return;
+        }
+
+        // Only open in interactive sessions — not cron, CI, ssh, or piped output.
+        if !std::io::stderr().is_terminal() {
             return;
         }
 

@@ -157,7 +157,7 @@ impl JobSubmission {
                     opts.common
                         .engine_overrides
                         .get("asr")
-                        .map(|v| AsrEngineName::from_wire_name(v))
+                        .and_then(|v| AsrEngineName::from_wire_name(v).ok())
                         .unwrap_or(AsrEngineName::RevAi),
                 )
             }
@@ -195,12 +195,11 @@ impl JobSubmission {
             )));
         }
 
-        // Check custom ASR engine language constraints
-        if let Some(AsrEngineName::Custom(engine_name)) = &asr_engine {
-            let name = engine_name.as_str();
-            if name == "tencent" {
-                let chinese_codes = ["zho", "yue", "wuu", "nan", "hak", "cmn"];
-                if !chinese_codes.contains(&lang.as_ref()) {
+        // Check HK ASR engine language constraints
+        if let Some(engine) = &asr_engine {
+            let chinese_codes = ["zho", "yue", "wuu", "nan", "hak", "cmn"];
+            match engine {
+                AsrEngineName::HkTencent if !chinese_codes.contains(&lang.as_ref()) => {
                     return Err(ValidationError(format!(
                         "Language '{}' is not supported by Tencent ASR (Chinese variants only: {}). \
                          Use --asr-engine whisper or --asr-engine rev instead.",
@@ -208,12 +207,14 @@ impl JobSubmission {
                         chinese_codes.join(", ")
                     )));
                 }
-            } else if name == "aliyun" && lang.as_ref() != "yue" {
-                return Err(ValidationError(format!(
-                    "Language '{}' is not supported by Aliyun ASR (Cantonese 'yue' only). \
-                     Use --asr-engine whisper or --asr-engine rev instead.",
-                    lang
-                )));
+                AsrEngineName::HkAliyun if lang.as_ref() != "yue" => {
+                    return Err(ValidationError(format!(
+                        "Language '{}' is not supported by Aliyun ASR (Cantonese 'yue' only). \
+                         Use --asr-engine whisper or --asr-engine rev instead.",
+                        lang
+                    )));
+                }
+                _ => {}
             }
         }
 

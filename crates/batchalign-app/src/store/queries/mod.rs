@@ -146,6 +146,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{FileName, UnixTimestamp};
     use crate::db::JobDB;
     use crate::store::job::{
@@ -186,7 +187,7 @@ mod tests {
         let options = match command {
             "align" => CommandOptions::Align(AlignOptions {
                 common: CommonOptions::default(),
-                fa_engine: "wav2vec_fa".into(),
+                fa_engine: FaEngineName::Wave2Vec,
                 utr_engine: None,
                 utr_overlap_strategy: Default::default(),
                 utr_two_pass: Default::default(),

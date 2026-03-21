@@ -1,7 +1,7 @@
 # CHAT Parsing (Rust)
 
 **Status:** Current
-**Last updated:** 2026-03-14
+**Last updated:** 2026-03-21 14:47 EDT
 
 All CHAT parsing and serialization is handled by Rust. The CHAT lifecycle
 (parsing, word extraction, result injection, validation, serialization)
@@ -35,15 +35,10 @@ to_chat_string() / handle.serialize()
 CHAT text (valid, correctly formatted)
 ```
 
-On the **server path** (production), these operations happen in the Rust
-server crate (`batchalign-app`) using functions from `batchalign-chat-ops`.
-On the **Python API path** (`pipeline_api.py`), Rust still owns those same
-operations through `batchalign_core.run_provider_pipeline()`, which internally
-drives the `ParsedChat` PyO3 handle methods. Both paths use the same
-underlying Rust AST types and functions.
-
-Python never touches raw CHAT text. All mutations go through typed Rust
-methods.
+These operations happen in the Rust server crate (`batchalign-app`) using
+functions from `batchalign-chat-ops`. Python workers provide only raw ML
+inference results; the Rust server handles all CHAT parsing, mutation, and
+serialization.
 
 ## What Rust Does
 
@@ -83,12 +78,9 @@ For all NLP commands (morphosyntax, FA, translation, utseg), the pattern is:
 3. Rust injects results back into the AST, constructing the appropriate
    dependent tiers (%mor, %gra, %wor, %xtra, etc.).
 
-On the **server path**, payload collection and result injection use functions
-from `batchalign-chat-ops` (e.g., `collect_payloads()` / `inject_results()`
-for morphosyntax). On the **Python API path**, `ParsedChat` callback methods
-(`add_morphosyntax_batched`, `add_utterance_segmentation_batched`, etc.)
-wrap the same logic: collect payloads, call the Python callback, inject
-results.
+Payload collection and result injection use functions from
+`batchalign-chat-ops` (e.g., `collect_payloads()` / `inject_results()` for
+morphosyntax).
 
 ### Serialization
 

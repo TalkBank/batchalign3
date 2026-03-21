@@ -65,7 +65,7 @@ fn build_options(global: &GlobalOpts, args: &BenchArgs) -> CommandOptions {
         }),
         BenchTarget::Transcribe => CommandOptions::Transcribe(TranscribeOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -73,7 +73,7 @@ fn build_options(global: &GlobalOpts, args: &BenchArgs) -> CommandOptions {
         }),
         BenchTarget::TranscribeS => CommandOptions::TranscribeS(TranscribeOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: true,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -95,7 +95,7 @@ fn build_options(global: &GlobalOpts, args: &BenchArgs) -> CommandOptions {
         }),
         BenchTarget::Benchmark => CommandOptions::Benchmark(BenchmarkOptions {
             common,
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             wor: false.into(),
             merge_abbrev: false.into(),
         }),

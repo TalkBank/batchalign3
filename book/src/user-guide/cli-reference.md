@@ -28,12 +28,30 @@ Global options go before the command name.
 | `--override-cache` | Bypass the utterance analysis cache |
 | `--lazy-audio` / `--no-lazy-audio` | Toggle lazy audio loading for ASR/alignment |
 | `--tui` / `--no-tui` | Toggle full-screen TUI |
-| `--open-dashboard` / `--no-open-dashboard` | Toggle browser auto-open for submitted job pages |
+| `--open-dashboard` / `--no-open-dashboard` | Toggle browser auto-open for submitted job pages (macOS only, interactive TTY only) |
 | `--engine-overrides JSON` | Select built-in alternative engines with a flat `{string:string}` JSON object; invalid JSON is rejected |
 
 BA2 compatibility flags (`--memlog`, `--mem-guard`, `--adaptive-workers`,
 `--pool`, `--shared-models`, etc.) have been removed. If your scripts use them,
 remove them.
+
+## Dashboard browser auto-open
+
+On macOS, when you run a processing command interactively (e.g.,
+`batchalign3 transcribe corpus/ output/`), the CLI automatically opens the
+job's dashboard page in your default browser. This lets you monitor progress
+in real time.
+
+The dashboard auto-open is **only** triggered when:
+
+- Running on macOS (no-op on Linux/Windows)
+- stderr is connected to an interactive terminal (TTY)
+- `--no-open-dashboard` was not passed
+- The `BATCHALIGN_NO_BROWSER` environment variable is not set
+
+It will **not** fire in non-interactive contexts: cron jobs, CI pipelines,
+SSH sessions without a display, piped output, or scripts. To suppress it
+explicitly in interactive sessions, pass `--no-open-dashboard`.
 
 ## Common path-processing options
 

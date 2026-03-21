@@ -7,7 +7,7 @@
 mod common;
 
 use batchalign_app::options::{
-    AsrEngineName, CommandOptions, CustomEngineName, FaEngineName, UtrEngine as AppUtrEngine,
+    AsrEngineName, CommandOptions, FaEngineName, UtrEngine as AppUtrEngine,
     UtrOverlapStrategy as AppUtrOverlapStrategy,
 };
 use batchalign_cli::args::{Cli, CommonOpts, build_typed_options};
@@ -187,7 +187,7 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
     ]) {
         CommandOptions::Align(options) => assert_eq!(
             options.fa_engine,
-            FaEngineName::Custom(CustomEngineName::new("cantonese_fa"))
+            FaEngineName::Wav2vecCanto
         ),
         other => panic!("expected Align options, got {other:?}"),
     }
@@ -203,7 +203,7 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
     ]) {
         CommandOptions::Align(options) => assert_eq!(
             options.utr_engine,
-            Some(AppUtrEngine::Custom(CustomEngineName::new("tencent_utr")))
+            Some(AppUtrEngine::HkTencent)
         ),
         other => panic!("expected Align options, got {other:?}"),
     }
@@ -219,7 +219,7 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
     ]) {
         CommandOptions::Transcribe(options) => assert_eq!(
             options.asr_engine,
-            AsrEngineName::Custom(CustomEngineName::new("tencent"))
+            AsrEngineName::HkTencent
         ),
         other => panic!("expected Transcribe options, got {other:?}"),
     }
@@ -235,7 +235,7 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
     ]) {
         CommandOptions::Benchmark(options) => assert_eq!(
             options.asr_engine,
-            AsrEngineName::Custom(CustomEngineName::new("funaudio"))
+            AsrEngineName::HkFunaudio
         ),
         other => panic!("expected Benchmark options, got {other:?}"),
     }

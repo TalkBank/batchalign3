@@ -397,55 +397,22 @@ Migration-era quality now depends on layered tests:
 
 ## 7) Python API migration
 
-### BA2 Python API that no longer exists
+### BA2 Python API — all removed
 
 BA2 exposed a rich Python API: `Document`, `CHATFile`, `BatchalignPipeline`,
 and 23+ individual engine classes (`WhisperEngine`, `StanzaEngine`, etc.).
-BA3 replaced this with a Rust-owned AST (`ParsedChat`) and typed pipeline
-execution.
+
+**All of these have been removed.** BA3 is CLI-first. The Rust server owns all
+CHAT manipulation. There is no Python API for parsing, mutating, or serializing
+CHAT files.
 
 **External usage was minimal.** A pre-release audit found ~2,400 monthly
 PyPI downloads (all CLI usage — no downstream packages depend on batchalign),
 4 external repos on GitHub (1 genuine dependent, 3 tutorial copies), and zero
-academic papers referencing the Python API. All known external usage falls in
-Tiers 1-2 (file I/O and pipeline execution). Nobody uses subscript access,
-engine classes, or document mutation. Full audit with code patterns:
+academic papers referencing the Python API. Full audit:
 `docs/ba2-python-api-usage-findings.md`.
 
 ### BA3 equivalents for each BA2 pattern
-
-**Reading and writing CHAT files:**
-
-```python
-# BA2
-from batchalign import CHATFile
-chat = CHATFile(path="input.cha")
-doc = chat.doc
-chat.write("output.cha")
-
-# BA3
-from pathlib import Path
-import batchalign_core
-text = Path("input.cha").read_text("utf-8")
-parsed = batchalign_core.ParsedChat.parse(text)
-Path("output.cha").write_text(parsed.serialize(), "utf-8")
-```
-
-**Creating a document from text:**
-
-```python
-# BA2
-from batchalign import Document
-doc = Document.new("hello world .", media_path="audio.wav", lang="eng")
-
-# BA3
-import json, batchalign_core
-transcript = json.dumps({"lines": [
-    {"speaker": "PAR", "text": "hello world ."}
-]})
-chat_text = batchalign_core.build_chat(transcript)
-parsed = batchalign_core.ParsedChat.parse(chat_text)
-```
 
 **Running pipeline operations:**
 
@@ -455,69 +422,34 @@ from batchalign import BatchalignPipeline
 nlp = BatchalignPipeline.new("morphosyntax", lang="eng")
 result = nlp("input.cha")
 
-# BA3 — via CLI (simplest)
+# BA3 — CLI is the only entry point
 import subprocess
-subprocess.run(["batchalign3", "morphotag", "input.cha", "-o", "output/"])
-
-# BA3 — via Python API (for programmatic use)
-from batchalign.pipeline_api import run_pipeline, PipelineOperation, LocalProviderInvoker
-output = run_pipeline(chat_text, lang="eng",
-    operations=[PipelineOperation("morphosyntax")],
-    provider=LocalProviderInvoker({"morphosyntax": my_callback}))
+subprocess.run(["batchalign3", "morphotag", "input/", "output/", "--lang", "eng"])
 ```
 
-**Validation:**
+**Reading CHAT files:** Use standard file I/O. BA3 does not provide a Python
+CHAT parser — use the CLI for processing.
 
-```python
-# BA2
-errors = doc.validate()
+**Validation:** Use `batchalign3 validate input/` or the `chatter` TUI.
 
-# BA3
-parsed = batchalign_core.ParsedChat.parse(chat_text)
-errors = parsed.validate()          # list[str]
-structured = parsed.validate_structured()  # JSON
-```
+### Removed surfaces (2026-03-21)
 
-### The compat shim (`batchalign.compat`)
-
-A compatibility layer wraps BA3's API in BA2-style classes for the transition
-period. It emits `DeprecationWarning` on import.
-
-```python
-from batchalign.compat import CHATFile, Document, BatchalignPipeline
-
-# These work as before:
-chat = CHATFile(path="input.cha")
-chat.write("output.cha")
-nlp = BatchalignPipeline.new("morphosyntax", lang="eng")
-```
-
-**Shim limitations:**
-- Individual engine classes (`WhisperEngine`, `StanzaEngine`) are not
-  provided — use CLI commands instead
-- `BatchalignPipeline` delegates to the `batchalign3` CLI subprocess
-  rather than running in-process
-- `TextGridFile` is not shimmed
-
-**Behavioral differences:**
-- The CLI may start a background daemon that keeps models warm — see
-  [Persistent State](persistent-state.md)
-- Results are cached in SQLite — re-processing identical input is instant
-- First run downloads ML models (~2 GB)
+| Removed | Replacement |
+|---------|-------------|
+| `batchalign.compat` (`CHATFile`, `Document`, `BatchalignPipeline`) | CLI via `subprocess` |
+| `batchalign.pipeline_api` (`run_pipeline`, `LocalProviderInvoker`) | CLI via `subprocess` |
+| `batchalign_core.ParsedChat` (parse, serialize, add_*, callbacks) | Rust server handles directly |
+| `batchalign.inference.benchmark` (`compute_wer`) | `batchalign3 compare` CLI command |
+| Individual engine classes (`WhisperEngine`, `StanzaEngine`, etc.) | CLI commands (`transcribe`, `morphotag`, `align`) |
 
 ### What's genuinely lost
 
-Two capabilities have no BA3 equivalent:
+**Engine composition** (`BatchalignPipeline.new("asr,morphosyntax,fa")` with
+specific engine instances): BA3 uses the CLI command surface. Multi-step
+pipelines run as sequential CLI commands.
 
-- **Engine composition** (`BatchalignPipeline.new("asr,morphosyntax,fa")`
-  with specific engine instances): BA3 uses the CLI command surface for
-  pipeline composition. The Python API provides single-operation execution
-  via `run_pipeline()`. Multi-step pipelines run as sequential CLI commands.
-
-- **Direct AST mutation** (`doc[0][0].text = "modified"`): BA2's Python
-  objects were mutable. BA3's CHAT AST is Rust-owned; subscript access via
-  the compat shim is read-only. Mutation requires serialize → edit →
-  re-parse, or new Rust PyO3 surface area. Zero external users do this.
+**Direct AST mutation** (`doc[0][0].text = "modified"`): The CHAT AST is
+Rust-owned. Edit CHAT files as text or use the `chatter` TUI.
 
 Neither limitation affects any known external user. See the
 [full usage audit](../../docs/ba2-python-api-usage-findings.md) for evidence.
@@ -527,8 +459,7 @@ Neither limitation affects any known external user. See the
 1. Start with the command/runtime crosswalk plus the current HK engine and
    extension-layer chapters.
 2. Pick one existing BA2 customization and re-implement it as either a built-in
-   engine module or a `batchalign.pipeline_api` operation/provider integration, not a long-lived
-   source fork.
+   engine module or a CLI extension, not a long-lived source fork.
 3. Add/extend golden cases before behavior changes.
 4. For alignment/morphology changes, route through core AST/validator contracts
    and keep side effects deterministic and observable.

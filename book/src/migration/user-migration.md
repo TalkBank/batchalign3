@@ -1,7 +1,7 @@
 # User Workflow Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-21 15:48 EDT
 
 This page describes durable differences between:
 
@@ -101,6 +101,30 @@ and preserved legacy runners should keep their native
 
 For HK material in particular, that means comparing against `batchalignhk`, not
 stock `batchalign`.
+
+### `transcribe` for daily English work: nothing changed
+
+If you transcribe English audio, your commands work exactly as before:
+
+```bash
+# BA2 — --lang defaults to "eng", no need to type it
+batchalign transcribe recordings/ output/
+
+# BA3 — same default, same behavior
+batchalign3 transcribe recordings/ -o output/
+```
+
+The only required change is the binary name (`batchalign3`) and the preferred
+output flag (`-o` instead of positional). `--lang` still defaults to `"eng"`.
+You do not need to type `--lang eng` unless you want to be explicit.
+
+**New in BA3: `--lang auto`.** This is an *optional* feature for bilingual or
+code-switched recordings where you don't want to pick a single language.
+Whisper's multilingual model auto-detects the spoken language from the audio.
+You never need `--lang auto` for monolingual English work.
+
+**`=` sign syntax.** Both `--lang eng` and `--lang=eng` are identical and have
+always been identical (this was true in BA2 as well). Use whichever you prefer.
 
 ### Flag behavior and defaults
 

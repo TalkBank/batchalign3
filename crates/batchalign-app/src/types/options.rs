@@ -63,33 +63,32 @@ fn default_feature_set() -> String {
     "eGeMAPSv02".to_string()
 }
 
-/// Wraps a plugin-defined engine identifier so the rest of the system does not
-/// pass anonymous strings around when a built-in enum variant is not available.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CustomEngineName(String);
+/// Shared behavior for all engine backend selectors.
+///
+/// Implement this on each engine enum (`AsrEngineName`, `FaEngineName`,
+/// `UtrEngine`) so generic code can work across engine categories without
+/// knowing which specific enum it holds.
+pub trait EngineBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
+    /// Stable wire-format name used in JSON, CLI args, and SQLite.
+    fn wire_name(&self) -> &str;
 
-impl CustomEngineName {
-    /// Build a custom engine identifier from owned storage.
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
+    /// Whether this engine's inference is fully Rust-owned (no Python worker).
+    fn is_rust_owned(&self) -> bool;
 
-    /// Borrow the engine identifier as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+    /// Parse a wire-format name. Returns `None` for unrecognized names.
+    fn try_from_wire_name(name: &str) -> Option<Self>
+    where
+        Self: Sized;
 }
 
-impl From<String> for CustomEngineName {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<&str> for CustomEngineName {
-    fn from(value: &str) -> Self {
-        Self::new(value)
-    }
+/// Error returned when a wire-format engine name is not recognized.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("unknown engine name \"{name}\" for {category}")]
+pub struct UnknownEngineName {
+    /// The unrecognized wire name.
+    pub name: String,
+    /// Which engine category was being parsed (e.g. "ASR", "FA", "UTR").
+    pub category: &'static str,
 }
 
 /// Typed UTR engine selector.
@@ -103,33 +102,45 @@ pub enum UtrEngine {
     RevAi,
     /// Python-worker ASR path with the built-in Whisper profile.
     Whisper,
-    /// Python-worker ASR path with a plugin-defined engine/profile name.
-    Custom(CustomEngineName),
+    /// Tencent UTR (HK/Cantonese).
+    HkTencent,
 }
 
-impl UtrEngine {
-    /// Parse one persisted wire-format token into the typed runtime selector.
-    pub fn from_wire_name(name: &str) -> Self {
-        match name {
-            "rev_utr" => Self::RevAi,
-            "whisper_utr" => Self::Whisper,
-            other => Self::Custom(CustomEngineName::from(other)),
-        }
-    }
-
-    /// Borrow the legacy wire-format token used in JSON payloads and SQLite.
-    pub fn as_wire_name(&self) -> &str {
+impl EngineBackend for UtrEngine {
+    fn wire_name(&self) -> &str {
         match self {
             Self::RevAi => "rev_utr",
             Self::Whisper => "whisper_utr",
-            Self::Custom(name) => name.as_str(),
+            Self::HkTencent => "tencent_utr",
         }
     }
 
-    /// Whether this engine is fully Rust-owned and should never route through
-    /// the Python worker transport in server mode.
-    pub fn is_rust_owned(&self) -> bool {
+    fn is_rust_owned(&self) -> bool {
         matches!(self, Self::RevAi)
+    }
+
+    fn try_from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "rev_utr" => Some(Self::RevAi),
+            "whisper_utr" => Some(Self::Whisper),
+            "tencent_utr" => Some(Self::HkTencent),
+            _ => None,
+        }
+    }
+}
+
+impl UtrEngine {
+    /// Parse one persisted wire-format token.
+    pub fn from_wire_name(name: &str) -> Result<Self, UnknownEngineName> {
+        Self::try_from_wire_name(name).ok_or_else(|| UnknownEngineName {
+            name: name.to_owned(),
+            category: "UTR",
+        })
+    }
+
+    /// Borrow the wire-format token for JSON/SQLite.
+    pub fn as_wire_name(&self) -> &str {
+        self.wire_name()
     }
 
     /// Whether the current engine can reuse the worker-side segment strategy
@@ -154,7 +165,7 @@ impl<'de> Deserialize<'de> for UtrEngine {
         D: serde::Deserializer<'de>,
     {
         let name = String::deserialize(deserializer)?;
-        Ok(Self::from_wire_name(&name))
+        Self::from_wire_name(&name).map_err(serde::de::Error::custom)
     }
 }
 
@@ -169,27 +180,45 @@ pub enum FaEngineName {
     Wave2Vec,
     /// Whisper token-timestamp forced alignment.
     Whisper,
-    /// Plugin-defined forced-alignment backend/profile.
-    Custom(CustomEngineName),
+    /// Wav2Vec Cantonese forced alignment (HK).
+    Wav2vecCanto,
 }
 
-impl FaEngineName {
-    /// Parse one persisted wire-format token into the typed runtime selector.
-    pub fn from_wire_name(name: &str) -> Self {
-        match name {
-            "wav2vec_fa" => Self::Wave2Vec,
-            "whisper_fa" => Self::Whisper,
-            other => Self::Custom(CustomEngineName::from(other)),
-        }
-    }
-
-    /// Borrow the legacy wire-format token used in JSON payloads and SQLite.
-    pub fn as_wire_name(&self) -> &str {
+impl EngineBackend for FaEngineName {
+    fn wire_name(&self) -> &str {
         match self {
             Self::Wave2Vec => "wav2vec_fa",
             Self::Whisper => "whisper_fa",
-            Self::Custom(name) => name.as_str(),
+            Self::Wav2vecCanto => "cantonese_fa",
         }
+    }
+
+    fn is_rust_owned(&self) -> bool {
+        false
+    }
+
+    fn try_from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "wav2vec_fa" | "wave2vec" => Some(Self::Wave2Vec),
+            "whisper_fa" | "whisper" => Some(Self::Whisper),
+            "cantonese_fa" | "wav2vec_canto" | "wav2vec_fa_canto" => Some(Self::Wav2vecCanto),
+            _ => None,
+        }
+    }
+}
+
+impl FaEngineName {
+    /// Parse one persisted wire-format token.
+    pub fn from_wire_name(name: &str) -> Result<Self, UnknownEngineName> {
+        Self::try_from_wire_name(name).ok_or_else(|| UnknownEngineName {
+            name: name.to_owned(),
+            category: "FA",
+        })
+    }
+
+    /// Borrow the wire-format token for JSON/SQLite.
+    pub fn as_wire_name(&self) -> &str {
+        self.wire_name()
     }
 }
 
@@ -208,19 +237,7 @@ impl<'de> Deserialize<'de> for FaEngineName {
         D: serde::Deserializer<'de>,
     {
         let name = String::deserialize(deserializer)?;
-        Ok(Self::from_wire_name(&name))
-    }
-}
-
-impl From<String> for FaEngineName {
-    fn from(value: String) -> Self {
-        Self::from_wire_name(&value)
-    }
-}
-
-impl From<&str> for FaEngineName {
-    fn from(value: &str) -> Self {
-        Self::from_wire_name(value)
+        Self::from_wire_name(&name).map_err(serde::de::Error::custom)
     }
 }
 
@@ -239,31 +256,57 @@ pub enum AsrEngineName {
     WhisperX,
     /// OpenAI Whisper API backend.
     WhisperOai,
-    /// Plugin-defined ASR backend/profile.
-    Custom(CustomEngineName),
+    /// Tencent Cloud ASR (HK/Cantonese).
+    HkTencent,
+    /// Aliyun ASR (HK/Cantonese).
+    HkAliyun,
+    /// FunAudio ASR (HK/Cantonese).
+    HkFunaudio,
 }
 
-impl AsrEngineName {
-    /// Parse one persisted wire-format token into the typed runtime selector.
-    pub fn from_wire_name(name: &str) -> Self {
-        match name {
-            "rev" => Self::RevAi,
-            "whisper" => Self::Whisper,
-            "whisperx" => Self::WhisperX,
-            "whisper_oai" => Self::WhisperOai,
-            other => Self::Custom(CustomEngineName::from(other)),
-        }
-    }
-
-    /// Borrow the legacy wire-format token used in JSON payloads and SQLite.
-    pub fn as_wire_name(&self) -> &str {
+impl EngineBackend for AsrEngineName {
+    fn wire_name(&self) -> &str {
         match self {
             Self::RevAi => "rev",
             Self::Whisper => "whisper",
             Self::WhisperX => "whisperx",
             Self::WhisperOai => "whisper_oai",
-            Self::Custom(name) => name.as_str(),
+            Self::HkTencent => "tencent",
+            Self::HkAliyun => "aliyun",
+            Self::HkFunaudio => "funaudio",
         }
+    }
+
+    fn is_rust_owned(&self) -> bool {
+        matches!(self, Self::RevAi)
+    }
+
+    fn try_from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "rev" => Some(Self::RevAi),
+            "whisper" => Some(Self::Whisper),
+            "whisperx" => Some(Self::WhisperX),
+            "whisper_oai" => Some(Self::WhisperOai),
+            "tencent" => Some(Self::HkTencent),
+            "aliyun" => Some(Self::HkAliyun),
+            "funaudio" => Some(Self::HkFunaudio),
+            _ => None,
+        }
+    }
+}
+
+impl AsrEngineName {
+    /// Parse one persisted wire-format token. Falls back to `try_from_wire_name`.
+    pub fn from_wire_name(name: &str) -> Result<Self, UnknownEngineName> {
+        Self::try_from_wire_name(name).ok_or_else(|| UnknownEngineName {
+            name: name.to_owned(),
+            category: "ASR",
+        })
+    }
+
+    /// Borrow the wire-format token for JSON/SQLite.
+    pub fn as_wire_name(&self) -> &str {
+        self.wire_name()
     }
 
     /// Whether this engine is the Rust-owned Rev.AI path.
@@ -287,19 +330,7 @@ impl<'de> Deserialize<'de> for AsrEngineName {
         D: serde::Deserializer<'de>,
     {
         let name = String::deserialize(deserializer)?;
-        Ok(Self::from_wire_name(&name))
-    }
-}
-
-impl From<String> for AsrEngineName {
-    fn from(value: String) -> Self {
-        Self::from_wire_name(&value)
-    }
-}
-
-impl From<&str> for AsrEngineName {
-    fn from(value: &str) -> Self {
-        Self::from_wire_name(value)
+        Self::from_wire_name(&name).map_err(serde::de::Error::custom)
     }
 }
 
@@ -461,7 +492,7 @@ impl AlignOptions {
         self.common
             .engine_overrides
             .get("fa")
-            .map(|value| FaEngineName::from_wire_name(value))
+            .and_then(|value| FaEngineName::from_wire_name(value).ok())
             .unwrap_or_else(|| self.fa_engine.clone())
     }
 }
@@ -501,7 +532,7 @@ impl TranscribeOptions {
         self.common
             .engine_overrides
             .get("asr")
-            .map(|value| AsrEngineName::from_wire_name(value))
+            .and_then(|value| AsrEngineName::from_wire_name(value).ok())
             .unwrap_or_else(|| self.asr_engine.clone())
     }
 }
@@ -588,7 +619,7 @@ impl BenchmarkOptions {
         self.common
             .engine_overrides
             .get("asr")
-            .map(|value| AsrEngineName::from_wire_name(value))
+            .and_then(|value| AsrEngineName::from_wire_name(value).ok())
             .unwrap_or_else(|| self.asr_engine.clone())
     }
 }
@@ -760,7 +791,7 @@ mod tests {
     fn align_roundtrip() {
         let opts = CommandOptions::Align(AlignOptions {
             common: CommonOptions::default(),
-            fa_engine: "whisper_fa".into(),
+            fa_engine: FaEngineName::Whisper,
             utr_engine: Some(UtrEngine::RevAi),
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -778,7 +809,7 @@ mod tests {
     fn transcribe_roundtrip() {
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "whisperx".into(),
+            asr_engine: AsrEngineName::WhisperX,
             diarize: true,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -793,7 +824,7 @@ mod tests {
     fn transcribe_s_roundtrip() {
         let opts = CommandOptions::TranscribeS(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: true,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -811,7 +842,7 @@ mod tests {
             (
                 CommandOptions::Align(AlignOptions {
                     common: CommonOptions::default(),
-                    fa_engine: "wav2vec_fa".into(),
+                    fa_engine: FaEngineName::Wave2Vec,
                     utr_engine: None,
                     utr_overlap_strategy: Default::default(),
                     utr_two_pass: Default::default(),
@@ -895,7 +926,7 @@ mod tests {
                 mwt: BTreeMap::new(),
                 ..Default::default()
             },
-            fa_engine: "cantonese_fa".into(),
+            fa_engine: FaEngineName::Wav2vecCanto,
             ..AlignOptions::default()
         });
 
@@ -913,7 +944,7 @@ mod tests {
                 engine_overrides: overrides,
                 ..CommonOptions::default()
             },
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -922,7 +953,7 @@ mod tests {
 
         assert_eq!(
             opts.effective_asr_engine(),
-            AsrEngineName::Custom(CustomEngineName::new("tencent"))
+            AsrEngineName::HkTencent
         );
     }
 
@@ -935,14 +966,14 @@ mod tests {
                 engine_overrides: overrides,
                 ..CommonOptions::default()
             },
-            asr_engine: "rev".into(),
+            asr_engine: AsrEngineName::RevAi,
             wor: true.into(),
             merge_abbrev: false.into(),
         };
 
         assert_eq!(
             opts.effective_asr_engine(),
-            AsrEngineName::Custom(CustomEngineName::new("aliyun"))
+            AsrEngineName::HkAliyun
         );
     }
 
@@ -1019,7 +1050,7 @@ mod tests {
     fn benchmark_roundtrip() {
         let opts = CommandOptions::Benchmark(BenchmarkOptions {
             common: CommonOptions::default(),
-            asr_engine: "whisper_oai".into(),
+            asr_engine: AsrEngineName::WhisperOai,
             wor: true.into(),
             merge_abbrev: false.into(),
         });
@@ -1044,7 +1075,7 @@ mod tests {
         let rev_json = serde_json::to_string(&UtrEngine::RevAi).unwrap();
         let whisper_json = serde_json::to_string(&UtrEngine::Whisper).unwrap();
         let custom_json =
-            serde_json::to_string(&UtrEngine::Custom(CustomEngineName::new("tencent_utr")))
+            serde_json::to_string(&UtrEngine::HkTencent)
                 .unwrap();
 
         assert_eq!(rev_json, "\"rev_utr\"");
@@ -1061,7 +1092,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<UtrEngine>(&custom_json).unwrap(),
-            UtrEngine::Custom(CustomEngineName::new("tencent_utr"))
+            UtrEngine::HkTencent
         );
     }
 
@@ -1070,7 +1101,7 @@ mod tests {
         let wav2vec_json = serde_json::to_string(&FaEngineName::Wave2Vec).unwrap();
         let whisper_json = serde_json::to_string(&FaEngineName::Whisper).unwrap();
         let custom_json =
-            serde_json::to_string(&FaEngineName::Custom(CustomEngineName::new("cantonese_fa")))
+            serde_json::to_string(&FaEngineName::Wav2vecCanto)
                 .unwrap();
 
         assert_eq!(wav2vec_json, "\"wav2vec_fa\"");
@@ -1087,7 +1118,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<FaEngineName>(&custom_json).unwrap(),
-            FaEngineName::Custom(CustomEngineName::new("cantonese_fa"))
+            FaEngineName::Wav2vecCanto
         );
     }
 
@@ -1096,7 +1127,7 @@ mod tests {
         let rev_json = serde_json::to_string(&AsrEngineName::RevAi).unwrap();
         let whisperx_json = serde_json::to_string(&AsrEngineName::WhisperX).unwrap();
         let custom_json =
-            serde_json::to_string(&AsrEngineName::Custom(CustomEngineName::new("tencent")))
+            serde_json::to_string(&AsrEngineName::HkTencent)
                 .unwrap();
 
         assert_eq!(rev_json, "\"rev\"");
@@ -1113,7 +1144,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<AsrEngineName>(&custom_json).unwrap(),
-            AsrEngineName::Custom(CustomEngineName::new("tencent"))
+            AsrEngineName::HkTencent
         );
     }
 }

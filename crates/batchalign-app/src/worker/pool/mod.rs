@@ -26,6 +26,7 @@ mod execute_v2;
 mod lifecycle;
 pub(crate) mod reaper;
 pub(crate) mod shared_gpu;
+mod status;
 
 pub use checkout::CheckedOutWorker;
 
@@ -70,7 +71,7 @@ pub(super) fn lock_recovered<T>(mutex: &std::sync::Mutex<T>) -> std::sync::Mutex
 }
 
 /// Key for looking up workers: (worker profile, lang, engine overrides).
-type WorkerKey = (WorkerProfile, WorkerLanguage, String);
+pub(super) type WorkerKey = (WorkerProfile, WorkerLanguage, String);
 
 /// Lifecycle state of background model warmup.
 #[derive(
@@ -235,7 +236,7 @@ impl PoolConfig {
 /// The group uses a split concurrency model: a semaphore for async
 /// waiting and a mutex for the actual worker queue, so the mutex is
 /// never held across an `.await` point.
-struct WorkerGroup {
+pub(super) struct WorkerGroup {
     /// Owned worker handles that are currently idle (not checked out).
     ///
     /// Protected by a `std::sync::Mutex` (not `tokio::sync::Mutex`)
@@ -243,7 +244,7 @@ struct WorkerGroup {
     /// `pop_front` -- microseconds, never across an `.await`. This avoids
     /// the overhead of a tokio-aware mutex and is safe because the
     /// critical section cannot yield.
-    idle: std::sync::Mutex<VecDeque<WorkerHandle>>,
+    pub(super) idle: std::sync::Mutex<VecDeque<WorkerHandle>>,
 
     /// Semaphore with one permit per idle worker.
     ///
@@ -257,7 +258,7 @@ struct WorkerGroup {
 
     /// TCP worker handles discovered from the registry. These are
     /// persistent daemons that survive server restarts.
-    tcp_workers: std::sync::Mutex<VecDeque<TcpWorkerHandle>>,
+    pub(super) tcp_workers: std::sync::Mutex<VecDeque<TcpWorkerHandle>>,
 
     /// Semaphore with one permit per idle TCP worker.
     tcp_available: Semaphore,
@@ -270,7 +271,7 @@ struct WorkerGroup {
     /// `try_claim_spawn_slot()` (via `compare_exchange`) before the
     /// worker is spawned, and decremented when a worker is removed
     /// (idle timeout, health failure, or `CheckedOutWorker::take()`).
-    total: AtomicUsize,
+    pub(super) total: AtomicUsize,
 
     /// Serialize worker bootstrap for one key.
     ///
@@ -295,14 +296,14 @@ impl WorkerGroup {
 }
 
 /// Shared map of worker groups, accessible from both the pool and background tasks.
-type GroupsMap = Arc<std::sync::Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>;
+pub(super) type GroupsMap = Arc<std::sync::Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>;
 
 // ---------------------------------------------------------------------------
 // WorkerPool
 // ---------------------------------------------------------------------------
 
 /// Key for shared GPU workers: (lang, engine_overrides).
-type GpuWorkerKey = (WorkerLanguage, String);
+pub(super) type GpuWorkerKey = (WorkerLanguage, String);
 
 /// Manages a pool of Python worker processes.
 pub struct WorkerPool {
@@ -1197,174 +1198,8 @@ impl Drop for WorkerPool {
 }
 
 impl WorkerPool {
-    /// Check if there are idle workers for a given `(command, lang)` key.
-    ///
-    /// Used by the memory gate to skip the system memory check when reusable
-    /// workers already exist -- those workers are already loaded, so no new
-    /// memory allocation is needed. Checks both stdio and TCP workers.
-    pub fn has_idle_workers(&self, command: &CommandName, lang: impl Into<WorkerLanguage>) -> bool {
-        let lang = lang.into();
-        let Some(profile) = WorkerProfile::for_command(command) else {
-            return false;
-        };
-
-        // GPU profile workers are always "available" (shared, concurrent).
-        if profile.is_concurrent() {
-            // Check TCP GPU workers first.
-            if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock()
-                && tcp_gpu_workers.keys().any(|(l, _)| l == &lang)
-            {
-                return true;
-            }
-            let gpu_workers = self.gpu_workers.try_lock().ok();
-            if let Some(gpu_workers) = gpu_workers {
-                return gpu_workers.keys().any(|(l, _)| l == &lang);
-            }
-            return false;
-        }
-
-        let groups = lock_recovered(&self.groups);
-        groups
-            .iter()
-            .any(|((group_profile, group_lang, _), group)| {
-                if *group_profile != profile || group_lang != &lang {
-                    return false;
-                }
-                !lock_recovered(&group.idle).is_empty()
-                    || !lock_recovered(&group.tcp_workers).is_empty()
-            })
-    }
-
-    /// Number of active workers (total across all keys, including checked-out).
-    ///
-    /// Counts sequential group workers, shared GPU workers, and TCP workers.
-    pub fn worker_count(&self) -> usize {
-        let groups_count: usize = {
-            let groups = lock_recovered(&self.groups);
-            groups
-                .values()
-                .map(|g| g.total.load(Ordering::Relaxed))
-                .sum()
-        };
-        let gpu_count = self.gpu_workers.try_lock().map(|g| g.len()).unwrap_or(0);
-        let tcp_gpu_count = self
-            .gpu_tcp_workers
-            .try_lock()
-            .map(|g| g.len())
-            .unwrap_or(0);
-        groups_count + gpu_count + tcp_gpu_count
-    }
-
-    /// Active worker keys: `["profile:stanza:eng (2 total, 1 idle)", ...]`.
-    ///
-    /// Includes both sequential group workers and shared GPU workers.
-    pub fn worker_keys(&self) -> Vec<String> {
-        let groups = lock_recovered(&self.groups);
-        let mut keys: Vec<String> = groups
-            .iter()
-            .map(|((profile, lang, engine_overrides), group)| {
-                let total = group.total.load(Ordering::Relaxed);
-                let idle = lock_recovered(&group.idle).len();
-                let suffix = if engine_overrides.is_empty() {
-                    String::new()
-                } else {
-                    format!(":{}", engine_overrides)
-                };
-                format!(
-                    "{}:{lang}{suffix} ({total} total, {idle} idle)",
-                    profile.label()
-                )
-            })
-            .collect();
-        drop(groups);
-
-        if let Ok(gpu_workers) = self.gpu_workers.try_lock() {
-            for ((lang, engine_overrides), _worker) in gpu_workers.iter() {
-                let suffix = if engine_overrides.is_empty() {
-                    String::new()
-                } else {
-                    format!(":{}", engine_overrides)
-                };
-                keys.push(format!("profile:gpu:{lang}{suffix} (1 total, shared)"));
-            }
-        }
-
-        if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock() {
-            for ((lang, engine_overrides), _worker) in tcp_gpu_workers.iter() {
-                let suffix = if engine_overrides.is_empty() {
-                    String::new()
-                } else {
-                    format!(":{}", engine_overrides)
-                };
-                keys.push(format!("profile:gpu:{lang}{suffix} (1 total, tcp-shared)"));
-            }
-        }
-
-        keys.sort();
-        keys
-    }
-
-    /// Summary of idle workers: `["profile:stanza:eng:pid=1234:transport=stdio", ...]`.
-    ///
-    /// Reports idle sequential workers and shared GPU workers. Checked-out
-    /// sequential workers are invisible; use `worker_count()` for full totals.
-    pub fn worker_summary(&self) -> Vec<String> {
-        let groups = lock_recovered(&self.groups);
-        let mut summary = Vec::new();
-        for group in groups.values() {
-            let idle = lock_recovered(&group.idle);
-            for worker in idle.iter() {
-                summary.push(format!(
-                    "{}:{}:pid={}:transport={}",
-                    worker.profile_label(),
-                    worker.lang(),
-                    worker.pid(),
-                    worker.transport()
-                ));
-            }
-        }
-        drop(groups);
-
-        if let Ok(gpu_workers) = self.gpu_workers.try_lock() {
-            for ((_lang, _engine_overrides), worker) in gpu_workers.iter() {
-                summary.push(format!(
-                    "{}:{}:pid={}:transport=stdio:concurrent",
-                    worker.profile_label(),
-                    worker.lang(),
-                    worker.pid()
-                ));
-            }
-        }
-
-        if let Ok(tcp_gpu_workers) = self.gpu_tcp_workers.try_lock() {
-            for ((lang, _engine_overrides), worker) in tcp_gpu_workers.iter() {
-                summary.push(format!(
-                    "profile:gpu:{}:pid={}:transport=tcp:concurrent",
-                    lang,
-                    worker.pid()
-                ));
-            }
-        }
-
-        // Include TCP workers from sequential groups.
-        {
-            let groups = lock_recovered(&self.groups);
-            for group in groups.values() {
-                let tcp = lock_recovered(&group.tcp_workers);
-                for worker in tcp.iter() {
-                    summary.push(format!(
-                        "{}:{}:pid={}:transport=tcp",
-                        worker.profile_label(),
-                        worker.lang(),
-                        worker.pid()
-                    ));
-                }
-            }
-        }
-
-        summary.sort();
-        summary
-    }
+    // Status query methods (has_idle_workers, worker_count, worker_keys,
+    // worker_summary) live in status.rs for browsability.
 }
 
 /// Map one V2 task family onto the existing worker bootstrap profile space.

@@ -1,7 +1,7 @@
 use super::*;
 use batchalign_app::api::ReleasedCommand;
 use batchalign_app::options::{
-    AsrEngineName, CommandOptions, CustomEngineName, FaEngineName, UtrEngine as AppUtrEngine,
+    AsrEngineName, CommandOptions, FaEngineName, UtrEngine as AppUtrEngine,
 };
 use clap::Parser;
 
@@ -725,7 +725,7 @@ fn build_options_align_fa_engine_override() {
     match opts {
         CommandOptions::Align(a) => assert_eq!(
             a.fa_engine,
-            FaEngineName::Custom(CustomEngineName::new("wav2vec_fa_canto"))
+            FaEngineName::Wav2vecCanto
         ),
         _ => panic!("expected Align"),
     }
@@ -744,7 +744,7 @@ fn build_options_align_utr_engine_override() {
     match opts {
         CommandOptions::Align(a) => assert_eq!(
             a.utr_engine,
-            Some(AppUtrEngine::Custom(CustomEngineName::new("tencent_utr")))
+            Some(AppUtrEngine::HkTencent)
         ),
         _ => panic!("expected Align"),
     }
@@ -930,7 +930,7 @@ fn build_options_transcribe_asr_engine_override() {
     match opts {
         CommandOptions::Transcribe(t) => assert_eq!(
             t.asr_engine,
-            AsrEngineName::Custom(CustomEngineName::new("tencent"))
+            AsrEngineName::HkTencent
         ),
         _ => panic!("expected Transcribe"),
     }
@@ -1391,7 +1391,7 @@ fn build_options_benchmark_asr_engine_override() {
     match opts {
         CommandOptions::Benchmark(b) => assert_eq!(
             b.asr_engine,
-            AsrEngineName::Custom(CustomEngineName::new("funaudio"))
+            AsrEngineName::HkFunaudio
         ),
         _ => panic!("expected Benchmark"),
     }

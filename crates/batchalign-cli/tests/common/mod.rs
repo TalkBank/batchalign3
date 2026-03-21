@@ -461,7 +461,7 @@ pub fn default_options_for(command: &str) -> CommandOptions {
     match command {
         "align" => CommandOptions::Align(AlignOptions {
             common: CommonOptions::default(),
-            fa_engine: "wav2vec_fa".into(),
+            fa_engine: batchalign_app::options::FaEngineName::Wave2Vec,
             utr_engine: None,
             utr_overlap_strategy: Default::default(),
             utr_two_pass: Default::default(),
@@ -472,7 +472,7 @@ pub fn default_options_for(command: &str) -> CommandOptions {
         }),
         "transcribe" => CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -480,7 +480,7 @@ pub fn default_options_for(command: &str) -> CommandOptions {
         }),
         "transcribe_s" => CommandOptions::TranscribeS(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: true,
             wor: false.into(),
             merge_abbrev: false.into(),
@@ -506,7 +506,7 @@ pub fn default_options_for(command: &str) -> CommandOptions {
         }),
         "benchmark" => CommandOptions::Benchmark(BenchmarkOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             wor: false.into(),
             merge_abbrev: false.into(),
         }),
@@ -526,7 +526,7 @@ pub fn default_options_for(command: &str) -> CommandOptions {
         // mismatched command string.
         _ => CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
-            asr_engine: "rev".into(),
+            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
             diarize: false,
             wor: false.into(),
             merge_abbrev: false.into(),

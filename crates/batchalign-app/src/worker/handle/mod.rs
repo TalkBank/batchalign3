@@ -1,31 +1,16 @@
 //! `WorkerHandle` — manages a single Python worker child process.
 //!
-//! Lifecycle: spawn -> wait_ready -> dispatch requests over stdio -> shutdown.
-//!
-//! # Protocol contract
-//!
-//! Rust sends newline-delimited JSON requests tagged by `op`; Python replies
-//! with matching `op` variants. Any `op` mismatch is treated as a protocol
-//! violation and fails the request.
-//!
-//! Request/response DTOs live in `batchalign_types::worker` and are shared with
-//! the Python side (`batchalign/worker/_protocol.py`) to keep schema drift
-//! visible.
-//!
-//! # Failure semantics
-//!
-//! - Spawn/ready failures are surfaced before handle construction.
-//! - Protocol or transport errors return `WorkerError` and let pool policy
-//!   decide restart behavior.
-//! - Shutdown uses process-group semantics on Unix so worker child processes are
-//!   not leaked.
+//! Split into submodules:
+//! - [`config`] — WorkerRuntimeConfig, WorkerConfig
+//! - This file — WorkerHandle struct, spawn, IPC, shutdown, tests
+
+pub mod config;
+
+pub use config::{WorkerConfig, WorkerRuntimeConfig};
 
 use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
 
-use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
-use crate::host_memory::HostMemoryRuntimeConfig;
-use crate::revai::load_revai_api_key;
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, WorkerCapabilities,
@@ -39,11 +24,11 @@ use tracing::{debug, info, warn};
 
 use crate::worker::error::WorkerError;
 use crate::worker::provider_credentials::HkAsrCredentialSources;
-use crate::worker::python::resolve_python_executable;
 
 const STARTUP_STDERR_TAIL_CHARS: usize = 2_000;
 const MAX_READY_STDOUT_PREAMBLE_LINES: usize = 32;
 const MAX_RESPONSE_STDOUT_NOISE_LINES: usize = 8;
+
 
 /// Ready signal emitted by the Python worker on stdout.
 #[derive(Debug, Deserialize)]
@@ -78,103 +63,6 @@ enum WorkerResponse {
     Error { error: String },
 }
 
-/// Runtime-owned launch inputs for one worker subprocess.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkerRuntimeConfig {
-    /// Whether the worker should force CPU-only model/device selection.
-    pub force_cpu: bool,
-    /// Optional Rev.AI key already resolved by the Rust control plane.
-    pub revai_api_key: Option<String>,
-    /// Maximum concurrent requests served inside one GPU worker process.
-    pub gpu_thread_pool_size: u32,
-    /// Host-memory coordination settings shared with the worker spawn path.
-    pub host_memory: HostMemoryRuntimeConfig,
-}
-
-impl Default for WorkerRuntimeConfig {
-    fn default() -> Self {
-        Self::from_sources(
-            false,
-            load_revai_api_key()
-                .ok()
-                .map(|key| key.as_str().to_string()),
-            crate::config::ServerConfig::default().gpu_thread_pool_size,
-            HostMemoryRuntimeConfig::default(),
-        )
-    }
-}
-
-impl WorkerRuntimeConfig {
-    /// Build worker runtime inputs from explicit sources.
-    pub fn from_sources(
-        force_cpu: bool,
-        revai_api_key: Option<String>,
-        gpu_thread_pool_size: u32,
-        host_memory: HostMemoryRuntimeConfig,
-    ) -> Self {
-        Self {
-            force_cpu,
-            revai_api_key: revai_api_key
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty()),
-            gpu_thread_pool_size,
-            host_memory,
-        }
-    }
-}
-
-/// Configuration for spawning a worker.
-#[derive(Debug, Clone)]
-pub struct WorkerConfig {
-    /// Path to the Python executable (e.g. "python3", "/usr/bin/python3.14t").
-    pub python_path: String,
-    /// Worker profile describing which task group this worker owns.
-    pub profile: WorkerProfile,
-    /// Worker-runtime language string.
-    pub lang: WorkerLanguage,
-    /// Number of speakers.
-    pub num_speakers: NumSpeakers,
-    /// Engine overrides as JSON string (empty = none).
-    pub engine_overrides: String,
-    /// Use test-echo mode (no ML models).
-    pub test_echo: bool,
-    /// Maximum seconds to wait for the worker to become ready.
-    pub ready_timeout_s: u64,
-    /// Verbosity level (0=warn, 1=info, 2=debug, 3+=trace).
-    /// Forwarded to the Python worker via `--verbose N` to control its logging
-    /// level, enabling end-to-end verbosity from a single CLI `-v` flag.
-    pub verbose: u8,
-    /// Runtime-owned launch inputs resolved before this spawn boundary.
-    pub runtime: WorkerRuntimeConfig,
-    /// Timeout override for audio-heavy tasks (ASR, FA, speaker).
-    /// 0 = use built-in default (1800).
-    pub audio_task_timeout_s: u64,
-    /// Timeout override for lightweight analysis tasks (OpenSMILE, AVQI).
-    /// 0 = use built-in default (120).
-    pub analysis_task_timeout_s: u64,
-    /// Test-only: artificial delay in milliseconds before each response.
-    /// 0 = no delay. Only effective when `test_echo` is true.
-    pub test_delay_ms: u64,
-}
-
-impl Default for WorkerConfig {
-    fn default() -> Self {
-        Self {
-            python_path: resolve_python_executable(),
-            profile: WorkerProfile::Stanza,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-            num_speakers: NumSpeakers(1),
-            engine_overrides: String::new(),
-            test_echo: false,
-            ready_timeout_s: 300,
-            verbose: 0,
-            runtime: WorkerRuntimeConfig::default(),
-            audio_task_timeout_s: 0,
-            analysis_task_timeout_s: 0,
-            test_delay_ms: 0,
-        }
-    }
-}
 
 fn build_worker_command(config: &WorkerConfig) -> StdCommand {
     let mut cmd = StdCommand::new(&config.python_path);
@@ -1219,3 +1107,4 @@ mod tests {
         );
     }
 }
+

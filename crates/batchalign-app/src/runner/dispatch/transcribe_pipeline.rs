@@ -307,6 +307,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{
         EngineVersion, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp,
@@ -342,7 +343,7 @@ mod tests {
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Transcribe(TranscribeCommand {
                     common: CommonOptions::default(),
-                    asr_engine: "rev".into(),
+                    asr_engine: AsrEngineName::RevAi,
                     diarize: false,
                     wor: false.into(),
                     merge_abbrev: false.into(),
