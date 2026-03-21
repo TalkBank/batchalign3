@@ -45,12 +45,7 @@ pub struct RegistryEntry {
 impl RegistryEntry {
     /// Parse the profile string into a [`WorkerProfile`].
     pub fn worker_profile(&self) -> Option<WorkerProfile> {
-        match self.profile.as_str() {
-            "gpu" => Some(WorkerProfile::Gpu),
-            "stanza" => Some(WorkerProfile::Stanza),
-            "io" => Some(WorkerProfile::Io),
-            _ => None,
-        }
+        WorkerProfile::try_from_name(&self.profile)
     }
 }
 

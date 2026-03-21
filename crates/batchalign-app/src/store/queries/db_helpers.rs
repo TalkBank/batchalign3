@@ -223,7 +223,7 @@ impl JobStore {
             Ok(file_json) => self.broadcast_ws_event(
                 "file_update",
                 WsEvent::FileUpdate {
-                    job_id: String::from(job_id.clone()),
+                    job_id: job_id.clone(),
                     file: file_json,
                     completed_files,
                 },

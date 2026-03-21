@@ -65,6 +65,18 @@ impl WorkerProfile {
         }
     }
 
+    /// Parse a profile name from a CLI argument or registry entry.
+    ///
+    /// Returns `None` for unrecognized names.
+    pub fn try_from_name(name: &str) -> Option<Self> {
+        match name {
+            "gpu" => Some(Self::Gpu),
+            "stanza" => Some(Self::Stanza),
+            "io" => Some(Self::Io),
+            _ => None,
+        }
+    }
+
     /// Whether this profile uses concurrent request handling inside one process.
     pub fn is_concurrent(&self) -> bool {
         matches!(self, Self::Gpu)

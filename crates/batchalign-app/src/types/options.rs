@@ -112,6 +112,14 @@ impl CommonOptions {
     /// Returns an empty string when no overrides are set (matching the pool
     /// config's default). This ensures `pre_scale_with_overrides` produces
     /// the same key that `dispatch_execute_v2` will look up.
+    /// Serialize engine overrides to a JSON string for pool worker keying.
+    ///
+    /// Returns empty string when no overrides are set.
+    ///
+    /// # Invariant
+    ///
+    /// `BTreeMap<String, String>` serialization is infallible — the
+    /// `unwrap_or_default()` is structurally safe, not a silent fallback.
     pub fn engine_overrides_json(&self) -> String {
         if self.engine_overrides.is_empty() {
             String::new()

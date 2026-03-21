@@ -61,6 +61,7 @@
 - [Command Contracts](architecture/command-contracts.md)
 - [Error Handling](architecture/error-handling.md)
 - [Type-Driven Design](architecture/type-driven-design.md)
+- [Command Trait Proposal (ADR)](architecture/command-trait-proposal.md)
 - [Parameter Design](architecture/parameter-design.md)
 - [Wide Struct Audit](architecture/wide-structs.md)
 - [Incremental Processing](architecture/incremental-processing.md)

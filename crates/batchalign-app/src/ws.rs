@@ -36,7 +36,7 @@ pub enum WsEvent {
     /// to track it locally.
     FileUpdate {
         /// ID of the parent job.
-        job_id: String,
+        job_id: crate::api::JobId,
         /// Updated file status as opaque JSON.
         file: serde_json::Value,
         /// Running total of completed files in this job.
@@ -46,7 +46,7 @@ pub enum WsEvent {
     /// uses this to remove the job row without re-fetching the full list.
     JobDeleted {
         /// ID of the deleted job.
-        job_id: String,
+        job_id: crate::api::JobId,
     },
 }
 

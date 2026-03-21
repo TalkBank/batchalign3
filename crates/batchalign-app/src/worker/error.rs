@@ -135,8 +135,8 @@ pub enum WorkerError {
     #[error("no worker available for command={command} lang={lang}")]
     NoWorker {
         /// Processing command that was requested.
-        command: String,
+        command: crate::api::CommandName,
         /// Language code that was requested.
-        lang: String,
+        lang: crate::api::WorkerLanguage,
     },
 }

@@ -31,16 +31,16 @@ pub async fn run(args: &WorkerArgs, verbose: u8) -> Result<(), CliError> {
 fn start(args: &WorkerStartArgs, verbose: u8) -> Result<(), CliError> {
     let python_path = resolve_python_executable();
 
-    match args.profile.as_str() {
-        "gpu" | "stanza" | "io" => {}
-        other => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Unknown worker profile: {other}. Must be one of: gpu, stanza, io"),
-            )
-            .into());
-        }
-    };
+    if WorkerProfile::try_from_name(&args.profile).is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Unknown worker profile: {}. Must be one of: gpu, stanza, io",
+                args.profile
+            ),
+        )
+        .into());
+    }
 
     let mut cmd = Command::new(&python_path);
     cmd.arg("-c")

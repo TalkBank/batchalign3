@@ -48,7 +48,7 @@ pub(crate) async fn stream_job(
     // Subscribe to broadcast BEFORE building the snapshot to avoid missing events.
     let rx = state.control.ws_tx.subscribe();
 
-    let stream = async_stream(rx, String::from(job_id), initial_info);
+    let stream = async_stream(rx, job_id, initial_info);
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
@@ -56,7 +56,7 @@ pub(crate) async fn stream_job(
 /// Build the SSE stream from a broadcast receiver.
 fn async_stream(
     rx: tokio::sync::broadcast::Receiver<WsEvent>,
-    job_id: String,
+    job_id: crate::api::JobId,
     initial_info: JobInfo,
 ) -> impl tokio_stream::Stream<Item = Result<Event, Infallible>> {
     // Use BroadcastStream to convert the receiver into a Stream.
@@ -117,7 +117,7 @@ fn async_stream(
                     warn!("Skipping malformed WS job_update without job_id");
                     return None;
                 };
-                if event_job_id != job_id_clone {
+                if job_id_clone != event_job_id {
                     return None;
                 }
                 let Some(status_str) = job.get("status").and_then(|v| v.as_str()) else {

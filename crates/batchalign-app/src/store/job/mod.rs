@@ -623,14 +623,13 @@ impl Job {
 #[derive(Debug)]
 pub struct ConflictEntry {
     /// Basename of the conflicting file.
-    pub filename: String,
+    pub filename: FileName,
     /// Job ID of the existing active job that owns this file.
     pub job_id: JobId,
-    /// Command of the existing active job (e.g. `"morphotag"`).
+    /// Command of the existing active job.
     pub command: CommandName,
-    /// String representation of the existing job's status (e.g. `"running"`,
-    /// `"queued"`).
-    pub status: String,
+    /// Status of the existing active job.
+    pub status: JobStatus,
 }
 
 pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<ConflictEntry> {
@@ -662,10 +661,10 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
             let key = (active.source.submitted_by.clone(), path);
             if incoming_keys.contains(&key) {
                 conflicts.push(ConflictEntry {
-                    filename: String::from(fn_.clone()),
+                    filename: fn_.clone(),
                     job_id: active.identity.job_id.clone(),
                     command: active.dispatch.command.clone(),
-                    status: active.execution.status.to_string(),
+                    status: active.execution.status,
                 });
             }
         }

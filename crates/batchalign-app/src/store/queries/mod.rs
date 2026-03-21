@@ -83,7 +83,7 @@ impl JobStore {
         }
 
         let _ = self.ws_tx.send(WsEvent::JobDeleted {
-            job_id: job_id.to_string(),
+            job_id: job_id.clone(),
         });
         Ok(())
     }

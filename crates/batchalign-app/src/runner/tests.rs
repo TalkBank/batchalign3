@@ -148,27 +148,25 @@ use super::*;
             "avqi",
         ] {
             let cmd = CommandName::from(command);
-            assert!(command_requires_infer(&cmd, false));
-            assert!(command_requires_infer(&cmd, true));
+            assert!(command_requires_infer(&cmd));
+            assert!(command_requires_infer(&cmd));
         }
     }
 
     #[test]
     fn align_always_requires_infer() {
         let cmd = CommandName::from("align");
-        assert!(command_requires_infer(&cmd, false));
-        assert!(command_requires_infer(&cmd, true));
+        assert!(command_requires_infer(&cmd));
+        assert!(command_requires_infer(&cmd));
     }
 
     #[test]
     fn non_infer_commands_do_not_require_infer() {
         assert!(!command_requires_infer(
             &CommandName::from("transcribe"),
-            true
         ));
         assert!(!command_requires_infer(
             &CommandName::from("benchmark"),
-            false
         ));
     }
 

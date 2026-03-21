@@ -18,7 +18,7 @@ pub(crate) fn infer_task_for_command(command: &CommandName) -> Option<InferTask>
 
 /// Return `true` when the released command must use a Rust-owned infer-backed
 /// dispatch path instead of a pure content relay.
-pub(crate) fn command_requires_infer(command: &CommandName, _all_chat: bool) -> bool {
+pub(crate) fn command_requires_infer(command: &CommandName) -> bool {
     matches!(
         command_runner_dispatch_kind(command),
         Some(

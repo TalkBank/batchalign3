@@ -323,7 +323,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     let infer_supported = infer_task.is_some_and(|task| infer_tasks.contains(&task));
     let use_infer = all_chat && infer_supported;
 
-    if command_requires_infer(&command, all_chat) && !use_infer {
+    if command_requires_infer(&command) && !use_infer {
         let required_task = infer_task.map(infer_task_name).unwrap_or("unknown");
         let err_msg = format!(
             "Rust-first dispatch requires infer task '{}' for '{}' (all_chat={}). \

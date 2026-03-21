@@ -237,7 +237,7 @@ impl JobRegistry {
             if !conflicts.is_empty() {
                 let filenames: Vec<&str> = conflicts
                     .iter()
-                    .map(|conflict| conflict.filename.as_str())
+                    .map(|conflict| conflict.filename.as_ref())
                     .collect();
                 let message =
                     format!("Files already being processed by an active job: {filenames:?}");
