@@ -256,6 +256,8 @@ pub(crate) struct SpeakerInferParams<'a> {
 fn asr_worker_languages(lang: &LanguageSpec) -> (WorkerLanguage, LanguageCode3) {
     (
         lang.to_worker_language(),
+        // Documented default: Auto language → eng for CHAT header construction.
+        // The real detected language will replace this if ASR auto-detection succeeds.
         lang.as_resolved()
             .cloned()
             .unwrap_or_else(LanguageCode3::eng),
@@ -362,6 +364,8 @@ pub(crate) async fn infer_speaker(
         ))
     })?;
 
+    // Documented default: Auto language → eng for worker dispatch.
+    // Workers need a concrete language for model selection.
     let pool_lang = params
         .lang
         .as_resolved()

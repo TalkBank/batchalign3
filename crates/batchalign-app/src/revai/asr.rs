@@ -93,6 +93,8 @@ pub(crate) async fn infer_revai_asr(
                     .as_deref()
                     .filter(|d| !d.is_empty() && *d != "auto")
                     .and_then(revai_code_to_iso639_3)
+                    // Documented default: Rev.AI auto-detect may return an unrecognized
+                    // language code. Fall back to eng for CHAT header construction.
                     .unwrap_or_else(LanguageCode3::eng)
             }
         };

@@ -534,17 +534,19 @@ impl LanguageSpec {
     }
 
     /// Parse from a DB string column. `"auto"` → `Auto`, anything else
-    /// → `Resolved` (best-effort, since the DB may contain legacy values).
+    /// → `Resolved`.
     ///
-    /// Falls back to `eng` if the stored value is not a valid language code,
-    /// since the DB may contain legacy or corrupt values.
-    pub fn parse_from_db(s: &str) -> Self {
+    /// Returns `(spec, true)` if the value was valid, `(spec, false)` if
+    /// the stored value was invalid and fell back to `eng`. Callers should
+    /// log the fallback so corrupt DB values are visible.
+    pub fn parse_from_db(s: &str) -> (Self, bool) {
         if s.eq_ignore_ascii_case("auto") {
-            Self::Auto
+            (Self::Auto, true)
         } else {
-            Self::Resolved(
-                LanguageCode3::try_new(s).unwrap_or_else(|_| LanguageCode3::eng()),
-            )
+            match LanguageCode3::try_new(s) {
+                Ok(code) => (Self::Resolved(code), true),
+                Err(_) => (Self::Resolved(LanguageCode3::eng()), false),
+            }
         }
     }
 }
@@ -919,12 +921,21 @@ mod tests {
     }
 
     #[test]
-    fn language_spec_parse_from_db() {
-        assert_eq!(LanguageSpec::parse_from_db("auto"), LanguageSpec::Auto);
-        assert_eq!(
-            LanguageSpec::parse_from_db("eng"),
-            LanguageSpec::Resolved(LanguageCode3::eng())
-        );
+    fn language_spec_parse_from_db_valid() {
+        let (spec, valid) = LanguageSpec::parse_from_db("auto");
+        assert_eq!(spec, LanguageSpec::Auto);
+        assert!(valid);
+
+        let (spec, valid) = LanguageSpec::parse_from_db("eng");
+        assert_eq!(spec, LanguageSpec::Resolved(LanguageCode3::eng()));
+        assert!(valid);
+    }
+
+    #[test]
+    fn language_spec_parse_from_db_invalid_falls_back() {
+        let (spec, valid) = LanguageSpec::parse_from_db("not-a-lang");
+        assert_eq!(spec, LanguageSpec::Resolved(LanguageCode3::eng()));
+        assert!(!valid, "invalid DB value should report fallback");
     }
 
     #[test]

@@ -208,7 +208,18 @@ impl JobStore {
                         },
                         dispatch: JobDispatchConfig {
                             command: row.command.clone().into(),
-                            lang: crate::api::LanguageSpec::parse_from_db(&row.lang),
+                            lang: {
+                                let (spec, valid) =
+                                    crate::api::LanguageSpec::parse_from_db(&row.lang);
+                                if !valid {
+                                    tracing::warn!(
+                                        job_id = %row.job_id,
+                                        raw_lang = %row.lang,
+                                        "Invalid language code in DB, falling back to eng"
+                                    );
+                                }
+                                spec
+                            },
                             num_speakers: NumSpeakers(row.num_speakers),
                             options: row.options,
                             runtime_state: std::collections::BTreeMap::new(),
