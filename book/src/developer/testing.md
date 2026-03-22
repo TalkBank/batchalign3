@@ -5,7 +5,19 @@
 
 ## Philosophy
 
-The test suite is split into two tiers by design:
+The test suite is split into tiers by design. The following diagram shows
+the tiers, their resource requirements, and how to invoke each.
+
+```mermaid
+flowchart TD
+    fast["Tier 1: Fast Tests\n(make test / cargo nextest run)\nUnit + protocol + test-echo integration\nNo models, no GPU\n~5s, safe, fully parallel"]
+    ml["Tier 2: ML Golden Tests\n(cargo nextest run --profile ml)\nReal Whisper + Stanza + pyannote\nSerialized (max-threads=1)\n~5min, 8-12 GB peak RAM"]
+    pygolden["Tier 3: Python Golden\n(uv run pytest -m golden)\nbatchalign_core extension\n~10-30s, 1-2 GB"]
+
+    fast -->|"routine dev loop\n(every edit)"| safe(["Safe on any machine"])
+    ml -->|"opt-in only\n(pre-release, inference changes)"| danger(["Serialized — never\nrun with bare cargo test"])
+    pygolden -->|"opt-in only\n(PyO3 changes)"| safe
+```
 
 1. **Fast tests** — unit tests, protocol tests, test-echo integration tests.
    No ML models, no GPU, no multi-GB processes. These run in seconds, fully

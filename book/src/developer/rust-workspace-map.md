@@ -4,7 +4,43 @@
 **Last modified:** 2026-03-21 15:30 EDT
 
 Batchalign3 currently has three active Rust surfaces plus one repo-local
-automation surface:
+automation surface. The following diagram shows the crate dependency
+graph, including cross-repo path dependencies to `talkbank-tools`.
+
+```mermaid
+flowchart TD
+    subgraph batchalign3["batchalign3 workspace"]
+        cli["batchalign-cli\n(CLI binary, dispatch,\ndaemon lifecycle)"]
+        app["batchalign-app\n(axum server, job store,\ncache, worker pool)"]
+        chatops["batchalign-chat-ops\n(CHAT parsing, injection,\nFA, ASR post-processing)"]
+        types["batchalign-types\n(domain types, IPC contracts,\nnewtypes)"]
+        revai["batchalign-revai\n(Rev.AI ASR client)"]
+        xtask["xtask\n(repo automation)"]
+
+        cli --> app
+        app --> chatops
+        app --> types
+        chatops --> types
+        revai --> types
+        cli --> types
+    end
+
+    subgraph pyo3_ws["pyo3/ (separate, excluded from workspace)"]
+        pyo3["batchalign-pyo3\n(batchalign_core\nPython extension)"]
+    end
+
+    pyo3 --> chatops
+    pyo3 --> types
+
+    subgraph talkbank["talkbank-tools (cross-repo path deps)"]
+        model["talkbank-model\n(typed AST, validation)"]
+        parser["talkbank-parser\n(tree-sitter parser)"]
+        dp["talkbank-direct-parser\n(chumsky parser)"]
+    end
+
+    chatops -->|"path dep"| model & parser & dp
+    pyo3 -.->|"path dep\n(editable only)"| model
+```
 
 ## 1. Root Cargo Workspace
 

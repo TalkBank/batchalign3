@@ -25,6 +25,51 @@ frontend, which now consumes shell-only capabilities through an explicit
 desktop runtime seam instead of scattering raw Tauri imports across hooks and
 components.
 
+The following diagram shows the component hierarchy across both surfaces
+and the Tauri backend IPC boundary.
+
+```mermaid
+flowchart TD
+    subgraph "React Frontend (frontend/src/)"
+        subgraph "/dashboard — Fleet Monitoring"
+            dash["DashboardPage"]
+            dash --> joblist["JobList"] & workers["WorkerProfilePanel"] & mem["MemoryPanel"] & vitals["VitalsRow"]
+            joblist --> jobcard["JobCard\n(status badge, progress)"]
+
+            detail["JobDetailPageView"]
+            detail --> filetable["FileTable\n(directory-grouped rows)"] & errors["ErrorPanel\n(error groups by code)"] & stage["PipelineStageBar\n(5 phases)"]
+        end
+
+        subgraph "/process — End-User Processing"
+            process["ProcessPage"]
+            process --> cmdpicker["CommandPicker\n(2x3 grid)"]
+            process --> folder["FolderPicker\n(native dialog)"]
+            process --> form["ProcessForm"]
+            process --> progress["ProcessingProgress\n(SSE-driven)"]
+        end
+    end
+
+    subgraph "Tauri Backend (src-tauri/src/)"
+        discover["discover_files()"]
+        start["start_server()"]
+        stop["stop_server()"]
+        status["server_status()"]
+        config["read_config() / write_config()"]
+    end
+
+    subgraph "React Hooks (frontend/src/desktop/)"
+        lifecycle["useServerLifecycle"]
+        health["useServerHealth"]
+        submit["useSubmitJob"]
+        stream["useJobStream\n(SSE EventSource)"]
+    end
+
+    lifecycle -->|"Tauri IPC"| start & stop & status
+    folder -->|"Tauri IPC"| discover
+    form -->|"HTTP POST /jobs"| submit
+    progress -->|"SSE /jobs/id/stream"| stream
+```
+
 ## Web Dashboard Development
 
 The dashboard is a React SPA that proxies API calls to a running batchalign3

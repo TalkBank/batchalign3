@@ -35,6 +35,45 @@ via `JoinSet` + `Semaphore`).
 | **Hot** | `moka::future::Cache` | 10,000 entries (~5-20 MB) | 24h time-to-idle |
 | **Cold** | `SqliteBackend` (WAL, 5-connection pool) | Unbounded (disk) | None (manual or `--override-cache`) |
 
+The following diagram shows the read, write, and delete paths through
+both tiers. SQLite is always authoritative; moka absorbs repeated
+lookups.
+
+```mermaid
+flowchart TD
+    subgraph "Read path"
+        r_start(["get(key, task, engine_version)"])
+        r_moka{"moka\nhot lookup"}
+        r_verify{"task + engine_version\nmatch HotEntry?"}
+        r_cold["SqliteBackend.get()"]
+        r_promote["Promote: insert\ninto moka hot"]
+        r_hit(["Return cached data"])
+        r_miss(["Return None"])
+
+        r_start --> r_moka
+        r_moka -->|hit| r_verify
+        r_moka -->|miss| r_cold
+        r_verify -->|match| r_hit
+        r_verify -->|mismatch| r_cold
+        r_cold -->|hit| r_promote --> r_hit
+        r_cold -->|miss| r_miss
+    end
+
+    subgraph "Write path (write-through)"
+        w_start(["put(key, task, engine_version, data)"])
+        w_sqlite["SqliteBackend.put()\n(authoritative)"]
+        w_moka["moka.insert()\n(hot copy)"]
+        w_start --> w_sqlite --> w_moka
+    end
+
+    subgraph "Delete path"
+        d_start(["delete_batch(keys, task)"])
+        d_moka["moka.invalidate()\n(hot first)"]
+        d_sqlite["SqliteBackend.delete_batch()"]
+        d_start --> d_moka --> d_sqlite
+    end
+```
+
 **Read path:** check moka → on hit, verify task + engine_version match → on
 mismatch or miss, fall through to SQLite → promote cold hits to moka.
 

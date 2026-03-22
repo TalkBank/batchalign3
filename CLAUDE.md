@@ -105,18 +105,126 @@ make test-ml                 # Loads real Whisper/Stanza models
 # cargo nextest run          # Same problem
 ```
 
-**Docs and diagrams discipline:** When a change affects code structure,
-CLI options, data flow, or user-visible behavior, update **both** the
-user-facing book pages (`book/src/user-guide/`, especially `cli-reference.md`)
-**and** the developer-facing architecture pages (`book/src/architecture/`) in
-the same change. Include Mermaid diagrams to explain how options, data, and
-language information flow through the pipeline. Do not leave the book
-describing behavior that no longer exists or omitting new CLI options.
+### Diagram Authoring Rules
 
-**mdBook/Mermaid gotcha:** Be careful with raw angle brackets in Markdown and
-Mermaid labels. mdBook can treat them as HTML and emit warnings or render
-incorrectly. Prefer quoted labels in diagrams and describe generic type
-arguments in surrounding prose or code spans instead of raw Mermaid labels.
+**Architecture and design documentation MUST include Mermaid diagrams.**
+GitHub renders Mermaid natively; all mdBook builds have `mdbook-mermaid` enabled.
+
+#### When to Create a Diagram
+
+Add a diagram when documenting:
+- Data flow pipelines (how data transforms through stages)
+- Architecture boundaries (what owns what, who calls whom)
+- State machines and lifecycles (valid transitions, terminal states)
+- Decision trees (option routing, engine selection, fallback paths)
+- Type relationships (trait hierarchies, enum variants, ownership)
+- Protocols (request/response sequences, IPC message flows)
+
+**If a page describes a pipeline, boundary, or decision flow in prose
+without a diagram, the page is incomplete.**
+
+#### Diagram Type Selection
+
+| Situation | Use | Not |
+|-----------|-----|-----|
+| Data flows through stages | `flowchart TD` or `flowchart LR` | `sequenceDiagram` (no named participants) |
+| Request/response between components | `sequenceDiagram` | `flowchart` (hides back-and-forth) |
+| Type hierarchies, trait impls | `classDiagram` | `flowchart` (wrong semantics) |
+| State transitions, lifecycles | `stateDiagram-v2` | `flowchart` (no state semantics) |
+| Decision trees, option routing | `flowchart TD` with diamond nodes | Text lists (hard to follow branches) |
+
+#### The Seven Diagram Rules
+
+These rules exist because a successor who has never met the team will
+read these diagrams to understand the system. Every rule directly
+addresses a documented failure mode that produces misleading diagrams.
+
+**Rule 1: Name every resource.**
+Every node must have a specific name AND its type/role.
+Not `"Server"` — use `"Rust Server\n(batchalign-app)"`.
+Not `"Cache"` — use `"moka hot cache\n(10k entries)"` or
+`"SQLite cold cache\n(cache.db)"`.
+A reader must be able to grep the codebase for the node label and find it.
+
+**Rule 2: One concept per diagram.**
+Each diagram tells one coherent story. If a page covers multiple
+concerns (runtime ownership AND deploy topology AND protocol messages),
+use separate diagrams for each. The `server-architecture.md` pattern
+(4 focused perspectives on one system) is the model. When in doubt,
+split.
+
+**Rule 3: No conveyor belts for interactive flows.**
+If two components exchange messages (request/response, IPC, HTTP),
+use `sequenceDiagram` to show the actual back-and-forth. A `flowchart`
+hides retry loops, error paths, and temporal ordering. Reserve
+`flowchart` for genuinely one-directional data pipelines.
+
+**Rule 4: Show real decision points.**
+Decision diamonds must use real function names, flag names, and
+condition expressions — not `"check condition"`. Example:
+`{--before path\nprovided?}` not `{check input?}`. The
+`command-flowcharts.md` align diagram is the gold standard.
+
+**Rule 5: Include error and fallback paths.**
+Every decision node must show what happens on failure. A diagram
+showing only the happy path is misleading. Show retry logic, fallback
+engines, cache misses, and error propagation. Mark optional paths
+with dashed lines (`-.->`) and error paths with descriptive labels.
+
+**Rule 6: Anchor to source locations.**
+Architecture diagram nodes should include the crate, module, or file
+path in the label or in prose immediately below. A reader should go
+from diagram node to source file in one step. Example:
+`"dispatch_fa_infer()\n(workflow/fa.rs)"`.
+
+**Rule 7: Never generate diagrams from source code without verification.**
+AI-generated diagrams from source code hallucinate components, invent
+connections, and omit critical paths. When creating a diagram of
+existing code:
+1. Read the actual source files for every entity in the diagram
+2. Verify every node corresponds to a real module, function, or type
+3. Verify every arrow corresponds to a real call, dependency, or data flow
+4. Cross-check against existing diagrams on the same or related pages
+5. If you cannot verify a connection, omit it — gaps are better than lies
+6. After writing the diagram, list in a comment the source files you
+   verified against
+
+**Diagram verification is not optional.** An unverified diagram is worse
+than no diagram — it teaches a newcomer a wrong mental model that they
+will carry forward and build upon.
+
+#### Formatting Standards
+
+- **Node labels:** `["Name\n(role or path)"]` for multi-line
+- **Decision nodes:** `{"condition?\ndetail"}` diamond syntax
+- **Edge labels:** `-->|"label"| target` for all non-trivial edges
+- **Subgraphs:** Use only for ownership boundaries (e.g., separating
+  batchalign3 crates from talkbank-tools crates in cross-repo diagrams)
+- **Colors/styles:** Do not use custom colors. Default Mermaid themes
+  ensure consistent rendering across GitHub and mdBook
+- **Size limit:** Keep diagrams under 30 nodes. If larger, split into
+  focused diagrams. The align command flowchart (~35 nodes) is at the
+  practical upper limit
+- **Angle bracket escaping:** Raw angle brackets in Mermaid labels
+  (`Arc<str>`, `Vec<T>`, `&str`) trigger mdBook "unclosed HTML tag"
+  warnings. Escape as `&lt;str&gt;` inside labels. Prefer quoted labels
+  in diagrams and describe generic type arguments in surrounding prose
+  or code spans. Rerun `mdbook build` after changes
+
+#### Placement and Co-evolution
+
+- Place each diagram **inline**, immediately after the prose paragraph
+  that introduces the concept it illustrates
+- Every diagram must have a prose introduction explaining what it shows
+  and why the reader should care
+- For complex topics, use the multi-perspective pattern: one overview
+  diagram early, then focused detail diagrams in each subsection
+- **When a change affects code structure, CLI options, data flow, or
+  user-visible behavior**, update **both** the user-facing book pages
+  (`book/src/user-guide/`, especially `cli-reference.md`) **and** the
+  developer-facing architecture pages (`book/src/architecture/`) in the
+  same change. Do not leave the book describing behavior that no longer
+  exists or omitting new CLI options
 
 `batchalign3` is a Rust binary (`crates/batchalign-cli`). Use `uv run` only for Python commands (pytest, mypy).
 
@@ -198,7 +306,9 @@ contributor-facing documentation comments.
   for adapters, symmetric transforms, and orchestration glue that does not have
   one natural owner.
 - **Update touched docs with timestamps.** Any documentation file modified in a
-  change must update its `Last modified` field with date and time.
+  change must update its `Last modified` field with date and time. **Always run
+  `date '+%Y-%m-%d %H:%M %Z'` to get the actual system time** — do not guess,
+  hardcode, or use the conversation date.
 
 ### Boolean Blindness
 

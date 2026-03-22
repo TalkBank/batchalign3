@@ -20,6 +20,30 @@ This makes alignment quality a high-leverage investment.  The algorithms
 don't need to be perfect; they need to be measurably better, and the
 improvement needs to be validated empirically on real data.
 
+## Strategy Selection and Two-Pass Architecture
+
+The UTR strategy is selected based on the file's overlap markers. The
+following diagram shows the selection logic and the two-pass approach.
+
+```mermaid
+flowchart TD
+    start(["UTR alignment requested"])
+    scan{"Any utterance has\n+&lt; linker or ⌊ CA\noverlap markers?"}
+
+    scan -->|No| global["GlobalUtr\n(utr.rs)\nSingle monotonic pass\nover all utterance words"]
+
+    scan -->|Yes| twopass["TwoPassOverlapUtr\n(two_pass.rs)"]
+    twopass --> pass1["Pass 1: Global alignment\nFlatten ALL words\n(including &amp;* overlap words)\ninto one reference sequence\nAlign via Hirschberg DP"]
+    pass1 --> pass2["Pass 2: Per-backchannel\nre-alignment\nNarrow ASR token window\naround overlap regions\nRe-align problematic\nutterances only"]
+
+    global --> result
+    pass2 --> result(["UtrResult\ninjected / skipped / unmatched"])
+```
+
+Source: `select_strategy()` in `crates/batchalign-chat-ops/src/fa/utr.rs`,
+overlap detection in `utr/overlap_markers.rs`, two-pass logic in
+`utr/two_pass.rs`.
+
 ## Problem Statement
 
 The UTR global DP aligner is monotonic: it assumes that words later in the

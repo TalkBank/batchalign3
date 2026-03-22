@@ -26,6 +26,40 @@ return raw output — all workaround logic is applied server-side.
 
 ### Decision Framework
 
+The following diagram shows how workarounds are categorized and the
+keep/retire decision criteria for each type.
+
+```mermaid
+flowchart TD
+    workaround(["Language workaround"])
+    type{"Workaround type?"}
+
+    subgraph "Type 1: CHAT Conventions (permanent)"
+        t1["Keep — encodes CHAT/CHILDES rules"]
+        t1_langs["English: irregular verbs (lang_en.rs)\nFrench: pronoun case + APM nouns (lang_fr.rs)\nJapanese: comma → cm (lang_ja.rs)\nCantonese: text normalization (cantonese.rs)\nCross-language: MWT dispatch, ISO mapping,\nnumber expansion"]
+    end
+
+    subgraph "Type 2: Stanza Bugs (testable for retirement)"
+        t2{"Stanza still\nexhibits bug?"}
+        t2_keep["Keep — still needed"]
+        t2_remove["Remove — Stanza fixed it"]
+        t2_langs["English: GUM MWT (lang_en.rs)\nFrench: 'au' MWT (lang_fr.rs)\nItalian: l' suppression, lei merge\n(mwt_overrides.rs)\nPortuguese: d'água (mwt_overrides.rs)\nJapanese: verb form overrides (lang_ja.rs)"]
+    end
+
+    subgraph "Type 3: Mixed (convention + bug)"
+        t3["Requires per-rule analysis"]
+        t3_langs["English: contraction MWT (lang_en.rs)\nFrench: elision/multi-clitic (lang_fr.rs)\nDutch: possessive 's (mwt_overrides.rs)"]
+    end
+
+    workaround --> type
+    type -->|"CHAT convention"| t1 --> t1_langs
+    type -->|"Stanza model bug"| t2
+    t2 -->|Yes| t2_keep
+    t2 -->|No| t2_remove
+    t2 ~~~ t2_langs
+    type -->|"Mixed"| t3 --> t3_langs
+```
+
 A workaround should be **kept** if:
 - Stanza still exhibits the bug (test with current Stanza version)
 - The workaround encodes a CHAT convention (not just a Stanza fix)
