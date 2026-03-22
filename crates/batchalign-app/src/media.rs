@@ -36,8 +36,14 @@ pub struct MediaEntry {
 
 impl MediaEntry {
     /// Full path to the media file.
+    ///
+    /// Uses `Path::join` for platform-safe path construction (correct on
+    /// Windows where the separator is `\`, not `/`).
     pub fn full_path(&self) -> String {
-        format!("{}/{}", self.dir_path, self.filename)
+        std::path::Path::new(&self.dir_path)
+            .join(&self.filename)
+            .to_string_lossy()
+            .into_owned()
     }
 }
 

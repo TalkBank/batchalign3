@@ -14,7 +14,7 @@ impl JobStore {
         let persist = NewJobRecord {
             job_id: String::from(job.identity.job_id.clone()),
             correlation_id: job.identity.correlation_id.to_string(),
-            command: String::from(job.dispatch.command.clone()),
+            command: job.dispatch.command.to_string(),
             lang: job.dispatch.lang.to_string(),
             num_speakers: job.dispatch.num_speakers.0,
             status: job.execution.status.to_string(),

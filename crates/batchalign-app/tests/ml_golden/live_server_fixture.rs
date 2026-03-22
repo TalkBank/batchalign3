@@ -7,7 +7,7 @@
 use crate::common::{
     LiveServerSession, assert_completed_without_errors, require_live_server, submit_and_complete,
 };
-use batchalign_app::api::FilePayload;
+use batchalign_app::api::{FilePayload, ReleasedCommand};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CorefOptions, MorphotagOptions, TranslateOptions, UtsegOptions,
 };
@@ -126,7 +126,7 @@ async fn live_fixture_isolates_runtime_state_between_sessions() {
     let (job, results) = submit_and_complete(
         first.client(),
         first.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files,
         options,
@@ -195,7 +195,7 @@ async fn live_fixture_runs_utseg_job_when_available() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "utseg",
+        ReleasedCommand::Utseg,
         "eng",
         files,
         options,
@@ -237,7 +237,7 @@ async fn live_fixture_runs_translate_job_when_available() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "translate",
+        ReleasedCommand::Translate,
         "eng",
         files,
         options,
@@ -281,7 +281,7 @@ async fn live_fixture_runs_coref_job_when_available() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "coref",
+        ReleasedCommand::Coref,
         "eng",
         files,
         options,

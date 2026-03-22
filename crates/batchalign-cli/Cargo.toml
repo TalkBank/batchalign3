@@ -58,3 +58,4 @@ axum = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 toml = { workspace = true }
+rstest = { workspace = true }

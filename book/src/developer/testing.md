@@ -1,7 +1,7 @@
 # Testing
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-21 22:32 EDT
 
 ## Philosophy
 
@@ -207,6 +207,21 @@ cargo nextest run -p batchalign-app --test worker_v2_fa_roundtrip
 These tests read fixture files under `tests/fixtures/worker_protocol_v2/`
 so the Rust and Python schema models stay aligned.
 
+### Cross-language contract tests
+
+Several test pairs look redundant but exist **intentionally** — Rust and Python
+must independently verify the shared wire format. If only one side is tested, a
+serialization change in the other language could silently break IPC.
+
+| Python test | Rust test | What they verify |
+|-------------|-----------|-----------------|
+| `test_ipc_type_conformance.py` | `ci_checks.rs` (IPC drift) | Schema field parity between Rust and Python models |
+| `test_worker_ipc.py` | `worker_protocol_v2_compat.rs` | JSON roundtrip through both language's serializers |
+| `test_worker_protocol_v2_types.py` | `worker_protocol_matrix.rs` | V2 protocol envelope parsing on both sides |
+
+**Do not consolidate these pairs.** A passing Rust test does not prove the Python
+side deserializes correctly, and vice versa.
+
 ## Rust tests
 
 ```bash
@@ -330,3 +345,34 @@ cargo llvm-cov nextest --manifest-path pyo3/Cargo.toml \
 cargo llvm-cov nextest --workspace \
   --lcov --output-path lcov-rust-workspace.info
 ```
+
+## Structural lints (xtask)
+
+Two lints run as xtask subcommands rather than test binaries to avoid
+unnecessary integration test binary compilation:
+
+```bash
+cargo xtask lint-wide-structs     # Enforces reviewed field caps on wide structs
+cargo xtask lint-ci-hygiene       # Version sync, legacy terms, retired packages
+```
+
+Both are included in `make ci-local`. Thin test proxies in
+`crates/batchalign-cli/tests/` invoke them so `cargo nextest run` still catches
+regressions.
+
+## Known gaps
+
+1. **No concurrent dispatch stress tests.** The worker pool, job registry, and
+   media walker have complex concurrency paths exercised only by `test-echo`
+   integration tests. A dedicated stress harness (multiple concurrent jobs with
+   real server lifecycle) would catch race conditions earlier.
+
+2. **No negative-path ML tests.** Golden tests verify happy paths. There are no
+   tests for graceful degradation when models are unavailable, corrupt, or
+   return malformed output under real inference.
+
+3. **No cross-platform CI.** Tests run only on macOS (local) and Linux (CI).
+   Windows is a supported platform but has no automated test coverage.
+
+4. **Dashboard Playwright tests are opt-in.** The React frontend E2E suite
+   requires manual Chromium setup and is not part of the default CI gate.

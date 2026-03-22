@@ -8,7 +8,7 @@
 
 mod common;
 
-use batchalign_app::api::{FilePayload, JobStatus, NumSpeakers};
+use batchalign_app::api::{FilePayload, JobStatus, NumSpeakers, ReleasedCommand};
 use batchalign_app::api::{LanguageCode3, LanguageSpec};
 use batchalign_app::options::{CommandOptions, CommonOptions, TranscribeOptions};
 
@@ -36,7 +36,7 @@ async fn e2e_single_file_roundtrip() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -70,7 +70,7 @@ async fn e2e_multiple_files() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -101,7 +101,7 @@ async fn e2e_nested_path_preserved() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -122,7 +122,7 @@ async fn e2e_empty_input() {
 
     // Empty files → server returns 400 (no files)
     let submission = batchalign_app::api::JobSubmission {
-        command: "transcribe".into(),
+        command: ReleasedCommand::Transcribe,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
@@ -171,7 +171,7 @@ async fn e2e_output_is_valid_chat() {
     let (_info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -208,7 +208,7 @@ async fn e2e_dummy_file_passthrough() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -237,7 +237,7 @@ async fn e2e_noalign_file_passthrough() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -279,7 +279,7 @@ async fn e2e_override_cache_option() {
     }];
 
     let (info, _results) =
-        run_job_to_completion(&client, &base_url, "transcribe", "eng", files, options).await;
+        run_job_to_completion(&client, &base_url, ReleasedCommand::Transcribe, "eng", files, options).await;
 
     assert_eq!(info.status, JobStatus::Completed);
 }
@@ -306,7 +306,7 @@ async fn e2e_retokenize_option() {
     }];
 
     let (info, _results) =
-        run_job_to_completion(&client, &base_url, "transcribe", "eng", files, options).await;
+        run_job_to_completion(&client, &base_url, ReleasedCommand::Transcribe, "eng", files, options).await;
 
     assert_eq!(info.status, JobStatus::Completed);
 }
@@ -330,7 +330,7 @@ async fn e2e_transcribe_command() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -356,7 +356,7 @@ async fn e2e_transcribe_s_command() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe_s",
+        ReleasedCommand::TranscribeS,
         "eng",
         files,
         default_options_for("transcribe_s"),
@@ -377,19 +377,26 @@ async fn e2e_text_only_commands_fail_without_infer() {
     let (base_url, _tmp) = start_test_server(&python).await;
     let client = reqwest::Client::new();
 
-    for command in &["morphotag", "utseg", "translate", "coref", "compare"] {
+    let test_commands = [
+        (ReleasedCommand::Morphotag, "morphotag"),
+        (ReleasedCommand::Utseg, "utseg"),
+        (ReleasedCommand::Translate, "translate"),
+        (ReleasedCommand::Coref, "coref"),
+        (ReleasedCommand::Compare, "compare"),
+    ];
+    for (command, command_str) in &test_commands {
         let files = vec![FilePayload {
-            filename: format!("{command}.cha").into(),
+            filename: format!("{command_str}.cha").into(),
             content: MINIMAL_CHAT.into(),
         }];
 
         let (info, _results) = run_job_to_completion(
             &client,
             &base_url,
-            command,
+            *command,
             "eng",
             files,
-            default_options_for(command),
+            default_options_for(command_str),
         )
         .await;
 
@@ -417,42 +424,28 @@ async fn e2e_invalid_command_rejected() {
     let (base_url, _tmp) = start_test_server(&python).await;
     let client = reqwest::Client::new();
 
-    let submission = batchalign_app::api::JobSubmission {
-        command: "nonexistent_command".into(),
-        lang: LanguageSpec::Resolved(LanguageCode3::eng()),
-        num_speakers: NumSpeakers(1),
-        files: vec![FilePayload {
-            filename: "test.cha".into(),
-            content: MINIMAL_CHAT.into(),
-        }],
-        media_files: vec![],
-        media_mapping: String::new(),
-        media_subdir: String::new(),
-        source_dir: String::new(),
-        options: CommandOptions::Transcribe(TranscribeOptions {
-            common: CommonOptions::default(),
-            asr_engine: batchalign_app::options::AsrEngineName::RevAi,
-            diarize: false,
-            wor: false.into(),
-            merge_abbrev: false.into(),
-            batch_size: 8,
-        }),
-        paths_mode: false,
-        source_paths: vec![],
-        output_paths: vec![],
-        display_names: vec![],
-        debug_traces: false,
-        before_paths: vec![],
-    };
+    // Send raw JSON with an invalid command — ReleasedCommand (closed enum)
+    // rejects unknown variants at deserialization (HTTP 422).
+    let raw = serde_json::json!({
+        "command": "nonexistent_command",
+        "lang": "eng",
+        "num_speakers": 1,
+        "files": [{"filename": "test.cha", "content": MINIMAL_CHAT}],
+        "media_files": [],
+        "media_mapping": "",
+        "media_subdir": "",
+        "source_dir": "",
+        "options": null,
+    });
 
     let resp = client
         .post(format!("{base_url}/jobs"))
-        .json(&submission)
+        .json(&raw)
         .send()
         .await
         .expect("POST /jobs");
 
-    assert_eq!(resp.status(), 400, "Unknown command should be rejected");
+    assert_eq!(resp.status(), 422, "Unknown command should be rejected at deserialization");
 }
 
 /// Malformed CHAT content still completes (test-echo returns it unchanged).
@@ -470,7 +463,7 @@ async fn e2e_malformed_chat_still_completes() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -502,7 +495,7 @@ async fn e2e_lang_propagates() {
     let (info, _results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "spa",
         files,
         default_options_for("transcribe"),
@@ -537,7 +530,7 @@ async fn e2e_content_fidelity() {
     let (_info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -576,7 +569,7 @@ async fn e2e_mixed_dummy_and_normal() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -619,7 +612,7 @@ async fn e2e_parallel_processing() {
     let (info, results) = run_job_to_completion(
         &client,
         &base_url,
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         files,
         default_options_for("transcribe"),
@@ -644,7 +637,7 @@ async fn e2e_cancel_job() {
     }];
 
     let submission = batchalign_app::api::JobSubmission {
-        command: "transcribe".into(),
+        command: ReleasedCommand::Transcribe,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
@@ -714,7 +707,7 @@ async fn e2e_job_status_lifecycle() {
     }];
 
     let submission = batchalign_app::api::JobSubmission {
-        command: "transcribe".into(),
+        command: ReleasedCommand::Transcribe,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,

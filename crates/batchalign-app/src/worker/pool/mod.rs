@@ -34,7 +34,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-use crate::api::{CommandName, LanguageCode3, NumSpeakers, WorkerLanguage};
+use crate::api::{LanguageCode3, NumSpeakers, ReleasedCommand, WorkerLanguage};
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, WorkerCapabilities, WorkerPid, WorkerProfile,
@@ -807,7 +807,7 @@ impl WorkerPool {
         let items: Vec<WarmupItem> = targets
             .iter()
             .filter_map(|target| {
-                let profile = WorkerProfile::for_command(&target.command);
+                let profile = WorkerProfile::for_command(target.command);
                 match profile {
                     Some(profile) => Some(WarmupItem {
                         profile,
@@ -967,7 +967,7 @@ impl WorkerPool {
     /// engine overrides.
     pub async fn pre_scale(
         &self,
-        command: &CommandName,
+        command: ReleasedCommand,
         lang: impl Into<WorkerLanguage>,
         target: usize,
     ) {
@@ -994,7 +994,7 @@ impl WorkerPool {
     /// concurrent-safe slot claiming.
     pub async fn pre_scale_with_overrides(
         &self,
-        command: &CommandName,
+        command: ReleasedCommand,
         lang: impl Into<WorkerLanguage>,
         target: usize,
         engine_overrides: &str,

@@ -1,6 +1,6 @@
 //! Input resolution — mirrors `_resolve_inputs()` in `batchalign/cli/dispatch.py`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::CliError;
 
@@ -11,32 +11,32 @@ use crate::error::CliError;
 /// - Legacy: 2 args where first is dir, second is not a file → `IN_DIR OUT_DIR`.
 /// - Single/multiple paths → in-place processing.
 pub fn resolve_inputs(
-    paths: &[String],
-    output: Option<&str>,
-    file_list: Option<&str>,
+    paths: &[PathBuf],
+    output: Option<&Path>,
+    file_list: Option<&Path>,
     in_place: bool,
-) -> Result<(Vec<String>, Option<String>), CliError> {
+) -> Result<(Vec<PathBuf>, Option<PathBuf>), CliError> {
     // --file-list mode
-    if let Some(fl) = file_list {
-        let fl_path = Path::new(fl);
+    if let Some(fl_path) = file_list {
         if !fl_path.exists() {
             return Err(CliError::FileListMissing(fl_path.to_path_buf()));
         }
         let text = std::fs::read_to_string(fl_path)?;
-        let items: Vec<String> = text
+        let items: Vec<PathBuf> = text
             .lines()
-            .map(|l| l.trim().to_string())
+            .map(|l| l.trim())
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(PathBuf::from)
             .collect();
         if items.is_empty() {
             return Err(CliError::FileListEmpty);
         }
         for p in &items {
-            if !Path::new(p).exists() {
-                return Err(CliError::InputMissing(p.into()));
+            if !p.exists() {
+                return Err(CliError::InputMissing(p.clone()));
             }
         }
-        return Ok((items, output.map(String::from)));
+        return Ok((items, output.map(Path::to_path_buf)));
     }
 
     if paths.is_empty() {
@@ -46,22 +46,22 @@ pub fn resolve_inputs(
     // --in-place or -o: all paths are inputs
     if in_place || output.is_some() {
         for p in paths {
-            if !Path::new(p).exists() {
-                return Err(CliError::InputMissing(p.into()));
+            if !p.exists() {
+                return Err(CliError::InputMissing(p.clone()));
             }
         }
-        return Ok((paths.to_vec(), output.map(String::from)));
+        return Ok((paths.to_vec(), output.map(Path::to_path_buf)));
     }
 
     // Legacy: exactly 2 paths, first is dir, second is not a file → IN_DIR OUT_DIR
-    if paths.len() == 2 && Path::new(&paths[0]).is_dir() && !Path::new(&paths[1]).is_file() {
+    if paths.len() == 2 && paths[0].is_dir() && !paths[1].is_file() {
         return Ok((vec![paths[0].clone()], Some(paths[1].clone())));
     }
 
     // Single or multiple paths → in-place
     for p in paths {
-        if !Path::new(p).exists() {
-            return Err(CliError::InputMissing(p.into()));
+        if !p.exists() {
+            return Err(CliError::InputMissing(p.clone()));
         }
     }
 
@@ -95,7 +95,7 @@ mod tests {
         .unwrap();
 
         let (inputs, out) =
-            resolve_inputs(&[], None, Some(list_file.to_str().unwrap()), false).unwrap();
+            resolve_inputs(&[], None, Some(&list_file), false).unwrap();
         assert_eq!(inputs.len(), 2);
         assert!(out.is_none());
     }
@@ -105,7 +105,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let list_file = dir.path().join("files.txt");
         fs::write(&list_file, "/nonexistent/path\n").unwrap();
-        let result = resolve_inputs(&[], None, Some(list_file.to_str().unwrap()), false);
+        let result = resolve_inputs(&[], None, Some(&list_file), false);
         assert!(matches!(result, Err(CliError::InputMissing(_))));
     }
 
@@ -116,7 +116,7 @@ mod tests {
         fs::write(&f1, "content").unwrap();
 
         let (inputs, out) =
-            resolve_inputs(&[f1.to_str().unwrap().to_string()], None, None, true).unwrap();
+            resolve_inputs(&[f1.clone()], None, None, true).unwrap();
         assert_eq!(inputs.len(), 1);
         assert!(out.is_none());
     }
@@ -129,8 +129,8 @@ mod tests {
 
         let (inputs, out) = resolve_inputs(
             &[
-                in_dir.to_str().unwrap().to_string(),
-                "/tmp/nonexistent_output_dir".to_string(),
+                in_dir.clone(),
+                PathBuf::from("/tmp/nonexistent_output_dir"),
             ],
             None,
             None,
@@ -149,13 +149,13 @@ mod tests {
         fs::write(&f1, "content").unwrap();
 
         let (inputs, out) = resolve_inputs(
-            &[f1.to_str().unwrap().to_string()],
-            Some("/tmp/out"),
+            &[f1.clone()],
+            Some(Path::new("/tmp/out")),
             None,
             false,
         )
         .unwrap();
         assert_eq!(inputs.len(), 1);
-        assert_eq!(out.as_deref(), Some("/tmp/out"));
+        assert_eq!(out.as_deref(), Some(Path::new("/tmp/out")));
     }
 }

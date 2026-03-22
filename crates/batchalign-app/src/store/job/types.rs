@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use crate::api::{
-    CommandName, ContentType, CorrelationId, FileName, FileProgressStage, JobId, JobStatus,
+    ReleasedCommand, ContentType, CorrelationId, FileName, FileProgressStage, JobId, JobStatus,
     LanguageSpec, NodeId, NumSpeakers, UnixTimestamp,
 };
 use crate::options::CommandOptions;
@@ -56,7 +56,7 @@ pub struct JobIdentity {
 #[derive(Debug, Clone)]
 pub struct JobDispatchConfig {
     /// The batchalign command to run.
-    pub command: CommandName,
+    pub command: ReleasedCommand,
     /// Language specification — may be `Auto` (for ASR auto-detection) or
     /// a resolved ISO 639-3 code.
     pub lang: LanguageSpec,
@@ -224,7 +224,7 @@ pub struct RunnerJobIdentity {
 #[derive(Debug, Clone)]
 pub struct RunnerDispatchConfig {
     /// Command being executed.
-    pub command: CommandName,
+    pub command: ReleasedCommand,
     /// Language specification — may be `Auto` for ASR auto-detection.
     pub lang: LanguageSpec,
     /// Speaker-count hint for audio workflows.

@@ -1,9 +1,11 @@
+use std::path::{Path, PathBuf};
 use super::*;
 use batchalign_app::api::ReleasedCommand;
 use batchalign_app::options::{
     AsrEngineName, CommandOptions, FaEngineName, UtrEngine as AppUtrEngine,
 };
 use clap::Parser;
+use rstest::rstest;
 
 fn typed_options_for(args: &[&str]) -> CommandOptions {
     let cli = Cli::parse_from(args);
@@ -82,7 +84,7 @@ fn parse_align_with_options() {
     if let Commands::Align(a) = &cli.command {
         assert!(a.whisper_fa);
         assert!(a.pauses);
-        assert_eq!(a.common.output.as_deref(), Some("output/"));
+        assert_eq!(a.common.output.as_deref(), Some(Path::new("output/")));
     } else {
         panic!("expected Align");
     }
@@ -166,8 +168,8 @@ fn parse_translate_with_file_list_and_output() {
     ]);
     if let Commands::Translate(a) = &cli.command {
         assert!(a.common.paths.is_empty());
-        assert_eq!(a.common.file_list.as_deref(), Some("inputs.txt"));
-        assert_eq!(a.common.output.as_deref(), Some("output/"));
+        assert_eq!(a.common.file_list.as_deref(), Some(Path::new("inputs.txt")));
+        assert_eq!(a.common.output.as_deref(), Some(Path::new("output/")));
     } else {
         panic!("expected Translate");
     }
@@ -178,7 +180,7 @@ fn parse_coref_in_place() {
     let cli = Cli::parse_from(["batchalign3", "coref", "--in-place", "corpus/"]);
     if let Commands::Coref(a) = &cli.command {
         assert!(a.common.in_place);
-        assert_eq!(a.common.paths, vec!["corpus/"]);
+        assert_eq!(a.common.paths, vec![PathBuf::from("corpus/")]);
     } else {
         panic!("expected Coref");
     }
@@ -196,9 +198,9 @@ fn parse_compare_with_before_and_output() {
         "out/",
     ]);
     if let Commands::Compare(a) = &cli.command {
-        assert_eq!(a.common.paths, vec!["corpus/"]);
-        assert_eq!(a.common.before.as_deref(), Some("baseline/"));
-        assert_eq!(a.common.output.as_deref(), Some("out/"));
+        assert_eq!(a.common.paths, vec![PathBuf::from("corpus/")]);
+        assert_eq!(a.common.before.as_deref(), Some(Path::new("baseline/")));
+        assert_eq!(a.common.output.as_deref(), Some(Path::new("out/")));
     } else {
         panic!("expected Compare");
     }
@@ -219,7 +221,7 @@ fn parse_utseg_with_file_list_lang_and_speakers() {
     if let Commands::Utseg(a) = &cli.command {
         assert_eq!(a.lang, "spa");
         assert_eq!(a.num_speakers, 3);
-        assert_eq!(a.common.file_list.as_deref(), Some("inputs.txt"));
+        assert_eq!(a.common.file_list.as_deref(), Some(Path::new("inputs.txt")));
         assert!(a.common.paths.is_empty());
     } else {
         panic!("expected Utseg");
@@ -243,8 +245,8 @@ fn parse_opensmile_with_bank_and_subdir() {
         "Eng-NA",
     ]);
     if let Commands::Opensmile(args) = &cli.command {
-        assert_eq!(args.input_dir, "input/");
-        assert_eq!(args.output_dir, "output/");
+        assert_eq!(args.input_dir, PathBuf::from("input/"));
+        assert_eq!(args.output_dir, PathBuf::from("output/"));
         assert_eq!(args.feature_set, "ComParE_2016");
         assert_eq!(args.lang, "spa");
         assert_eq!(args.bank.as_deref(), Some("phon-data"));
@@ -412,62 +414,14 @@ fn parse_no_open_dashboard() {
     assert!(cli.global.no_open_dashboard);
 }
 
-#[test]
-fn parse_align_rejects_wor_conflicts() {
-    assert_parse_error_contains(
-        &["batchalign3", "align", "--wor", "--nowor", "corpus/"],
-        &["--wor", "--nowor"],
-    );
-}
-
-#[test]
-fn parse_align_rejects_merge_abbrev_conflicts() {
-    assert_parse_error_contains(
-        &[
-            "batchalign3",
-            "align",
-            "--merge-abbrev",
-            "--no-merge-abbrev",
-            "corpus/",
-        ],
-        &["--merge-abbrev", "--no-merge-abbrev"],
-    );
-}
-
-#[test]
-fn parse_transcribe_rejects_wor_conflicts() {
-    assert_parse_error_contains(
-        &["batchalign3", "transcribe", "--wor", "--nowor", "audio/"],
-        &["--wor", "--nowor"],
-    );
-}
-
-#[test]
-fn parse_morphotag_rejects_tokenization_conflicts() {
-    assert_parse_error_contains(
-        &[
-            "batchalign3",
-            "morphotag",
-            "--retokenize",
-            "--keeptokens",
-            "corpus/",
-        ],
-        &["--retokenize", "--keeptokens"],
-    );
-}
-
-#[test]
-fn parse_morphotag_rejects_multilang_conflicts() {
-    assert_parse_error_contains(
-        &[
-            "batchalign3",
-            "morphotag",
-            "--skipmultilang",
-            "--multilang",
-            "corpus/",
-        ],
-        &["--skipmultilang", "--multilang"],
-    );
+#[rstest]
+#[case(&["batchalign3", "align", "--wor", "--nowor", "corpus/"], &["--wor", "--nowor"])]
+#[case(&["batchalign3", "align", "--merge-abbrev", "--no-merge-abbrev", "corpus/"], &["--merge-abbrev", "--no-merge-abbrev"])]
+#[case(&["batchalign3", "transcribe", "--wor", "--nowor", "audio/"], &["--wor", "--nowor"])]
+#[case(&["batchalign3", "morphotag", "--retokenize", "--keeptokens", "corpus/"], &["--retokenize", "--keeptokens"])]
+#[case(&["batchalign3", "morphotag", "--skipmultilang", "--multilang", "corpus/"], &["--skipmultilang", "--multilang"])]
+fn conflicting_flags_are_rejected(#[case] args: &[&str], #[case] expected_fragments: &[&str]) {
+    assert_parse_error_contains(args, expected_fragments);
 }
 
 #[test]
@@ -505,8 +459,8 @@ fn parse_models_prep() {
     if let Commands::Models(args) = &cli.command {
         if let ModelsAction::Prep(prep) = &args.action {
             assert_eq!(prep.run_name, "my_run");
-            assert_eq!(prep.input_dir, "input/");
-            assert_eq!(prep.output_dir, "output/");
+            assert_eq!(prep.input_dir, PathBuf::from("input/"));
+            assert_eq!(prep.output_dir, PathBuf::from("output/"));
             assert_eq!(prep.min_length, 5);
         } else {
             panic!("expected Prep");
@@ -548,8 +502,8 @@ fn parse_models_train_passthrough() {
 fn parse_avqi() {
     let cli = Cli::parse_from(["batchalign3", "avqi", "input/", "output/", "--lang", "eng"]);
     if let Commands::Avqi(args) = &cli.command {
-        assert_eq!(args.input_dir, "input/");
-        assert_eq!(args.output_dir, "output/");
+        assert_eq!(args.input_dir, PathBuf::from("input/"));
+        assert_eq!(args.output_dir, PathBuf::from("output/"));
         assert_eq!(args.lang, "eng");
     } else {
         panic!("expected Avqi");
@@ -572,8 +526,8 @@ fn parse_bench_options() {
     ]);
     if let Commands::Bench(args) = &cli.command {
         assert_eq!(args.command, BenchTarget::TranscribeS);
-        assert_eq!(args.in_dir, "input/");
-        assert_eq!(args.out_dir, "output/");
+        assert_eq!(args.in_dir, PathBuf::from("input/"));
+        assert_eq!(args.out_dir, PathBuf::from("output/"));
         assert_eq!(args.runs, 3);
         assert_eq!(args.workers, Some(4));
         assert!(args.use_cache);
@@ -703,90 +657,30 @@ fn build_options_align_defaults() {
 }
 
 #[test]
-fn build_options_align_whisper_fa() {
-    let cli = Cli::parse_from(["batchalign3", "align", "--whisper-fa", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert_eq!(a.fa_engine, FaEngineName::Whisper),
-        _ => panic!("expected Align"),
-    }
-}
-
-#[test]
-fn build_options_align_fa_engine_override() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "align",
-        "--fa-engine-custom",
-        "wav2vec_fa_canto",
-        "corpus/",
-    ]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert_eq!(
-            a.fa_engine,
-            FaEngineName::Wav2vecCanto
-        ),
-        _ => panic!("expected Align"),
-    }
-}
-
-#[test]
-fn build_options_align_utr_engine_override() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "align",
-        "--utr-engine-custom",
-        "tencent_utr",
-        "corpus/",
-    ]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert_eq!(
-            a.utr_engine,
-            Some(AppUtrEngine::HkTencent)
-        ),
-        _ => panic!("expected Align"),
-    }
-}
-
-#[test]
-fn build_options_align_no_utr() {
-    let cli = Cli::parse_from(["batchalign3", "align", "--no-utr", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert!(a.utr_engine.is_none()),
-        _ => panic!("expected Align"),
-    }
-}
-
-#[test]
-fn build_options_align_nowor() {
-    let cli = Cli::parse_from(["batchalign3", "align", "--nowor", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert!(!a.wor.should_write()),
-        _ => panic!("expected Align"),
-    }
-}
-
-#[test]
-fn build_options_align_pauses() {
-    let cli = Cli::parse_from(["batchalign3", "align", "--pauses", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert!(a.pauses),
-        _ => panic!("expected Align"),
-    }
-}
-
-#[test]
-fn build_options_align_merge_abbrev() {
-    let cli = Cli::parse_from(["batchalign3", "align", "--merge-abbrev", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Align(a) => assert!(a.merge_abbrev.should_merge()),
-        _ => panic!("expected Align"),
+fn build_options_align_single_flags() {
+    // Each flag's effect on the Align options struct.
+    let cases: Vec<(&[&str], Box<dyn Fn(&batchalign_app::options::AlignOptions)>)> = vec![
+        (&["batchalign3", "align", "--whisper-fa", "corpus/"] as &[&str],
+         Box::new(|a| assert_eq!(a.fa_engine, FaEngineName::Whisper))),
+        (&["batchalign3", "align", "--fa-engine-custom", "wav2vec_fa_canto", "corpus/"],
+         Box::new(|a| assert_eq!(a.fa_engine, FaEngineName::Wav2vecCanto))),
+        (&["batchalign3", "align", "--utr-engine-custom", "tencent_utr", "corpus/"],
+         Box::new(|a| assert_eq!(a.utr_engine, Some(AppUtrEngine::HkTencent)))),
+        (&["batchalign3", "align", "--no-utr", "corpus/"],
+         Box::new(|a| assert!(a.utr_engine.is_none()))),
+        (&["batchalign3", "align", "--nowor", "corpus/"],
+         Box::new(|a| assert!(!a.wor.should_write()))),
+        (&["batchalign3", "align", "--pauses", "corpus/"],
+         Box::new(|a| assert!(a.pauses))),
+        (&["batchalign3", "align", "--merge-abbrev", "corpus/"],
+         Box::new(|a| assert!(a.merge_abbrev.should_merge()))),
+    ];
+    for (args, check) in cases {
+        let opts = typed_options_for(args);
+        match opts {
+            CommandOptions::Align(a) => check(&a),
+            _ => panic!("expected Align for {args:?}"),
+        }
     }
 }
 
@@ -887,52 +781,16 @@ fn build_options_transcribe_defaults() {
     }
 }
 
-#[test]
-fn build_options_transcribe_whisperx() {
-    let cli = Cli::parse_from(["batchalign3", "transcribe", "--whisperx", "audio/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
+#[rstest]
+#[case(&["batchalign3", "transcribe", "--whisperx", "audio/"], AsrEngineName::WhisperX)]
+#[case(&["batchalign3", "transcribe", "--whisper-oai", "audio/"], AsrEngineName::WhisperOai)]
+#[case(&["batchalign3", "transcribe", "--whisper", "audio/"], AsrEngineName::Whisper)]
+#[case(&["batchalign3", "transcribe", "--asr-engine-custom", "tencent", "audio/"], AsrEngineName::HkTencent)]
+fn build_options_transcribe_asr_engine(#[case] args: &[&str], #[case] expected: AsrEngineName) {
+    let opts = typed_options_for(args);
     match opts {
-        CommandOptions::Transcribe(t) => assert_eq!(t.asr_engine, AsrEngineName::WhisperX),
-        _ => panic!("expected Transcribe"),
-    }
-}
-
-#[test]
-fn build_options_transcribe_whisper_oai() {
-    let cli = Cli::parse_from(["batchalign3", "transcribe", "--whisper-oai", "audio/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Transcribe(t) => assert_eq!(t.asr_engine, AsrEngineName::WhisperOai),
-        _ => panic!("expected Transcribe"),
-    }
-}
-
-#[test]
-fn build_options_transcribe_whisper() {
-    let cli = Cli::parse_from(["batchalign3", "transcribe", "--whisper", "audio/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Transcribe(t) => assert_eq!(t.asr_engine, AsrEngineName::Whisper),
-        _ => panic!("expected Transcribe"),
-    }
-}
-
-#[test]
-fn build_options_transcribe_asr_engine_override() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "transcribe",
-        "--asr-engine-custom",
-        "tencent",
-        "audio/",
-    ]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Transcribe(t) => assert_eq!(
-            t.asr_engine,
-            AsrEngineName::HkTencent
-        ),
-        _ => panic!("expected Transcribe"),
+        CommandOptions::Transcribe(t) => assert_eq!(t.asr_engine, expected, "{args:?}"),
+        _ => panic!("expected Transcribe for {args:?}"),
     }
 }
 
@@ -1358,42 +1216,15 @@ fn build_options_benchmark_defaults() {
     }
 }
 
-#[test]
-fn build_options_benchmark_whisper() {
-    let cli = Cli::parse_from(["batchalign3", "benchmark", "--whisper", "audio/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
+#[rstest]
+#[case(&["batchalign3", "benchmark", "--whisper", "audio/"], AsrEngineName::Whisper)]
+#[case(&["batchalign3", "benchmark", "--whisper-oai", "audio/"], AsrEngineName::WhisperOai)]
+#[case(&["batchalign3", "benchmark", "--asr-engine-custom", "funaudio", "audio/"], AsrEngineName::HkFunaudio)]
+fn build_options_benchmark_asr_engine(#[case] args: &[&str], #[case] expected: AsrEngineName) {
+    let opts = typed_options_for(args);
     match opts {
-        CommandOptions::Benchmark(b) => assert_eq!(b.asr_engine, AsrEngineName::Whisper),
-        _ => panic!("expected Benchmark"),
-    }
-}
-
-#[test]
-fn build_options_benchmark_whisper_oai() {
-    let cli = Cli::parse_from(["batchalign3", "benchmark", "--whisper-oai", "audio/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Benchmark(b) => assert_eq!(b.asr_engine, AsrEngineName::WhisperOai),
-        _ => panic!("expected Benchmark"),
-    }
-}
-
-#[test]
-fn build_options_benchmark_asr_engine_override() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "benchmark",
-        "--asr-engine-custom",
-        "funaudio",
-        "audio/",
-    ]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    match opts {
-        CommandOptions::Benchmark(b) => assert_eq!(
-            b.asr_engine,
-            AsrEngineName::HkFunaudio
-        ),
-        _ => panic!("expected Benchmark"),
+        CommandOptions::Benchmark(b) => assert_eq!(b.asr_engine, expected, "{args:?}"),
+        _ => panic!("expected Benchmark for {args:?}"),
     }
 }
 
@@ -1527,250 +1358,98 @@ fn build_options_no_lazy_audio_wins_when_both_flags_present() {
 }
 
 // -----------------------------------------------------------------------
-// command_profile
+// command_profile (parametrized)
 // -----------------------------------------------------------------------
 
-#[test]
-fn command_profile_align() {
-    let cli = Cli::parse_from(["batchalign3", "align", "corpus/"]);
+#[rstest]
+#[case(&["batchalign3", "align", "corpus/"], ReleasedCommand::Align, "eng", 1, &["cha"])]
+#[case(&["batchalign3", "transcribe", "audio/"], ReleasedCommand::Transcribe, "eng", 2, &["mp3", "mp4", "wav"])]
+#[case(&["batchalign3", "transcribe", "--diarize", "audio/"], ReleasedCommand::TranscribeS, "eng", 2, &["mp3", "mp4", "wav"])]
+#[case(&["batchalign3", "translate", "corpus/"], ReleasedCommand::Translate, "eng", 1, &["cha"])]
+#[case(&["batchalign3", "morphotag", "corpus/"], ReleasedCommand::Morphotag, "eng", 1, &["cha"])]
+#[case(&["batchalign3", "coref", "corpus/"], ReleasedCommand::Coref, "eng", 1, &["cha"])]
+#[case(&["batchalign3", "compare", "corpus/"], ReleasedCommand::Compare, "eng", 2, &["cha"])]
+#[case(&["batchalign3", "compare", "--lang", "spa", "-n", "3", "corpus/"], ReleasedCommand::Compare, "spa", 3, &["cha"])]
+#[case(&["batchalign3", "utseg", "--lang", "spa", "-n", "3", "corpus/"], ReleasedCommand::Utseg, "spa", 3, &["cha"])]
+#[case(&["batchalign3", "benchmark", "audio/"], ReleasedCommand::Benchmark, "eng", 2, &["mp3", "mp4", "wav"])]
+#[case(&["batchalign3", "opensmile", "in/", "out/"], ReleasedCommand::Opensmile, "eng", 1, &["mp3", "mp4", "wav"])]
+#[case(&["batchalign3", "avqi", "in/", "out/", "--lang", "yue"], ReleasedCommand::Avqi, "yue", 1, &["mp3", "mp4", "wav"])]
+fn command_profile_matches_expected(
+    #[case] args: &[&str],
+    #[case] expected_cmd: ReleasedCommand,
+    #[case] expected_lang: &str,
+    #[case] expected_speakers: u32,
+    #[case] expected_exts: &[&str],
+) {
+    let cli = Cli::parse_from(args);
     let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Align);
-    assert_eq!(profile.lang, "eng");
-    assert_eq!(profile.num_speakers, 1);
-    assert_eq!(profile.extensions, &["cha"]);
-}
-
-#[test]
-fn command_profile_transcribe_no_diarize() {
-    let cli = Cli::parse_from(["batchalign3", "transcribe", "audio/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Transcribe);
-    assert_eq!(profile.lang, "eng");
-    assert_eq!(profile.num_speakers, 2);
-    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
-}
-
-#[test]
-fn command_profile_transcribe_diarize() {
-    let cli = Cli::parse_from(["batchalign3", "transcribe", "--diarize", "audio/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::TranscribeS);
-}
-
-#[test]
-fn command_profile_translate() {
-    let cli = Cli::parse_from(["batchalign3", "translate", "corpus/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Translate);
-    assert_eq!(profile.extensions, &["cha"]);
-}
-
-#[test]
-fn command_profile_morphotag() {
-    let cli = Cli::parse_from(["batchalign3", "morphotag", "corpus/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Morphotag);
-}
-
-#[test]
-fn command_profile_coref() {
-    let cli = Cli::parse_from(["batchalign3", "coref", "corpus/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Coref);
-}
-
-#[test]
-fn command_profile_compare() {
-    let cli = Cli::parse_from(["batchalign3", "compare", "corpus/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Compare);
-    assert_eq!(profile.lang, "eng");
-    assert_eq!(profile.num_speakers, 2);
-    assert_eq!(profile.extensions, &["cha"]);
-}
-
-#[test]
-fn command_profile_compare_with_lang() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "compare",
-        "--lang",
-        "spa",
-        "-n",
-        "3",
-        "corpus/",
-    ]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Compare);
-    assert_eq!(profile.lang, "spa");
-    assert_eq!(profile.num_speakers, 3);
-    assert_eq!(profile.extensions, &["cha"]);
-}
-
-#[test]
-fn command_profile_utseg() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "utseg",
-        "--lang",
-        "spa",
-        "-n",
-        "3",
-        "corpus/",
-    ]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Utseg);
-    assert_eq!(profile.lang, "spa");
-    assert_eq!(profile.num_speakers, 3);
-}
-
-#[test]
-fn command_profile_benchmark() {
-    let cli = Cli::parse_from(["batchalign3", "benchmark", "audio/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Benchmark);
-    assert_eq!(profile.lang, "eng");
-    assert_eq!(profile.num_speakers, 2);
-    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
-}
-
-#[test]
-fn command_profile_opensmile() {
-    let cli = Cli::parse_from(["batchalign3", "opensmile", "in/", "out/"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Opensmile);
-    assert_eq!(profile.lang, "eng");
-    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
-}
-
-#[test]
-fn command_profile_avqi() {
-    let cli = Cli::parse_from(["batchalign3", "avqi", "in/", "out/", "--lang", "yue"]);
-    let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, ReleasedCommand::Avqi);
-    assert_eq!(profile.lang, "yue");
-    assert_eq!(profile.num_speakers, 1);
-    assert_eq!(profile.extensions, &["mp3", "mp4", "wav"]);
+    assert_eq!(profile.command, expected_cmd, "command mismatch for {args:?}");
+    assert_eq!(profile.lang, expected_lang, "lang mismatch for {args:?}");
+    assert_eq!(profile.num_speakers, expected_speakers, "num_speakers mismatch for {args:?}");
+    assert_eq!(profile.extensions, expected_exts, "extensions mismatch for {args:?}");
 }
 
 // -----------------------------------------------------------------------
-// common_opts
+// common_opts (parametrized)
 // -----------------------------------------------------------------------
 
-#[test]
-fn common_opts_processing_commands_return_some() {
-    for args in &[
-        vec!["batchalign3", "align", "x/"],
-        vec!["batchalign3", "transcribe", "x/"],
-        vec!["batchalign3", "translate", "x/"],
-        vec!["batchalign3", "morphotag", "x/"],
-        vec!["batchalign3", "coref", "x/"],
-        vec!["batchalign3", "compare", "x/"],
-        vec!["batchalign3", "utseg", "x/"],
-        vec!["batchalign3", "benchmark", "x/"],
-    ] {
-        let cli = Cli::parse_from(args);
-        assert!(
-            common_opts(&cli.command).is_some(),
-            "common_opts should be Some for {args:?}"
-        );
-    }
+#[rstest]
+#[case(&["batchalign3", "align", "x/"])]
+#[case(&["batchalign3", "transcribe", "x/"])]
+#[case(&["batchalign3", "translate", "x/"])]
+#[case(&["batchalign3", "morphotag", "x/"])]
+#[case(&["batchalign3", "coref", "x/"])]
+#[case(&["batchalign3", "compare", "x/"])]
+#[case(&["batchalign3", "utseg", "x/"])]
+#[case(&["batchalign3", "benchmark", "x/"])]
+fn common_opts_processing_commands_return_some(#[case] args: &[&str]) {
+    let cli = Cli::parse_from(args);
+    assert!(
+        common_opts(&cli.command).is_some(),
+        "common_opts should be Some for {args:?}"
+    );
 }
 
-#[test]
-fn common_opts_utility_returns_none() {
-    let cli = Cli::parse_from(["batchalign3", "version"]);
-    assert!(common_opts(&cli.command).is_none());
-}
-
-#[test]
-fn common_opts_opensmile_returns_none() {
-    let cli = Cli::parse_from(["batchalign3", "opensmile", "in/", "out/"]);
-    assert!(common_opts(&cli.command).is_none());
-}
-
-#[test]
-fn common_opts_avqi_returns_none() {
-    let cli = Cli::parse_from(["batchalign3", "avqi", "in/", "out/"]);
-    assert!(common_opts(&cli.command).is_none());
+#[rstest]
+#[case(&["batchalign3", "version"])]
+#[case(&["batchalign3", "opensmile", "in/", "out/"])]
+#[case(&["batchalign3", "avqi", "in/", "out/"])]
+fn common_opts_non_processing_commands_return_none(#[case] args: &[&str]) {
+    let cli = Cli::parse_from(args);
+    assert!(
+        common_opts(&cli.command).is_none(),
+        "common_opts should be None for {args:?}"
+    );
 }
 
 // -----------------------------------------------------------------------
-// extract_bank / extract_subdir / extract_lexicon
+// extract_bank / extract_subdir / extract_lexicon (parametrized)
 // -----------------------------------------------------------------------
 
-#[test]
-fn extract_bank_benchmark() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "benchmark",
-        "--bank",
-        "childes-data",
-        "audio/",
-    ]);
-    assert_eq!(extract_bank(&cli.command), Some("childes-data"));
+#[rstest]
+#[case(&["batchalign3", "benchmark", "--bank", "childes-data", "audio/"], Some("childes-data"))]
+#[case(&["batchalign3", "opensmile", "--bank", "mybank", "in/", "out/"], Some("mybank"))]
+#[case(&["batchalign3", "morphotag", "corpus/"], None)]
+fn extract_bank_matches(#[case] args: &[&str], #[case] expected: Option<&str>) {
+    let cli = Cli::parse_from(args);
+    assert_eq!(extract_bank(&cli.command), expected, "{args:?}");
 }
 
-#[test]
-fn extract_bank_opensmile() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "opensmile",
-        "--bank",
-        "mybank",
-        "in/",
-        "out/",
-    ]);
-    assert_eq!(extract_bank(&cli.command), Some("mybank"));
+#[rstest]
+#[case(&["batchalign3", "benchmark", "--subdir", "Eng-NA", "audio/"], Some("Eng-NA"))]
+#[case(&["batchalign3", "opensmile", "in/", "out/", "--subdir", "Eng-NA"], Some("Eng-NA"))]
+#[case(&["batchalign3", "align", "corpus/"], None)]
+fn extract_subdir_matches(#[case] args: &[&str], #[case] expected: Option<&str>) {
+    let cli = Cli::parse_from(args);
+    assert_eq!(extract_subdir(&cli.command), expected, "{args:?}");
 }
 
-#[test]
-fn extract_bank_other_commands_none() {
-    let cli = Cli::parse_from(["batchalign3", "morphotag", "corpus/"]);
-    assert_eq!(extract_bank(&cli.command), None);
-}
-
-#[test]
-fn extract_subdir_benchmark() {
-    let cli = Cli::parse_from(["batchalign3", "benchmark", "--subdir", "Eng-NA", "audio/"]);
-    assert_eq!(extract_subdir(&cli.command), Some("Eng-NA"));
-}
-
-#[test]
-fn extract_subdir_other_commands_none() {
-    let cli = Cli::parse_from(["batchalign3", "align", "corpus/"]);
-    assert_eq!(extract_subdir(&cli.command), None);
-}
-
-#[test]
-fn extract_subdir_opensmile() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "opensmile",
-        "in/",
-        "out/",
-        "--subdir",
-        "Eng-NA",
-    ]);
-    assert_eq!(extract_subdir(&cli.command), Some("Eng-NA"));
-}
-
-#[test]
-fn extract_lexicon_morphotag() {
-    let cli = Cli::parse_from([
-        "batchalign3",
-        "morphotag",
-        "--lexicon",
-        "lex.csv",
-        "corpus/",
-    ]);
-    assert_eq!(extract_lexicon(&cli.command), Some("lex.csv"));
-}
-
-#[test]
-fn extract_lexicon_other_commands_none() {
-    let cli = Cli::parse_from(["batchalign3", "align", "corpus/"]);
-    assert_eq!(extract_lexicon(&cli.command), None);
+#[rstest]
+#[case(&["batchalign3", "morphotag", "--lexicon", "lex.csv", "corpus/"], Some("lex.csv"))]
+#[case(&["batchalign3", "align", "corpus/"], None)]
+fn extract_lexicon_matches(#[case] args: &[&str], #[case] expected: Option<&str>) {
+    let cli = Cli::parse_from(args);
+    assert_eq!(extract_lexicon(&cli.command), expected, "{args:?}");
 }
 
 // -----------------------------------------------------------------------
@@ -1809,11 +1488,8 @@ fn build_options_engine_overrides_populates_common() {
     ]);
     let opts = build_typed_options(&cli.command, &cli.global).unwrap();
     assert_eq!(
-        opts.common()
-            .engine_overrides
-            .get("asr")
-            .map(|s| s.as_str()),
-        Some("tencent")
+        opts.common().engine_overrides.asr,
+        Some(AsrEngineName::HkTencent)
     );
 }
 
@@ -1824,37 +1500,13 @@ fn build_options_engine_overrides_empty_by_default() {
     assert!(opts.common().engine_overrides.is_empty());
 }
 
-#[test]
-fn build_options_engine_overrides_invalid_json_is_rejected() {
+#[rstest]
+#[case("not valid json")]
+#[case(r#"{"asr":{"name":"whisper"}}"#)]
+fn build_options_engine_overrides_invalid_values_are_rejected(#[case] overrides: &str) {
     assert_parse_error_contains(
-        &[
-            "batchalign3",
-            "--engine-overrides",
-            "not valid json",
-            "morphotag",
-            "corpus/",
-        ],
-        &[
-            "invalid --engine-overrides JSON",
-            "flat {string: string} object",
-        ],
-    );
-}
-
-#[test]
-fn build_options_engine_overrides_non_string_values_are_rejected() {
-    assert_parse_error_contains(
-        &[
-            "batchalign3",
-            "--engine-overrides",
-            r#"{"asr":{"name":"whisper"}}"#,
-            "morphotag",
-            "corpus/",
-        ],
-        &[
-            "invalid --engine-overrides JSON",
-            "flat {string: string} object",
-        ],
+        &["batchalign3", "--engine-overrides", overrides, "morphotag", "corpus/"],
+        &["invalid --engine-overrides JSON"],
     );
 }
 
@@ -1866,7 +1518,7 @@ fn build_options_engine_overrides_multiple_commands() {
             vec![
                 "batchalign3",
                 "--engine-overrides",
-                r#"{"fa": "custom"}"#,
+                r#"{"fa": "whisper_fa"}"#,
                 "align",
                 "corpus/",
             ],
@@ -1876,7 +1528,7 @@ fn build_options_engine_overrides_multiple_commands() {
             vec![
                 "batchalign3",
                 "--engine-overrides",
-                r#"{"asr": "custom"}"#,
+                r#"{"asr": "tencent"}"#,
                 "transcribe",
                 "audio/",
             ],
@@ -1886,7 +1538,7 @@ fn build_options_engine_overrides_multiple_commands() {
             vec![
                 "batchalign3",
                 "--engine-overrides",
-                r#"{"mor": "custom"}"#,
+                r#"{"asr": "whisper"}"#,
                 "translate",
                 "corpus/",
             ],

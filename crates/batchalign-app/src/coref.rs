@@ -32,8 +32,8 @@ use tracing::{info, warn};
 use crate::error::ServerError;
 use crate::infer_retry::dispatch_execute_v2_with_retry;
 use crate::workflow::text_batch::{
-    TextBatchFileInput, TextBatchFileResults, TextBatchOperation, TextBatchWorkflow,
-    TextBatchWorkflowRequest, TextPerFileWorkflowRequest, wrap_legacy_batch_results,
+    TextBatchFileInput, TextBatchFileResult, TextBatchFileResults, TextBatchOperation,
+    TextBatchWorkflow, TextBatchWorkflowRequest, TextPerFileWorkflowRequest,
 };
 use crate::workflow::PerFileWorkflow;
 
@@ -223,7 +223,7 @@ async fn run_coref_batch_impl(
     lang: &LanguageCode3,
     pool: &WorkerPool,
 ) -> TextBatchFileResults {
-    let mut results: Vec<(String, Result<String, String>)> = Vec::with_capacity(files.len());
+    let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
     // 1. Parse all files
     let mut parsed_files: Vec<batchalign_chat_ops::ChatFile> = Vec::with_capacity(files.len());
@@ -307,12 +307,9 @@ async fn run_coref_batch_impl(
                 warn!(error = %e, "Batch coref execute_v2 failed for all files");
                 // Return all files serialized without coref
                 for (file_idx, file) in files.iter().enumerate() {
-                    results.push((
-                        file.filename.to_string(),
-                        Ok(to_chat_string(&parsed_files[file_idx])),
-                    ));
+                    results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(&parsed_files[file_idx])));
                 }
-                return wrap_legacy_batch_results(results);
+                return results;
             }
         }
     };
@@ -341,7 +338,7 @@ async fn run_coref_batch_impl(
         let filename = file.filename.as_ref();
         // Skip files that failed pre-validation
         if let Some(ref err) = validation_errors[file_idx] {
-            results.push((file.filename.to_string(), Err(err.clone())));
+            results.push(TextBatchFileResult::err(file.filename.clone(), err.clone()));
             continue;
         }
 
@@ -351,13 +348,10 @@ async fn run_coref_batch_impl(
             warn!(filename = %filename, errors = ?msgs, "coref post-validation warnings (non-fatal)");
         }
 
-        results.push((
-            file.filename.to_string(),
-            Ok(to_chat_string(&parsed_files[file_idx])),
-        ));
+        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(&parsed_files[file_idx])));
     }
 
-    wrap_legacy_batch_results(results)
+    results
 }
 
 // ---------------------------------------------------------------------------

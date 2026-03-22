@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use batchalign_app::api::{
     FilePayload, FileResult, HealthResponse, JobInfo, JobListItem, JobResultResponse, JobStatus,
-    JobSubmission, LanguageSpec, MemoryMb, NumSpeakers,
+    JobSubmission, LanguageSpec, MemoryMb, NumSpeakers, ReleasedCommand,
 };
 use batchalign_app::config::{RuntimeLayout, ServerConfig};
 use batchalign_app::host_memory::MachineMlTestLock;
@@ -269,13 +269,13 @@ pub async fn require_live_server(task: InferTask, skip_message: &str) -> Option<
 pub async fn submit_and_complete(
     client: &reqwest::Client,
     base_url: &str,
-    command: &str,
+    command: ReleasedCommand,
     lang: &str,
     files: Vec<FilePayload>,
     options: CommandOptions,
 ) -> (JobInfo, Vec<FileResult>) {
     let submission = JobSubmission {
-        command: command.into(),
+        command,
         lang: LanguageSpec::try_from(lang).expect("test lang must be a valid ISO 639-3 code or \"auto\""),
         num_speakers: NumSpeakers(1),
         files,
@@ -675,7 +675,7 @@ fn find_repo_root() -> Option<PathBuf> {
 pub async fn submit_paths_and_complete(
     client: &reqwest::Client,
     base_url: &str,
-    command: &str,
+    command: ReleasedCommand,
     lang: &str,
     source_paths: Vec<String>,
     output_paths: Vec<String>,
@@ -688,7 +688,7 @@ pub async fn submit_paths_and_complete(
     );
 
     let submission = JobSubmission {
-        command: command.into(),
+        command,
         lang: LanguageSpec::try_from(lang).expect("test lang must be a valid ISO 639-3 code or \"auto\""),
         num_speakers: NumSpeakers(1),
         files: vec![],

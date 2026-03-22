@@ -67,6 +67,9 @@ fn main() {
     }
 }
 
+mod ci_hygiene;
+mod wide_struct_audit;
+
 fn run_main() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -82,12 +85,14 @@ fn run_main() -> Result<()> {
             };
             run_affected_rust(mode)
         }
+        Some("lint-wide-structs") => wide_struct_audit::run(repo_root()),
+        Some("lint-ci-hygiene") => ci_hygiene::run(repo_root()),
         _ => Err(usage_error()),
     }
 }
 
 fn usage_error() -> DynError {
-    "usage: cargo xtask affected-rust {packages|check|clippy|test}".into()
+    "usage: cargo xtask {affected-rust {packages|check|clippy|test}|lint-wide-structs|lint-ci-hygiene}".into()
 }
 
 fn run_affected_rust(mode: AffectedMode) -> Result<()> {

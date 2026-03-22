@@ -4,7 +4,7 @@
 //! infer task does it rely on, and is the released surface direct or
 //! Rust-composed?”
 
-use crate::api::{CommandName, ReleasedCommand};
+use crate::api::ReleasedCommand;
 use crate::worker::InferTask;
 
 use super::traits::WorkflowFamily;
@@ -174,11 +174,9 @@ pub(crate) fn released_command_descriptor(command: ReleasedCommand) -> CommandWo
 
 /// Return the typed workflow descriptor for one released command.
 pub(crate) fn command_workflow_descriptor(
-    command: &CommandName,
+    command: ReleasedCommand,
 ) -> Option<CommandWorkflowDescriptor> {
-    ReleasedCommand::try_from(command)
-        .ok()
-        .map(released_command_descriptor)
+    Some(released_command_descriptor(command))
 }
 
 /// Return the typed workflow descriptor for one released command name.
@@ -210,7 +208,7 @@ pub(crate) fn released_command_workflows() -> &'static [CommandWorkflowDescripto
 }
 
 /// Return the runner dispatch kind for one released command.
-pub(crate) fn command_runner_dispatch_kind(command: &CommandName) -> Option<RunnerDispatchKind> {
+pub(crate) fn command_runner_dispatch_kind(command: ReleasedCommand) -> Option<RunnerDispatchKind> {
     command_workflow_descriptor(command).map(|descriptor| descriptor.runner_dispatch_kind)
 }
 

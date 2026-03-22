@@ -19,7 +19,7 @@ use crate::common::{
     assert_completed_without_errors, prepare_audio_fixtures, prepare_named_audio,
     require_live_server, require_revai_key, submit_paths_and_complete,
 };
-use batchalign_app::api::JobStatus;
+use batchalign_app::api::{JobStatus, ReleasedCommand};
 use batchalign_app::options::{
     AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, FaEngineName,
     OpensmileOptions, TranscribeOptions, WorTierPolicy,
@@ -119,7 +119,7 @@ async fn golden_align_eng_wav2vec() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -169,7 +169,7 @@ async fn golden_align_eng_whisper_fa() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -219,7 +219,7 @@ async fn golden_align_eng_no_wor() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -277,7 +277,7 @@ async fn golden_transcribe_eng_whisper() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -337,7 +337,7 @@ async fn golden_transcribe_eng_revai() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -388,7 +388,7 @@ async fn golden_transcribe_eng_whisper_wor() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -446,7 +446,7 @@ async fn golden_opensmile_eng() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "opensmile",
+        ReleasedCommand::Opensmile,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -503,7 +503,7 @@ async fn golden_benchmark_eng() {
     let (info, _outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "benchmark",
+        ReleasedCommand::Benchmark,
         "eng",
         vec![
             fixtures.audio.to_string_lossy().into(),
@@ -562,7 +562,7 @@ async fn transcribe_audio_clip(audio_name: &str, lang: &str, label: &str) {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         lang,
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -615,7 +615,7 @@ async fn align_audio_clip(audio_name: &str, chat_name: &str, lang: &str, label: 
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         lang,
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -758,7 +758,7 @@ async fn transcribe_eng_diarize() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -810,7 +810,7 @@ async fn parity_transcribe_disfluency_markup() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],
@@ -867,7 +867,7 @@ async fn parity_transcribe_retrace_markup() {
     let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "transcribe",
+        ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
         vec![output_path.to_string_lossy().into()],

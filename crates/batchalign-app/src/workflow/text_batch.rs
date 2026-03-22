@@ -144,36 +144,6 @@ impl TextBatchFileInput {
 
 }
 
-/// Convert one legacy tuple batch shape into the typed file-result shape.
-pub(crate) fn wrap_legacy_batch_results(
-    results: Vec<(String, Result<String, String>)>,
-) -> TextBatchFileResults {
-    results
-        .into_iter()
-        .map(|(filename, result)| match result {
-            Ok(text) => TextBatchFileResult::ok(filename, text),
-            Err(error) => TextBatchFileResult::err(filename, error),
-        })
-        .collect()
-}
-
-/// Convert typed file results back into the legacy tuple shape at the older
-/// runner boundary that has not been cleaned up yet.
-pub(crate) fn into_legacy_batch_results(
-    results: TextBatchFileResults,
-) -> Vec<(String, Result<String, String>)> {
-    results
-        .into_iter()
-        .map(|result| {
-            let filename = result.filename.to_string();
-            let outcome = result
-                .result
-                .map(OwnedChatText::into_string)
-                .map_err(TextWorkflowFileError::into_message);
-            (filename, outcome)
-        })
-        .collect()
-}
 
 /// Borrowed request bundle for one per-file text workflow execution.
 pub(crate) struct TextPerFileWorkflowRequest<'a, Shared, Params> {

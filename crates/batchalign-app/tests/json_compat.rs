@@ -23,7 +23,7 @@ use batchalign_app::worker::{
 #[test]
 fn snapshot_job_submission_minimal() {
     let sub = JobSubmission {
-        command: "morphotag".into(),
+        command: ReleasedCommand::Morphotag,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
@@ -50,7 +50,7 @@ fn snapshot_job_submission_minimal() {
 #[test]
 fn snapshot_job_submission_with_files() {
     let sub = JobSubmission {
-        command: "align".into(),
+        command: ReleasedCommand::Align,
         lang: LanguageSpec::Resolved(LanguageCode3::spa()),
         num_speakers: NumSpeakers(2),
         files: vec![FilePayload {
@@ -85,7 +85,7 @@ fn snapshot_job_submission_with_files() {
 #[test]
 fn snapshot_job_submission_paths_mode() {
     let sub = JobSubmission {
-        command: "morphotag".into(),
+        command: ReleasedCommand::Morphotag,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
@@ -127,7 +127,7 @@ fn snapshot_job_info() {
     let info = JobInfo {
         job_id: "550e8400-e29b-41d4-a716-446655440000".into(),
         status: JobStatus::Running,
-        command: "morphotag".into(),
+        command: ReleasedCommand::Morphotag,
         options: batchalign_app::options::CommandOptions::Morphotag(
             batchalign_app::options::MorphotagOptions {
                 common: batchalign_app::options::CommonOptions::default(),
@@ -216,7 +216,7 @@ fn snapshot_job_list_item() {
     let item = JobListItem {
         job_id: "abc-123".into(),
         status: JobStatus::Completed,
-        command: "morphotag".into(),
+        command: ReleasedCommand::Morphotag,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         source_dir: "/data/corpus".into(),
         total_files: 10,
@@ -371,7 +371,7 @@ fn deserialize_python_job_submission() {
     }"#;
 
     let sub: JobSubmission = serde_json::from_str(python_json).unwrap();
-    assert_eq!(sub.command, "morphotag");
+    assert_eq!(sub.command, ReleasedCommand::Morphotag);
     assert_eq!(sub.files.len(), 1);
     assert_eq!(sub.files[0].filename, "test.cha");
     assert!(!sub.paths_mode);

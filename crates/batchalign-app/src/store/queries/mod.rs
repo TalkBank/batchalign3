@@ -141,7 +141,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use crate::api::JobStatus;
+    use crate::api::{JobStatus, ReleasedCommand};
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
@@ -172,7 +172,7 @@ mod tests {
         (store, db, dir)
     }
 
-    pub(super) fn make_job(id: &str, command: &str, filenames: Vec<String>) -> Job {
+    pub(super) fn make_job(id: &str, command: crate::api::ReleasedCommand, filenames: Vec<String>) -> Job {
         use crate::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 
         let mut file_statuses = HashMap::new();
@@ -185,7 +185,7 @@ mod tests {
         }
 
         let options = match command {
-            "align" => CommandOptions::Align(AlignOptions {
+            crate::api::ReleasedCommand::Align => CommandOptions::Align(AlignOptions {
                 common: CommonOptions::default(),
                 fa_engine: FaEngineName::Wave2Vec,
                 utr_engine: None,
@@ -210,7 +210,7 @@ mod tests {
                 correlation_id: format!("test-{id}").into(),
             },
             dispatch: JobDispatchConfig {
-                command: command.into(),
+                command,
                 lang: crate::api::LanguageSpec::Resolved(crate::api::LanguageCode3::eng()),
                 num_speakers: crate::api::NumSpeakers(1),
                 options,
@@ -263,7 +263,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
 
         let info = store.get(&JobId::from("j1")).await;
@@ -276,10 +276,10 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let job1 = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job1 = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job1).await.unwrap();
 
-        let job2 = make_job("j2", "align", vec!["a.cha".into()]);
+        let job2 = make_job("j2", ReleasedCommand::Align, vec!["a.cha".into()]);
         let result = store.submit(job2).await;
         assert!(result.is_err());
     }
@@ -289,7 +289,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
 
         store.cancel(&JobId::from("j1")).await.unwrap();
@@ -302,7 +302,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let mut job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let mut job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         job.execution.status = JobStatus::Completed;
         store.submit(job).await.unwrap();
 
@@ -314,7 +314,7 @@ mod tests {
     async fn submit_persists_job_without_relocking_store_state() {
         let (store, db, _dir) = test_store_with_db().await;
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
 
         let jobs = db.load_all_jobs().await.unwrap();
@@ -327,7 +327,7 @@ mod tests {
     async fn cancel_persists_status_after_releasing_store_lock() {
         let (store, db, _dir) = test_store_with_db().await;
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
         store.cancel(&JobId::from("j1")).await.unwrap();
 
@@ -344,7 +344,7 @@ mod tests {
         std::fs::create_dir_all(&staging_dir).unwrap();
         std::fs::write(staging_dir.join("artifact.txt"), "artifact").unwrap();
 
-        let mut job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let mut job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         job.execution.status = JobStatus::Completed;
         job.filesystem.staging_dir = staging_dir.clone();
         store.submit(job).await.unwrap();
@@ -361,12 +361,12 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let mut j1 = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let mut j1 = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         j1.schedule.submitted_at = UnixTimestamp(100.0);
         j1.execution.status = JobStatus::Completed;
         store.submit(j1).await.unwrap();
 
-        let mut j2 = make_job("j2", "align", vec!["b.cha".into()]);
+        let mut j2 = make_job("j2", ReleasedCommand::Align, vec!["b.cha".into()]);
         j2.schedule.submitted_at = UnixTimestamp(200.0);
         j2.execution.status = JobStatus::Completed;
         store.submit(j2).await.unwrap();
@@ -383,11 +383,11 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let mut early = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let mut early = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         early.schedule.submitted_at = UnixTimestamp(100.0);
         store.submit(early).await.unwrap();
 
-        let mut late = make_job("j2", "align", vec!["b.cha".into()]);
+        let mut late = make_job("j2", ReleasedCommand::Align, vec!["b.cha".into()]);
         late.schedule.submitted_at = UnixTimestamp(200.0);
         store.submit(late).await.unwrap();
 
@@ -429,12 +429,12 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let mut ready = make_job("ready", "morphotag", vec!["a.cha".into()]);
+        let mut ready = make_job("ready", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         ready.schedule.submitted_at = UnixTimestamp(100.0);
         store.submit(ready).await.unwrap();
 
         let deferred_at = UnixTimestamp(unix_now().0 + 60.0);
-        let mut deferred = make_job("deferred", "align", vec!["b.cha".into()]);
+        let mut deferred = make_job("deferred", ReleasedCommand::Align, vec!["b.cha".into()]);
         deferred.schedule.submitted_at = UnixTimestamp(50.0);
         deferred.schedule.next_eligible_at = Some(deferred_at);
         store.submit(deferred).await.unwrap();
@@ -484,13 +484,13 @@ mod tests {
 
         let now = unix_now();
 
-        let mut leased = make_job("leased", "morphotag", vec!["a.cha".into()]);
+        let mut leased = make_job("leased", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         leased.schedule.lease.leased_by_node = Some("other-node".into());
         leased.schedule.lease.heartbeat_at = Some(UnixTimestamp(now.0 - 10.0));
         leased.schedule.lease.expires_at = Some(UnixTimestamp(now.0 + 120.0));
         store.submit(leased).await.unwrap();
 
-        let mut expired = make_job("expired", "align", vec!["b.cha".into()]);
+        let mut expired = make_job("expired", ReleasedCommand::Align, vec!["b.cha".into()]);
         expired.schedule.lease.leased_by_node = Some("dead-node".into());
         expired.schedule.lease.heartbeat_at = Some(UnixTimestamp(now.0 - 600.0));
         expired.schedule.lease.expires_at = Some(UnixTimestamp(now.0 - 1.0));
@@ -522,7 +522,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
 
         let first_poll = store.claim_ready_queued_jobs().await;
@@ -552,7 +552,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
         let _ = store.claim_ready_queued_jobs().await;
 
@@ -586,7 +586,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let job = make_job("j1", "morphotag", vec!["a.cha".into()]);
+        let job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         store.submit(job).await.unwrap();
         let _ = store.claim_ready_queued_jobs().await;
         store.release_runner_claim(&JobId::from("j1")).await;

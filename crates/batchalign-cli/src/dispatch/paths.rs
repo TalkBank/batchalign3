@@ -31,15 +31,15 @@ pub(super) async fn dispatch_paths_mode(
     lang: &str,
     num_speakers: u32,
     extensions: &[&str],
-    inputs: &[String],
-    out_dir: Option<&str>,
+    inputs: &[std::path::PathBuf],
+    out_dir: Option<&std::path::Path>,
     options: Option<&CommandOptions>,
     bank: Option<&str>,
     subdir: Option<&str>,
     lexicon: Option<&str>,
     use_tui: bool,
     open_dashboard: bool,
-    before: Option<&str>,
+    before: Option<&std::path::Path>,
 ) -> Result<(), CliError> {
     // Health check
     client.health_check(server_url).await.map_err(|e| {
@@ -174,7 +174,7 @@ pub(super) async fn dispatch_paths_mode(
     };
 
     let submission = JobSubmission {
-        command: command.as_wire_name().into(),
+        command,
         lang: LanguageSpec::try_from(lang).map_err(|e| {
             CliError::InvalidArgument(format!("invalid language: {e}"))
         })?,

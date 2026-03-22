@@ -688,7 +688,7 @@ mod tests {
                 correlation_id: format!("test-{id}").into(),
             },
             dispatch: JobDispatchConfig {
-                command: "morphotag".into(),
+                command: ReleasedCommand::Morphotag,
                 lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Morphotag(MorphotagOptions {

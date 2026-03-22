@@ -17,7 +17,7 @@ use crate::common::{
     assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
     submit_paths_and_complete,
 };
-use batchalign_app::api::JobStatus;
+use batchalign_app::api::{JobStatus, ReleasedCommand};
 use batchalign_app::options::{
     AlignOptions, CommandOptions, CommonOptions, FaEngineName, MorphotagOptions, UtsegOptions,
     WorTierPolicy,
@@ -142,7 +142,7 @@ async fn gpu_profile_uses_single_worker_for_multi_file_align() {
     let (info, _outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         source_paths,
         output_paths,
@@ -242,7 +242,7 @@ async fn stanza_profile_groups_morphotag_and_utseg() {
     let (info_mt, _outputs_mt) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![input_path.to_string_lossy().into_owned()],
         vec![
@@ -276,7 +276,7 @@ async fn stanza_profile_groups_morphotag_and_utseg() {
     let (info_ut, _outputs_ut) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "utseg",
+        ReleasedCommand::Utseg,
         "eng",
         vec![input_path.to_string_lossy().into_owned()],
         vec![
@@ -355,7 +355,7 @@ async fn profile_worker_keys_use_profile_labels() {
     let (info, _outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![input_path.to_string_lossy().into_owned()],
         vec![

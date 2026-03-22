@@ -108,8 +108,8 @@ pub fn discover_client_files(
 /// For directories: walks recursively via [`discover_client_files`].
 /// For individual files: adds directly (no extension filtering — user chose them).
 pub fn discover_server_inputs(
-    inputs: &[String],
-    out_dir: Option<&str>,
+    inputs: &[PathBuf],
+    out_dir: Option<&Path>,
     extensions: &[&str],
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>), CliError> {
     let mut all_files = Vec::new();
@@ -168,15 +168,15 @@ fn sort_by_size_desc(files: &mut Vec<PathBuf>, outputs: &mut Vec<PathBuf>) -> Re
 ///
 /// For directory inputs: returns the first directory.
 /// For individual files: returns the common ancestor directory.
-pub fn infer_base_dir(inputs: &[String]) -> Result<PathBuf, CliError> {
-    let dirs: Vec<&str> = inputs
+pub fn infer_base_dir(inputs: &[PathBuf]) -> Result<PathBuf, CliError> {
+    let dirs: Vec<&Path> = inputs
         .iter()
-        .map(|s| s.as_str())
-        .filter(|p| Path::new(p).is_dir())
+        .map(|s| s.as_path())
+        .filter(|p| p.is_dir())
         .collect();
 
     if let Some(&d) = dirs.first() {
-        return canonicalize_path(Path::new(d), "canonicalize input directory");
+        return canonicalize_path(d, "canonicalize input directory");
     }
 
     // All inputs are files — common ancestor
@@ -219,13 +219,13 @@ pub fn infer_base_dir(inputs: &[String]) -> Result<PathBuf, CliError> {
 pub fn build_server_names(
     files: &[PathBuf],
     outputs: &[PathBuf],
-    inputs: &[String],
+    inputs: &[PathBuf],
 ) -> Result<(Vec<String>, std::collections::HashMap<String, PathBuf>), CliError> {
     use std::collections::HashMap;
 
     let dir_inputs: Vec<PathBuf> = inputs
         .iter()
-        .filter(|p| Path::new(p).is_dir())
+        .filter(|p| p.is_dir())
         .map(|p| {
             canonicalize_path(
                 Path::new(p),

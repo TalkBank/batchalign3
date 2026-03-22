@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{CommandName, DurationSeconds, LanguageCode3, WorkerLanguage};
+use crate::api::{DurationSeconds, LanguageCode3, ReleasedCommand, WorkerLanguage};
 
 // ---------------------------------------------------------------------------
 // Domain newtypes (worker-specific)
@@ -61,9 +61,9 @@ pub struct WorkerHealthResponse {
     /// Worker health status — `Ok` when responsive, `Unknown` otherwise.
     pub status: WorkerHealthStatus,
     /// The logical bootstrap target this worker was spawned for (for example
-    /// `infer:morphosyntax`). Workers are specialized at spawn time and cannot
-    /// change target.
-    pub command: CommandName,
+    /// `"infer:morphosyntax"`). Workers are specialized at spawn time and cannot
+    /// change target. This is a worker-internal label, not a released command.
+    pub command: String,
     /// Worker-runtime language string this worker was spawned for.
     ///
     /// This is a routing/bootstrap value rather than a true domain language,

@@ -75,6 +75,8 @@ make build-release
 
 ## Test Tiers — Read This Before Running Tests
 
+Full testing guide: `book/src/developer/testing.md`
+
 Tests are split into tiers by safety and speed. **NEVER run bare `cargo test`.**
 See `docs/memory-safety.md` for the crash history and full rationale.
 

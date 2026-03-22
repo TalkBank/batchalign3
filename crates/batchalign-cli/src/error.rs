@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use batchalign_app::api::{CommandName, JobId};
+use batchalign_app::api::{JobId, ReleasedCommand};
 
 /// All errors that the CLI can encounter.
 ///
@@ -63,8 +63,8 @@ pub enum CliError {
     /// Exit code: [`EXIT_SERVER`](Self::EXIT_SERVER) (5).
     #[error("server {server} does not support command '{command}'")]
     UnsupportedCommand {
-        /// Requested processing command name.
-        command: CommandName,
+        /// Requested processing command.
+        command: ReleasedCommand,
         /// Server URL that was queried.
         server: String,
     },

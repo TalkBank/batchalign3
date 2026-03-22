@@ -26,7 +26,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::api::{CommandName, CorrelationId, FileName, JobInfo, JobStatus, JobSubmission};
+use crate::api::{ReleasedCommand, CorrelationId, FileName, JobInfo, JobStatus, JobSubmission};
 use axum::extract::State;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -68,7 +68,7 @@ pub fn router() -> Router<Arc<AppState>> {
 /// bounded even if a client sends a very long header.
 const CORRELATION_ID_MAX_LEN: usize = 128;
 
-fn command_supported(command: &CommandName, capabilities: &[String]) -> bool {
+fn command_supported(command: ReleasedCommand, capabilities: &[String]) -> bool {
     capabilities.iter().any(|c| c.as_str() == command.as_ref())
 }
 
@@ -162,7 +162,7 @@ pub(crate) async fn submit_job(
     Json(submission): Json<JobSubmission>,
 ) -> Result<impl IntoResponse, ServerError> {
     // Validate command
-    if !command_supported(&submission.command, &state.workers.capabilities) {
+    if !command_supported(submission.command, &state.workers.capabilities) {
         let supported = supported_command_list(&state.workers.capabilities);
         return Err(ServerError::UnknownCommand(format!(
             "Unknown command: {}. Valid commands: {:?}",
@@ -378,22 +378,16 @@ mod tests {
     #[test]
     fn advertised_command_is_supported() {
         assert!(command_supported(
-            &CommandName::from("morphotag"),
+            ReleasedCommand::Morphotag,
             &["morphotag".to_string()]
         ));
     }
 
     #[test]
-    fn plugin_capability_command_is_supported() {
-        let caps = vec!["cantotag".to_string()];
-        assert!(command_supported(&CommandName::from("cantotag"), &caps));
-    }
-
-    #[test]
-    fn unknown_command_is_rejected() {
+    fn command_not_in_capabilities_is_rejected() {
         assert!(!command_supported(
-            &CommandName::from("definitely_unknown"),
-            &[]
+            ReleasedCommand::Morphotag,
+            &["align".to_string()]
         ));
     }
 

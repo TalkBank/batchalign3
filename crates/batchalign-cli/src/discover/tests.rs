@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use super::*;
 use std::fs;
 
@@ -92,7 +93,7 @@ fn copy_nonmatching_skips_generation() {
 #[test]
 fn infer_base_dir_single_dir() {
     let dir = tempfile::tempdir().unwrap();
-    let inputs = vec![dir.path().to_str().unwrap().to_string()];
+    let inputs = vec![dir.path().to_path_buf()];
     let base = infer_base_dir(&inputs).unwrap();
     // macOS: /var is a symlink to /private/var, so canonicalize both sides
     assert_eq!(
@@ -154,11 +155,11 @@ fn discover_server_inputs_dir_and_file() {
 
     let out = tempfile::tempdir().unwrap();
     let inputs = vec![
-        sub.to_str().unwrap().to_string(),
-        loose.to_str().unwrap().to_string(),
+        sub.to_path_buf(),
+        loose.to_path_buf(),
     ];
     let (files, outputs) =
-        discover_server_inputs(&inputs, Some(out.path().to_str().unwrap()), &["cha"]).unwrap();
+        discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
     assert_eq!(files.len(), 2);
     assert_eq!(outputs.len(), 2);
 }
@@ -170,9 +171,9 @@ fn discover_server_inputs_file_only() {
     fs::write(&f, "@Begin\n@End").unwrap();
 
     let out = tempfile::tempdir().unwrap();
-    let inputs = vec![f.to_str().unwrap().to_string()];
+    let inputs = vec![f.to_path_buf()];
     let (files, outputs) =
-        discover_server_inputs(&inputs, Some(out.path().to_str().unwrap()), &["cha"]).unwrap();
+        discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(outputs.len(), 1);
     assert_eq!(
@@ -183,7 +184,7 @@ fn discover_server_inputs_file_only() {
 
 #[test]
 fn discover_server_inputs_nonexistent_is_error() {
-    let inputs = vec!["/nonexistent/path".to_string()];
+    let inputs = vec![PathBuf::from("/nonexistent/path")];
     let result = discover_server_inputs(&inputs, None, &["cha"]);
     assert!(matches!(
         result,
@@ -197,7 +198,7 @@ fn discover_server_inputs_in_place() {
     let f = dir.path().join("test.cha");
     fs::write(&f, "@Begin\n@End").unwrap();
 
-    let inputs = vec![f.to_str().unwrap().to_string()];
+    let inputs = vec![f.to_path_buf()];
     let (files, outputs) = discover_server_inputs(&inputs, None, &["cha"]).unwrap();
     assert_eq!(files.len(), 1);
     // No out_dir → output path = input path (in-place)
@@ -237,8 +238,8 @@ fn infer_base_dir_multiple_files() {
     fs::write(&b, "y").unwrap();
 
     let inputs = vec![
-        a.to_str().unwrap().to_string(),
-        b.to_str().unwrap().to_string(),
+        a.to_path_buf(),
+        b.to_path_buf(),
     ];
     let base = infer_base_dir(&inputs).unwrap();
     // Common ancestor of two files in the same dir → that dir
@@ -264,7 +265,7 @@ fn build_server_names_dir_input() {
     fs::create_dir(&out).unwrap();
     let o = out.join("sub").join("test.cha");
 
-    let inputs = vec![dir.path().to_str().unwrap().to_string()];
+    let inputs = vec![dir.path().to_path_buf()];
     let outputs = [o.clone()];
     let (names, result_map) = build_server_names(&[f], &outputs, &inputs).unwrap();
     assert_eq!(names.len(), 1);
@@ -284,8 +285,8 @@ fn build_server_names_individual_files() {
     let ob = dir.path().join("out_b.cha");
 
     let inputs = vec![
-        a.to_str().unwrap().to_string(),
-        b.to_str().unwrap().to_string(),
+        a.to_path_buf(),
+        b.to_path_buf(),
     ];
     let (names, result_map) =
         build_server_names(&[a, b], &[oa.clone(), ob.clone()], &inputs).unwrap();
@@ -496,7 +497,7 @@ fn discover_server_inputs_recursive_directory() {
     let dir = tempfile::tempdir().unwrap();
     make_nested_tree(dir.path());
 
-    let inputs = vec![dir.path().to_str().unwrap().to_string()];
+    let inputs = vec![dir.path().to_path_buf()];
     let (files, _) = discover_server_inputs(&inputs, None, &["cha"]).unwrap();
 
     assert_eq!(files.len(), 4);
@@ -517,9 +518,9 @@ fn discover_server_inputs_recursive_with_output() {
     let out = tempfile::tempdir().unwrap();
     make_nested_tree(dir.path());
 
-    let inputs = vec![dir.path().to_str().unwrap().to_string()];
+    let inputs = vec![dir.path().to_path_buf()];
     let (files, outputs) =
-        discover_server_inputs(&inputs, Some(out.path().to_str().unwrap()), &["cha"]).unwrap();
+        discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
 
     assert_eq!(files.len(), 4);
     assert_eq!(outputs.len(), 4);

@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 use crate::options::{AsrEngineName, CommandOptions};
 use crate::revai::try_revai_language_hint;
 
-use super::domain::{CommandName, FileName, LanguageCode3, LanguageSpec, NumSpeakers};
+use super::domain::{ReleasedCommand, FileName, LanguageCode3, LanguageSpec, NumSpeakers};
 
 // ---------------------------------------------------------------------------
 // Request models
@@ -27,7 +27,7 @@ pub struct FilePayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct JobSubmission {
     /// Batchalign command (align, morphotag, etc.).
-    pub command: CommandName,
+    pub command: ReleasedCommand,
     /// Language specification: a 3-letter ISO code or `"auto"` for
     /// ASR-driven detection.
     #[serde(default = "default_lang")]
@@ -156,8 +156,8 @@ impl JobSubmission {
                 Some(
                     opts.common
                         .engine_overrides
-                        .get("asr")
-                        .and_then(|v| AsrEngineName::from_wire_name(v).ok())
+                        .asr
+                        .clone()
                         .unwrap_or(AsrEngineName::RevAi),
                 )
             }
@@ -271,7 +271,7 @@ mod tests {
     /// Build a minimal `JobSubmission` for testing language validation.
     fn morphotag_submission(lang: &str) -> JobSubmission {
         JobSubmission {
-            command: CommandName::from("morphotag"),
+            command: ReleasedCommand::Morphotag,
             lang: LanguageSpec::Resolved(LanguageCode3::try_new(lang).expect("test lang")),
             num_speakers: NumSpeakers(1),
             files: vec![],
@@ -296,7 +296,7 @@ mod tests {
 
     fn utseg_submission(lang: &str) -> JobSubmission {
         JobSubmission {
-            command: CommandName::from("utseg"),
+            command: ReleasedCommand::Utseg,
             lang: LanguageSpec::Resolved(LanguageCode3::try_new(lang).expect("test lang")),
             num_speakers: NumSpeakers(1),
             files: vec![],

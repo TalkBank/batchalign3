@@ -52,8 +52,8 @@ pub struct PreparedWorkers {
 /// consumers do not need to re-parse or handle invalid values.
 #[derive(Debug, Clone)]
 pub struct WarmupTarget {
-    /// Command name to warm (validated from config at construction).
-    pub command: crate::api::CommandName,
+    /// Released command to warm (validated from config at construction).
+    pub command: crate::api::ReleasedCommand,
     /// Language to warm the command for (validated from config at construction).
     pub lang: crate::api::WorkerLanguage,
 }
@@ -194,9 +194,13 @@ async fn probe_workers(
     let targets: Vec<WarmupTarget> = warmup_cmds
         .iter()
         .filter(|cmd| capabilities.contains(cmd))
-        .map(|cmd| WarmupTarget {
-            command: crate::api::CommandName::from(cmd.as_str()),
-            lang: default_lang.clone(),
+        .filter_map(|cmd| {
+            crate::api::ReleasedCommand::try_from(cmd.as_str())
+                .ok()
+                .map(|command| WarmupTarget {
+                    command,
+                    lang: default_lang.clone(),
+                })
         })
         .collect();
 

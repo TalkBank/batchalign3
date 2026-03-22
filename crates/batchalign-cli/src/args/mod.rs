@@ -42,15 +42,15 @@ pub struct Cli {
 #[derive(Args, Debug, Clone)]
 pub struct CommonOpts {
     /// Input paths (files and/or directories).
-    pub paths: Vec<String>,
+    pub paths: Vec<std::path::PathBuf>,
 
     /// Output directory. Omit for in-place modification.
     #[arg(short, long)]
-    pub output: Option<String>,
+    pub output: Option<std::path::PathBuf>,
 
     /// Read input file paths from a text file (one per line).
     #[arg(long)]
-    pub file_list: Option<String>,
+    pub file_list: Option<std::path::PathBuf>,
 
     /// Treat all paths as inputs and modify in-place.
     #[arg(long)]
@@ -65,7 +65,7 @@ pub struct CommonOpts {
     ///
     /// Supported commands: morphotag, align.
     #[arg(long, value_name = "PATH")]
-    pub before: Option<String>,
+    pub before: Option<std::path::PathBuf>,
 }
 
 /// Top-level command enum.

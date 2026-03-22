@@ -173,7 +173,10 @@ mod tests {
 
     use super::*;
     use crate::api::{LanguageCode3, LanguageSpec};
-    use crate::api::{EngineVersion, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp};
+    use crate::api::{
+        EngineVersion, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+        UnixTimestamp,
+    };
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
     use crate::options::{CommandOptions, CommonOptions, CompareOptions};
@@ -199,7 +202,7 @@ mod tests {
                 correlation_id: format!("test-{job_id}").into(),
             },
             dispatch: JobDispatchConfig {
-                command: "compare".into(),
+                command: ReleasedCommand::Compare,
                 lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Compare(CompareOptions {

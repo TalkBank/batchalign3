@@ -17,7 +17,7 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::api::{CommandName, MemoryMb, NumWorkers, WorkerLanguage};
+use crate::api::{MemoryMb, NumWorkers, ReleasedCommand, WorkerLanguage};
 use crate::config::ServerConfig;
 use crate::runtime;
 use crate::worker::WorkerProfile;
@@ -407,7 +407,7 @@ impl HostMemoryCoordinator {
     /// processes see the reservation and conservatively back off.
     pub fn wait_for_job_execution_plan(
         &self,
-        command: &CommandName,
+        command: ReleasedCommand,
         requested_workers: NumWorkers,
         label: &str,
         timeout: Duration,
@@ -442,7 +442,7 @@ impl HostMemoryCoordinator {
 
     fn try_plan_job_execution(
         &self,
-        command: &CommandName,
+        command: ReleasedCommand,
         requested_workers: NumWorkers,
         label: &str,
     ) -> Result<JobExecutionPlan, HostMemoryError> {

@@ -1,6 +1,6 @@
 //! `batchalign3 bench` — repeated performance runs for a command.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use batchalign_app::ReleasedCommand;
@@ -42,11 +42,11 @@ fn dataset_label(args: &BenchArgs) -> String {
         return s.clone();
     }
 
-    Path::new(&args.in_dir)
+    args.in_dir
         .file_name()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or(args.in_dir.as_str())
+        .unwrap_or_else(|| args.in_dir.to_str().unwrap_or("unknown"))
         .to_string()
 }
 
@@ -142,7 +142,7 @@ pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> 
             extensions,
             server_arg: global.server.as_deref(),
             inputs: &inputs,
-            out_dir: Some(&args.out_dir),
+            out_dir: Some(args.out_dir.as_path()),
             options: Some(build_options(global, args)),
             bank: None,
             subdir: None,
@@ -209,8 +209,8 @@ mod tests {
     fn args(target: BenchTarget) -> BenchArgs {
         BenchArgs {
             command: target,
-            in_dir: "/tmp/input".to_string(),
-            out_dir: "/tmp/out".to_string(),
+            in_dir: PathBuf::from("/tmp/input"),
+            out_dir: PathBuf::from("/tmp/out"),
             runs: 1,
             dataset: None,
             no_lazy_audio: false,

@@ -4,7 +4,7 @@
 //! lifecycle orchestration, not as a mixed bag of routing tables and filename
 //! conventions.
 
-use crate::api::CommandName;
+use crate::api::ReleasedCommand;
 use crate::worker::InferTask;
 use crate::workflow::{
     RunnerDispatchKind, command_runner_dispatch_kind, command_workflow_descriptor,
@@ -12,13 +12,13 @@ use crate::workflow::{
 };
 
 /// Return the primary infer task backing one released command.
-pub(crate) fn infer_task_for_command(command: &CommandName) -> Option<InferTask> {
+pub(crate) fn infer_task_for_command(command: ReleasedCommand) -> Option<InferTask> {
     command_workflow_descriptor(command).map(|descriptor| descriptor.infer_task)
 }
 
 /// Return `true` when the released command must use a Rust-owned infer-backed
 /// dispatch path instead of a pure content relay.
-pub(crate) fn command_requires_infer(command: &CommandName) -> bool {
+pub(crate) fn command_requires_infer(command: ReleasedCommand) -> bool {
     matches!(
         command_runner_dispatch_kind(command),
         Some(
@@ -30,6 +30,6 @@ pub(crate) fn command_requires_infer(command: &CommandName) -> bool {
 }
 
 /// Derive the result filename for one released command.
-pub(crate) fn result_filename_for_command(command: &CommandName, filename: &str) -> String {
+pub(crate) fn result_filename_for_command(command: ReleasedCommand, filename: &str) -> String {
     result_filename_for_command_name(command.as_ref(), filename)
 }

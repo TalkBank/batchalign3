@@ -153,7 +153,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // Compute the requested per-job file parallelism without host-memory math,
     // then let the host-memory coordinator clamp it to what the machine can
     // safely support right now.
-    let requested_workers = compute_job_workers(&command, file_list.len(), store.config());
+    let requested_workers = compute_job_workers(command, file_list.len(), store.config());
     let coordinator = HostMemoryCoordinator::from_server_config(store.config());
     let job_label = format!(
         "job-execution:{}:{}:{}",
@@ -161,12 +161,11 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         command,
         job.dispatch.lang.to_worker_language()
     );
-    let planner_command = command.clone();
     let timeout = Duration::from_secs(store.config().memory_gate_timeout_s);
     let poll_interval = Duration::from_secs(store.config().memory_gate_poll_s.max(1));
     let execution_plan = tokio::task::spawn_blocking(move || {
         coordinator.wait_for_job_execution_plan(
-            &planner_command,
+            command,
             requested_workers,
             &job_label,
             timeout,
@@ -254,7 +253,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         let pre_scale_lang = job.dispatch.lang.to_worker_language();
         let job_engine_overrides = job.dispatch.options.common().engine_overrides_json();
         pool.pre_scale_with_overrides(
-            &command,
+            command,
             pre_scale_lang,
             num_workers.0,
             &job_engine_overrides,
@@ -266,8 +265,8 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // This collects Rev.AI job IDs that individual file tasks will poll instead of
     // re-uploading, reducing total wall-clock time by 2-5x for large batches.
     let rev_job_ids: Arc<HashMap<PathBuf, RevAiJobId>> = {
-        if should_preflight(&command, Some(&job.dispatch.options)) {
-            let audio_paths = collect_preflight_audio_paths(&command, &job, &file_list).await;
+        if should_preflight(command, Some(&job.dispatch.options)) {
+            let audio_paths = collect_preflight_audio_paths(command, &job, &file_list).await;
 
             if !audio_paths.is_empty() {
                 info!(
@@ -319,11 +318,11 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
 
     // Choose between infer path or per-file dispatch.
     let all_chat = file_list.iter().all(|file| file.has_chat);
-    let infer_task = infer_task_for_command(&command);
+    let infer_task = infer_task_for_command(command);
     let infer_supported = infer_task.is_some_and(|task| infer_tasks.contains(&task));
     let use_infer = all_chat && infer_supported;
 
-    if command_requires_infer(&command) && !use_infer {
+    if command_requires_infer(command) && !use_infer {
         let required_task = infer_task.map(infer_task_name).unwrap_or("unknown");
         let err_msg = format!(
             "Rust-first dispatch requires infer task '{}' for '{}' (all_chat={}). \
@@ -339,7 +338,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // Special case: transcribe/transcribe_s with server-side ASR orchestration.
     // These commands take audio input (not CHAT), so they do not go through the
     // standard `use_infer` path which requires all_chat=true.
-    let runner_dispatch_kind = command_runner_dispatch_kind(&command);
+    let runner_dispatch_kind = command_runner_dispatch_kind(command);
     let use_transcribe_infer = matches!(
         runner_dispatch_kind,
         Some(RunnerDispatchKind::TranscribeAudioInfer)
@@ -595,7 +594,7 @@ async fn dispatch_test_echo_files(
             .begin_first_attempt(WorkUnitKind::FileProcess, started_at, FileStage::Processing)
             .await;
 
-        let result_filename = result_filename_for_command(&job.dispatch.command, filename);
+        let result_filename = result_filename_for_command(job.dispatch.command, filename);
 
         let output_text = if file.has_chat {
             let read_path = if job.filesystem.paths_mode

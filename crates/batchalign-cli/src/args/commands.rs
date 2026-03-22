@@ -487,9 +487,9 @@ pub struct BenchmarkArgs {
 #[derive(Args, Debug, Clone)]
 pub struct OpensmileArgs {
     /// Input directory.
-    pub input_dir: String,
+    pub input_dir: std::path::PathBuf,
     /// Output directory.
-    pub output_dir: String,
+    pub output_dir: std::path::PathBuf,
 
     /// Feature set to extract.
     #[arg(long, default_value = "eGeMAPSv02",
@@ -513,9 +513,9 @@ pub struct OpensmileArgs {
 #[derive(Args, Debug, Clone)]
 pub struct AvqiArgs {
     /// Input directory containing paired .cs/.sv audio files.
-    pub input_dir: String,
+    pub input_dir: std::path::PathBuf,
     /// Output directory.
-    pub output_dir: String,
+    pub output_dir: std::path::PathBuf,
 
     /// Language (3-letter ISO code).
     #[arg(long, default_value = "eng")]
@@ -582,10 +582,10 @@ pub struct BenchArgs {
     pub command: BenchTarget,
 
     /// Input directory.
-    pub in_dir: String,
+    pub in_dir: std::path::PathBuf,
 
     /// Output directory.
-    pub out_dir: String,
+    pub out_dir: std::path::PathBuf,
 
     /// Number of benchmark runs.
     #[arg(long, default_value_t = 1)]
@@ -632,10 +632,10 @@ pub struct ModelsPrepArgs {
     pub run_name: String,
 
     /// Input directory containing .cha files.
-    pub input_dir: String,
+    pub input_dir: std::path::PathBuf,
 
     /// Output directory for prepared .train.txt and .val.txt files.
-    pub output_dir: String,
+    pub output_dir: std::path::PathBuf,
 
     /// Minimum word count per utterance (shorter utterances are excluded).
     #[arg(long, default_value_t = 10)]

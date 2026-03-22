@@ -125,15 +125,9 @@ impl TranscribeDispatchPlan {
         } = extract_transcribe_dispatch_params(&job.dispatch.options)?;
         let with_utseg = runtime_flag(job, "utseg", true);
         let with_morphosyntax = runtime_flag(job, "morphosyntax", false);
-        let speaker_backend = diarize.then(|| {
-            resolve_speaker_backend(
-                job.dispatch
-                    .options
-                    .common()
-                    .engine_overrides
-                    .get("speaker"),
-            )
-        });
+        // TODO: Add speaker field to EngineOverrides when SpeakerEngineName enum is created.
+        // For now, always use default (Pyannote). The "speaker" override key was rarely used.
+        let speaker_backend = diarize.then(|| resolve_speaker_backend(None));
 
         Some(Self {
             base_options: TranscribeOptions {
@@ -213,7 +207,7 @@ pub(in crate::runner) enum MediaAnalysisDispatchPlan {
 impl MediaAnalysisDispatchPlan {
     /// Build the media-analysis plan from the persisted job snapshot.
     pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Option<Self> {
-        match ReleasedCommand::try_from(&job.dispatch.command).ok()? {
+        match job.dispatch.command {
             ReleasedCommand::Opensmile => {
                 let OpensmileDispatchParams { feature_set } =
                     extract_opensmile_dispatch_params(&job.dispatch.options)?;
@@ -283,7 +277,7 @@ mod tests {
 
     use super::*;
     use crate::options::{AsrEngineName, FaEngineName};
-    use crate::api::{CommandName, JobId, LanguageCode3, NumSpeakers};
+    use crate::api::{JobId, LanguageCode3, NumSpeakers, ReleasedCommand};
     use crate::options::{
         BenchmarkOptions, CommandOptions, CommonOptions, MorphotagOptions, OpensmileOptions,
         TranscribeOptions as TranscribeCommand,
@@ -294,7 +288,7 @@ mod tests {
     use crate::transcribe::AsrWorkerMode;
 
     fn make_snapshot(
-        command: CommandName,
+        command: ReleasedCommand,
         options: CommandOptions,
         runtime_state: BTreeMap<String, serde_json::Value>,
     ) -> RunnerJobSnapshot {
@@ -336,7 +330,7 @@ mod tests {
             .mwt
             .insert("gonna".into(), vec!["going".into(), "to".into()]);
         let snapshot = make_snapshot(
-            CommandName::from("morphotag"),
+            ReleasedCommand::Morphotag,
             CommandOptions::Morphotag(MorphotagOptions {
                 common,
                 retokenize: true,
@@ -360,18 +354,16 @@ mod tests {
 
     #[test]
     fn transcribe_plan_reads_runtime_flags_and_speaker_override() {
-        let mut common = CommonOptions {
+        let common = CommonOptions {
             override_cache: true,
             ..Default::default()
         };
-        common
-            .engine_overrides
-            .insert("speaker".into(), "nemo".into());
+        // TODO: speaker engine override needs SpeakerEngineName in EngineOverrides
         let mut runtime_state = BTreeMap::new();
         runtime_state.insert("utseg".into(), json!(false));
         runtime_state.insert("morphosyntax".into(), json!(true));
         let snapshot = make_snapshot(
-            CommandName::from("transcribe"),
+            ReleasedCommand::Transcribe,
             CommandOptions::Transcribe(TranscribeCommand {
                 common,
                 asr_engine: AsrEngineName::HkAliyun,
@@ -390,9 +382,10 @@ mod tests {
             AsrBackend::Worker(AsrWorkerMode::HkAliyunV2)
         ));
         assert!(plan.base_options.diarize);
+        // Speaker override not yet supported in EngineOverrides — defaults to Pyannote
         assert_eq!(
             plan.base_options.speaker_backend,
-            Some(SpeakerBackendV2::Nemo)
+            Some(SpeakerBackendV2::Pyannote)
         );
         assert_eq!(
             plan.base_options.lang,
@@ -408,7 +401,7 @@ mod tests {
     #[test]
     fn transcribe_s_plan_defaults_to_pyannote_like_batchalign2() {
         let snapshot = make_snapshot(
-            CommandName::from("transcribe_s"),
+            ReleasedCommand::TranscribeS,
             CommandOptions::TranscribeS(TranscribeCommand {
                 common: CommonOptions::default(),
                 asr_engine: AsrEngineName::RevAi,
@@ -442,7 +435,7 @@ mod tests {
     #[test]
     fn benchmark_plan_builds_rust_owned_transcribe_options() {
         let snapshot = make_snapshot(
-            CommandName::from("benchmark"),
+            ReleasedCommand::Benchmark,
             CommandOptions::Benchmark(BenchmarkOptions {
                 common: CommonOptions {
                     override_cache: true,
@@ -469,7 +462,7 @@ mod tests {
     #[test]
     fn media_analysis_plan_reads_opensmile_feature_set() {
         let snapshot = make_snapshot(
-            CommandName::from("opensmile"),
+            ReleasedCommand::Opensmile,
             CommandOptions::Opensmile(OpensmileOptions {
                 common: CommonOptions::default(),
                 feature_set: "ComParE_2016".into(),

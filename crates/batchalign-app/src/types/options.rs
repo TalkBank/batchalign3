@@ -85,10 +85,10 @@ pub struct CommonOptions {
     #[serde(default = "default_true")]
     pub lazy_audio: bool,
 
-    /// Engine overrides keyed by task name (e.g. `{"asr": "tencent"}`).
-    /// Values are dynamic strings because plugin names are runtime-determined.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub engine_overrides: BTreeMap<String, String>,
+    /// Engine overrides selected for this job (e.g., ASR=tencent, FA=cantonese_fa).
+    /// Typed struct with `Option<AsrEngineName>` and `Option<FaEngineName>`.
+    #[serde(default, skip_serializing_if = "EngineOverrides::is_empty")]
+    pub engine_overrides: EngineOverrides,
 
     /// Multi-word token (MWT) lexicon: maps a surface form (e.g. "gonna")
     /// to its expansion tokens (e.g. `["going", "to"]`).
@@ -115,17 +115,8 @@ impl CommonOptions {
     /// Serialize engine overrides to a JSON string for pool worker keying.
     ///
     /// Returns empty string when no overrides are set.
-    ///
-    /// # Invariant
-    ///
-    /// `BTreeMap<String, String>` serialization is infallible — the
-    /// `unwrap_or_default()` is structurally safe, not a silent fallback.
     pub fn engine_overrides_json(&self) -> String {
-        if self.engine_overrides.is_empty() {
-            String::new()
-        } else {
-            serde_json::to_string(&self.engine_overrides).unwrap_or_default()
-        }
+        self.engine_overrides.to_json_string()
     }
 }
 
@@ -134,7 +125,7 @@ impl Default for CommonOptions {
         Self {
             override_cache: false,
             lazy_audio: true,
-            engine_overrides: BTreeMap::new(),
+            engine_overrides: EngineOverrides::default(),
             mwt: BTreeMap::new(),
             debug_dir: None,
             override_cache_tasks: Vec::new(),
@@ -235,8 +226,8 @@ impl AlignOptions {
     pub fn effective_fa_engine(&self) -> FaEngineName {
         self.common
             .engine_overrides
-            .get("fa")
-            .and_then(|value| FaEngineName::from_wire_name(value).ok())
+            .fa
+            .clone()
             .unwrap_or_else(|| self.fa_engine.clone())
     }
 }
@@ -275,8 +266,8 @@ impl TranscribeOptions {
     pub fn effective_asr_engine(&self) -> AsrEngineName {
         self.common
             .engine_overrides
-            .get("asr")
-            .and_then(|value| AsrEngineName::from_wire_name(value).ok())
+            .asr
+            .clone()
             .unwrap_or_else(|| self.asr_engine.clone())
     }
 }
@@ -362,8 +353,8 @@ impl BenchmarkOptions {
     pub fn effective_asr_engine(&self) -> AsrEngineName {
         self.common
             .engine_overrides
-            .get("asr")
-            .and_then(|value| AsrEngineName::from_wire_name(value).ok())
+            .asr
+            .clone()
             .unwrap_or_else(|| self.asr_engine.clone())
     }
 }
@@ -644,7 +635,7 @@ mod tests {
             common: CommonOptions {
                 override_cache: true,
                 lazy_audio: false,
-                engine_overrides: BTreeMap::new(),
+                engine_overrides: EngineOverrides::default(),
                 mwt: BTreeMap::new(),
                 ..Default::default()
             },
@@ -658,9 +649,10 @@ mod tests {
 
     #[test]
     fn engine_overrides_roundtrip() {
-        let mut overrides = BTreeMap::new();
-        overrides.insert("asr".into(), "tencent".into());
-        overrides.insert("fa".into(), "cantonese_fa".into());
+        let overrides = EngineOverrides {
+            asr: Some(AsrEngineName::HkTencent),
+            fa: Some(FaEngineName::Wav2vecCanto),
+        };
 
         let opts = CommandOptions::Align(AlignOptions {
             common: CommonOptions {
@@ -681,8 +673,10 @@ mod tests {
 
     #[test]
     fn transcribe_asr_override_effective_engine_prefers_override() {
-        let mut overrides = BTreeMap::new();
-        overrides.insert("asr".into(), "tencent".into());
+        let overrides = EngineOverrides {
+            asr: Some(AsrEngineName::HkTencent),
+            fa: None,
+        };
         let opts = TranscribeOptions {
             common: CommonOptions {
                 engine_overrides: overrides,
@@ -703,8 +697,10 @@ mod tests {
 
     #[test]
     fn benchmark_asr_override_effective_engine_prefers_override() {
-        let mut overrides = BTreeMap::new();
-        overrides.insert("asr".into(), "aliyun".into());
+        let overrides = EngineOverrides {
+            asr: Some(AsrEngineName::HkAliyun),
+            fa: None,
+        };
         let opts = BenchmarkOptions {
             common: CommonOptions {
                 engine_overrides: overrides,

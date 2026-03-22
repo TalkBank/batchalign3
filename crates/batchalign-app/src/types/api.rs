@@ -74,7 +74,7 @@ mod tests {
         });
 
         let mut sub = JobSubmission {
-            command: "morphotag".into(),
+            command: ReleasedCommand::Morphotag,
             lang: LanguageSpec::Resolved(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             files: vec![],
@@ -261,7 +261,7 @@ mod tests {
         let info = JobInfo {
             job_id: "abc-123".into(),
             status: JobStatus::Running,
-            command: "morphotag".into(),
+            command: ReleasedCommand::Morphotag,
             options: crate::options::CommandOptions::Morphotag(crate::options::MorphotagOptions {
                 common: crate::options::CommonOptions::default(),
                 retokenize: false,

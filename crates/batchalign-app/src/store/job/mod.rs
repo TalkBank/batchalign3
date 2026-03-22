@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{
-    CommandName, ContentType, DurationSeconds, FileName, FileProgressStage, FileStatusEntry,
-    FileStatusKind, JobId, JobInfo, JobListItem, JobStatus, NodeId, UnixTimestamp,
+    ContentType, DurationSeconds, FileName, FileProgressStage, FileStatusEntry, FileStatusKind,
+    JobId, JobInfo, JobListItem, JobStatus, NodeId, ReleasedCommand, UnixTimestamp,
 };
 use crate::scheduling::LeaseRecord;
 use crate::store::{FileResultEntry, ts_iso};
@@ -627,7 +627,7 @@ pub struct ConflictEntry {
     /// Job ID of the existing active job that owns this file.
     pub job_id: JobId,
     /// Command of the existing active job.
-    pub command: CommandName,
+    pub command: ReleasedCommand,
     /// Status of the existing active job.
     pub status: JobStatus,
 }
@@ -697,7 +697,7 @@ mod tests {
                 correlation_id: CorrelationId::from(format!("corr-{job_id}")),
             },
             dispatch: JobDispatchConfig {
-                command: CommandName::from("morphotag"),
+                command: ReleasedCommand::Morphotag,
                 lang: LanguageSpec::Resolved(crate::api::LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Morphotag(crate::options::MorphotagOptions {

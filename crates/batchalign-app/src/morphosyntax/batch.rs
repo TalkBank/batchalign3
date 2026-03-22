@@ -8,7 +8,7 @@ use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::workflow::text_batch::{
-    TextBatchFileInput, TextBatchFileResults, wrap_legacy_batch_results,
+    TextBatchFileInput, TextBatchFileResult, TextBatchFileResults,
 };
 use batchalign_chat_ops::morphosyntax::{
     BatchItemWithPosition, MwtDict, cache_key, clear_morphosyntax, collect_payloads,
@@ -42,7 +42,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     params: &MorphosyntaxParams<'_>,
 ) -> TextBatchFileResults {
     let primary_lang = LanguageCode::new(params.lang.as_ref());
-    let mut results: Vec<(String, Result<String, String>)> = Vec::with_capacity(files.len());
+    let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
     // 1. Parse all files
     let mut parsed_files: Vec<ChatFile> = Vec::with_capacity(files.len());
@@ -166,18 +166,18 @@ pub(crate) async fn run_morphosyntax_batch_impl(
                         .and_then(|f| f.as_ref())
                         .is_some()
                     {
-                        results.push((
-                            file.filename.to_string(),
-                            Err(format!("Batch infer failed: {e}")),
+                        results.push(TextBatchFileResult::err(
+                            file.filename.clone(),
+                            format!("Batch infer failed: {e}"),
                         ));
                     } else {
-                        results.push((
-                            file.filename.to_string(),
-                            Ok(to_chat_string(&parsed_files[file_idx])),
+                        results.push(TextBatchFileResult::ok(
+                            file.filename.clone(),
+                            to_chat_string(&parsed_files[file_idx]),
                         ));
                     }
                 }
-                return wrap_legacy_batch_results(results);
+                return results;
             }
         }
     };
@@ -187,7 +187,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         let filename = file.filename.as_ref();
         // Skip files that failed pre-validation
         if let Some(ref err) = validation_errors[file_idx] {
-            results.push((file.filename.to_string(), Err(err.clone())));
+            results.push(TextBatchFileResult::err(file.filename.clone(), err.clone()));
             continue;
         }
 
@@ -213,9 +213,9 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             ) {
                 Ok(_retokenize_traces) => {}
                 Err(e) => {
-                    results.push((
-                        file.filename.to_string(),
-                        Err(format!("Result injection failed: {e}")),
+                    results.push(TextBatchFileResult::err(
+                        file.filename.clone(),
+                        format!("Result injection failed: {e}"),
                     ));
                     continue;
                 }
@@ -247,10 +247,10 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             warn!(filename = %filename, errors = ?msgs, "morphotag post-validation warnings (non-fatal)");
         }
 
-        results.push((file.filename.to_string(), Ok(to_chat_string(chat_file))));
+        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(chat_file)));
     }
 
-    wrap_legacy_batch_results(results)
+    results
 }
 
 // ---------------------------------------------------------------------------

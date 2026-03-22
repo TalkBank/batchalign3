@@ -25,7 +25,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use batchalign_app::api::{CommandName, LanguageCode3, WorkerLanguage};
+use batchalign_app::api::{LanguageCode3, ReleasedCommand, WorkerLanguage};
 use batchalign_app::types::worker_v2::{
     AsrBackendV2, AsrInputV2, AsrRequestV2, ExecuteRequestV2, ExecuteResponseV2, InferenceTaskV2,
     PreparedAudioInputV2, TaskRequestV2, WorkerArtifactIdV2, WorkerRequestIdV2,
@@ -124,7 +124,7 @@ async fn gpu_concurrent_dispatch_all_responses_arrive() {
 
     // Warmup to create the SharedGpuWorker.
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -187,7 +187,7 @@ async fn gpu_concurrent_dispatch_shares_same_pid() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -253,7 +253,7 @@ async fn gpu_sequential_after_concurrent_works() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -303,7 +303,7 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -349,7 +349,7 @@ async fn gpu_stdio_shared_worker_drop_reaps_process() {
 
     let pid = {
         let pool = test_pool(python);
-        pool.pre_scale(&CommandName::from("transcribe"), WorkerLanguage::from(LanguageCode3::eng()), 1)
+        pool.pre_scale(ReleasedCommand::Transcribe, WorkerLanguage::from(LanguageCode3::eng()), 1)
             .await;
 
         let entry = pool
@@ -383,7 +383,7 @@ async fn gpu_single_execute_v2_through_pool() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -411,7 +411,7 @@ async fn gpu_repeated_execute_v2_through_pool() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -448,7 +448,7 @@ async fn gpu_dispatch_after_warmup_shutdown_spawns_fallback() {
 
     // Warmup creates a TCP daemon worker.
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;
@@ -558,7 +558,7 @@ async fn gpu_request_with_short_timeout_fails_cleanly() {
 
     // Warmup without delay (so the worker starts).
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: "transcribe".into(),
+            command: ReleasedCommand::Transcribe,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
         }])
         .await;

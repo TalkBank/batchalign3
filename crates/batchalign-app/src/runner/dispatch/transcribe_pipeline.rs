@@ -310,7 +310,8 @@ mod tests {
     use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{
-        EngineVersion, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp,
+        EngineVersion, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+        UnixTimestamp,
     };
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
@@ -338,7 +339,7 @@ mod tests {
                 correlation_id: format!("test-{job_id}").into(),
             },
             dispatch: JobDispatchConfig {
-                command: "transcribe".into(),
+                command: ReleasedCommand::Transcribe,
                 lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Transcribe(TranscribeCommand {

@@ -139,7 +139,7 @@ impl JobStore {
 mod tests {
     use tokio::sync::broadcast;
 
-    use crate::api::{FileStatusKind, JobId, JobStatus, UnixTimestamp};
+    use crate::api::{FileStatusKind, JobId, JobStatus, ReleasedCommand, UnixTimestamp};
     use crate::store::queries::tests::{make_job, test_config};
     use crate::ws::BROADCAST_CAPACITY;
 
@@ -151,7 +151,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
         store
-            .submit(make_job("job-1", "morphotag", vec!["a.cha".into()]))
+            .submit(make_job("job-1", ReleasedCommand::Morphotag, vec!["a.cha".into()]))
             .await
             .unwrap();
 
@@ -170,7 +170,7 @@ mod tests {
     async fn finalize_job_recounts_terminal_files() {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
-        let mut job = make_job("job-1", "morphotag", vec!["a.cha".into(), "b.cha".into()]);
+        let mut job = make_job("job-1", ReleasedCommand::Morphotag, vec!["a.cha".into(), "b.cha".into()]);
         job.execution.file_statuses.get_mut("a.cha").unwrap().status = FileStatusKind::Done;
         store.submit(job).await.unwrap();
 

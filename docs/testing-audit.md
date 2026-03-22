@@ -1,7 +1,11 @@
 # Batchalign3 Test Suite Audit
 
-**Status:** Current
-**Last updated:** 2026-03-19
+**Status:** Historical
+**Last updated:** 2026-03-21 22:32 EDT
+
+> **Note:** This snapshot is frozen as of 2026-03-19. The single source of truth
+> for testing guidance is now `book/src/developer/testing.md`. Structural lints
+> have moved to `cargo xtask lint-wide-structs` and `cargo xtask lint-ci-hygiene`.
 
 ## Summary
 

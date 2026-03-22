@@ -15,7 +15,7 @@
 //! Update snapshots: `cargo insta review`
 
 use crate::common::{assert_completed_without_errors, require_live_server, submit_and_complete};
-use batchalign_app::api::{FilePayload, JobStatus};
+use batchalign_app::api::{ReleasedCommand, FilePayload, JobStatus};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CompareOptions, CorefOptions, MorphotagOptions,
     TranslateOptions, UtsegOptions,
@@ -145,7 +145,7 @@ async fn golden_morphotag_eng_simple() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files,
         options,
@@ -193,7 +193,7 @@ async fn golden_morphotag_eng_multi_utt() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files,
         options,
@@ -232,7 +232,7 @@ async fn golden_utseg_eng_multi_utt() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "utseg",
+        ReleasedCommand::Utseg,
         "eng",
         files,
         options,
@@ -274,7 +274,7 @@ async fn golden_translate_eng_simple() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "translate",
+        ReleasedCommand::Translate,
         "eng",
         files,
         options,
@@ -309,7 +309,7 @@ async fn golden_morphotag_with_cache() {
     let (info1, results1) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files1,
         CommandOptions::Morphotag(MorphotagOptions {
@@ -331,7 +331,7 @@ async fn golden_morphotag_with_cache() {
     let (info2, results2) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files2,
         CommandOptions::Morphotag(MorphotagOptions {
@@ -414,7 +414,7 @@ async fn golden_compare_eng() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "compare",
+        ReleasedCommand::Compare,
         "eng",
         files,
         options,
@@ -481,7 +481,7 @@ async fn golden_coref_eng() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "coref",
+        ReleasedCommand::Coref,
         "eng",
         files,
         options,
@@ -542,7 +542,7 @@ async fn golden_morphotag_spa_simple() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "spa",
         files,
         options,
@@ -615,7 +615,7 @@ async fn golden_morphotag_retokenize_eng() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files,
         options,
@@ -672,7 +672,7 @@ async fn golden_utseg_spa() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "utseg",
+        ReleasedCommand::Utseg,
         "spa",
         files,
         options,
@@ -718,7 +718,7 @@ async fn golden_translate_spa_to_eng() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "translate",
+        ReleasedCommand::Translate,
         "spa",
         files,
         options,
@@ -772,7 +772,7 @@ async fn golden_morphotag_cache_is_faster() {
     let (info1, results1) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "cache_speed.cha".into(),
@@ -789,7 +789,7 @@ async fn golden_morphotag_cache_is_faster() {
     let (info2, results2) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "cache_speed.cha".into(),

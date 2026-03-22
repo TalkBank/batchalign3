@@ -36,7 +36,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use crate::api::{CommandName, FileName, JobId, LanguageCode3, NumSpeakers, NumWorkers};
+    use crate::api::{FileName, JobId, LanguageCode3, NumSpeakers, NumWorkers, ReleasedCommand};
     use crate::config::ServerConfig;
     use crate::options::{AlignOptions, CommandOptions, CommonOptions, UtrEngine};
     use crate::runtime;
@@ -73,7 +73,7 @@ mod tests {
     fn compute_workers_single_file() {
         let config = ServerConfig::default();
         assert_eq!(
-            compute_job_workers(&CommandName::from("morphotag"), 1, &config),
+            compute_job_workers(ReleasedCommand::Morphotag, 1, &config),
             NumWorkers(1)
         );
     }
@@ -85,7 +85,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            compute_job_workers(&CommandName::from("morphotag"), 10, &config),
+            compute_job_workers(ReleasedCommand::Morphotag, 10, &config),
             NumWorkers(3)
         );
     }
@@ -97,7 +97,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            compute_job_workers(&CommandName::from("morphotag"), 2, &config),
+            compute_job_workers(ReleasedCommand::Morphotag, 2, &config),
             NumWorkers(2)
         );
     }
@@ -106,7 +106,7 @@ mod tests {
     fn compute_workers_auto_tune_caps_at_max() {
         let config = ServerConfig::default();
         // Auto-tune should never exceed runtime::max_thread_workers()
-        let result = compute_job_workers(&CommandName::from("opensmile"), 100, &config);
+        let result = compute_job_workers(ReleasedCommand::Opensmile, 100, &config);
         assert!(*result <= runtime::max_thread_workers());
         assert!(*result >= 1);
     }
@@ -117,7 +117,7 @@ mod tests {
             gpu_thread_pool_size: 2,
             ..Default::default()
         };
-        let result = compute_job_workers(&CommandName::from("transcribe"), 47, &config);
+        let result = compute_job_workers(ReleasedCommand::Transcribe, 47, &config);
         assert!(
             *result <= 2,
             "GPU worker count must respect gpu_thread_pool_size, got {result}"
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn should_preflight_transcribe_default() {
-        assert!(should_preflight(&CommandName::from("transcribe"), None));
+        assert!(should_preflight(ReleasedCommand::Transcribe, None));
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
             batch_size: 4,
         });
         assert!(should_preflight(
-            &CommandName::from("transcribe"),
+            ReleasedCommand::Transcribe,
             Some(&opts)
         ));
     }
@@ -201,19 +201,19 @@ mod tests {
             batch_size: 4,
         });
         assert!(!should_preflight(
-            &CommandName::from("transcribe"),
+            ReleasedCommand::Transcribe,
             Some(&opts)
         ));
     }
 
     #[test]
     fn should_preflight_benchmark() {
-        assert!(should_preflight(&CommandName::from("benchmark"), None));
+        assert!(should_preflight(ReleasedCommand::Benchmark, None));
     }
 
     #[test]
     fn should_preflight_align_default() {
-        assert!(should_preflight(&CommandName::from("align"), None));
+        assert!(should_preflight(ReleasedCommand::Align, None));
     }
 
     #[test]
@@ -230,12 +230,12 @@ mod tests {
             merge_abbrev: false.into(),
             media_dir: None,
         });
-        assert!(!should_preflight(&CommandName::from("align"), Some(&opts)));
+        assert!(!should_preflight(ReleasedCommand::Align, Some(&opts)));
     }
 
     #[test]
     fn should_preflight_morphotag() {
-        assert!(!should_preflight(&CommandName::from("morphotag"), None));
+        assert!(!should_preflight(ReleasedCommand::Morphotag, None));
     }
 
     #[tokio::test]
@@ -390,7 +390,7 @@ mod tests {
                 correlation_id: "corr-1".into(),
             },
             dispatch: RunnerDispatchConfig {
-                command: CommandName::from("align"),
+                command: ReleasedCommand::Align,
                 lang: crate::api::LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Align(AlignOptions {
@@ -426,7 +426,7 @@ mod tests {
         };
 
         let paths =
-            collect_preflight_audio_paths(&CommandName::from("align"), &job, &job.pending_files)
+            collect_preflight_audio_paths(ReleasedCommand::Align, &job, &job.pending_files)
                 .await;
 
         assert_eq!(paths, vec![wav_path.to_path_buf()]);

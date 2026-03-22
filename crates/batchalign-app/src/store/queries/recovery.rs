@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use crate::api::{
-    ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, UnixTimestamp,
+    ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+    UnixTimestamp,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -207,7 +208,17 @@ impl JobStore {
                             },
                         },
                         dispatch: JobDispatchConfig {
-                            command: row.command.clone().into(),
+                            command: match ReleasedCommand::try_from(row.command.as_str()) {
+                                Ok(cmd) => cmd,
+                                Err(_) => {
+                                    tracing::warn!(
+                                        job_id = %row.job_id,
+                                        command = %row.command,
+                                        "Unknown command in DB, skipping job recovery"
+                                    );
+                                    continue;
+                                }
+                            },
                             lang: {
                                 let (spec, valid) =
                                     crate::api::LanguageSpec::parse_from_db(&row.lang);

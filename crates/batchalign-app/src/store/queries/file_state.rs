@@ -252,7 +252,7 @@ impl JobStore {
 mod tests {
     use tokio::sync::broadcast;
 
-    use crate::api::{ContentType, FileStatusKind, JobId, UnixTimestamp};
+    use crate::api::{ContentType, FileStatusKind, JobId, ReleasedCommand, UnixTimestamp};
     use crate::scheduling::FailureCategory;
     use crate::store::queries::tests::{make_job, test_config};
     use crate::ws::BROADCAST_CAPACITY;
@@ -265,7 +265,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
         store
-            .submit(make_job("job-1", "morphotag", vec!["a.cha".into()]))
+            .submit(make_job("job-1", ReleasedCommand::Morphotag, vec!["a.cha".into()]))
             .await
             .unwrap();
 
@@ -292,7 +292,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
         store
-            .submit(make_job("job-1", "morphotag", vec!["a.cha".into()]))
+            .submit(make_job("job-1", ReleasedCommand::Morphotag, vec!["a.cha".into()]))
             .await
             .unwrap();
 

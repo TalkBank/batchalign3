@@ -3,11 +3,9 @@
 //! [`build_typed_options()`] converts parsed CLI args into a [`CommandOptions`]
 //! enum variant for type-safe job submission.
 
-use std::collections::BTreeMap;
-
 use batchalign_app::options::{
     AlignOptions, AsrEngineName, AvqiOptions, BenchmarkOptions, CommandOptions, CommonOptions,
-    CompareOptions, CorefOptions, FaEngineName, MorphotagOptions,
+    CompareOptions, CorefOptions, EngineOverrides, FaEngineName, MorphotagOptions,
     OpensmileOptions, TranscribeOptions, TranslateOptions, UtrEngine as AppUtrEngine,
     UtrOverlapStrategy as AppUtrOverlapStrategy, UtsegOptions,
 };
@@ -21,22 +19,21 @@ use super::{
     UtrOverlapStrategy as CliUtrOverlapStrategy,
 };
 
-/// Parse one `--engine-overrides` JSON payload into a flat string map.
-pub(crate) fn parse_engine_overrides_json(input: &str) -> Result<BTreeMap<String, String>, String> {
-    serde_json::from_str::<BTreeMap<String, String>>(input).map_err(|error| {
-        format!(
-            "invalid --engine-overrides JSON: expected a flat {{string: string}} object ({error})"
-        )
+/// Parse one `--engine-overrides` JSON payload into typed `EngineOverrides`.
+///
+/// Rejects unknown keys and invalid engine names at parse time.
+pub(crate) fn parse_engine_overrides_json(input: &str) -> Result<EngineOverrides, String> {
+    serde_json::from_str::<EngineOverrides>(input).map_err(|error| {
+        format!("invalid --engine-overrides JSON: {error}")
     })
 }
 
-/// Parse an optional JSON string into a `BTreeMap<String, String>`.
+/// Parse an optional JSON string into typed `EngineOverrides`.
 ///
-/// Returns an empty map if `input` is `None` or empty. Invalid JSON should have
-/// been rejected by clap before this helper runs.
-pub fn parse_engine_overrides(input: &Option<String>) -> BTreeMap<String, String> {
+/// Returns default (empty) overrides if `input` is `None` or empty.
+pub fn parse_engine_overrides(input: &Option<String>) -> EngineOverrides {
     match input.as_deref() {
-        None | Some("") => BTreeMap::new(),
+        None | Some("") => EngineOverrides::default(),
         Some(json) => parse_engine_overrides_json(json)
             .expect("clap should reject invalid --engine-overrides JSON before option building"),
     }
@@ -327,17 +324,16 @@ mod tests {
     #[test]
     fn parse_engine_overrides_valid_json() {
         let input = Some(r#"{"asr": "tencent", "fa": "cantonese_fa"}"#.to_string());
-        let map = parse_engine_overrides(&input);
-        assert_eq!(map.len(), 2);
-        assert_eq!(map.get("asr").unwrap(), "tencent");
-        assert_eq!(map.get("fa").unwrap(), "cantonese_fa");
+        let overrides = parse_engine_overrides(&input);
+        assert_eq!(overrides.asr, Some(AsrEngineName::HkTencent));
+        assert_eq!(overrides.fa, Some(FaEngineName::Wav2vecCanto));
     }
 
     #[test]
     fn parse_engine_overrides_json_rejects_invalid_shape() {
         let error = parse_engine_overrides_json(r#"{"asr":{"name":"whisper"}}"#)
             .expect_err("nested objects should be rejected");
-        assert!(error.contains("flat {string: string} object"));
+        assert!(error.contains("invalid"));
     }
 
     #[test]
@@ -347,10 +343,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_engine_overrides_single_entry() {
-        let input = Some(r#"{"mor": "custom_mor"}"#.to_string());
-        let map = parse_engine_overrides(&input);
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.get("mor").unwrap(), "custom_mor");
+    fn parse_engine_overrides_rejects_unknown_key() {
+        let error = parse_engine_overrides_json(r#"{"mor": "custom_mor"}"#)
+            .expect_err("unknown engine category should be rejected");
+        assert!(error.contains("unknown engine override key"));
     }
 }

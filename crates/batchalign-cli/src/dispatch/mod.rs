@@ -39,9 +39,9 @@ pub struct DispatchRequest<'a> {
     /// Explicit remote server URL, if any.
     pub server_arg: Option<&'a str>,
     /// Input paths supplied on the CLI.
-    pub inputs: &'a [String],
+    pub inputs: &'a [std::path::PathBuf],
     /// Optional output directory.
-    pub out_dir: Option<&'a str>,
+    pub out_dir: Option<&'a std::path::Path>,
     /// Typed command options for submission.
     pub options: Option<CommandOptions>,
     /// Optional TalkBank bank name.
@@ -57,7 +57,7 @@ pub struct DispatchRequest<'a> {
     /// Whether to force CPU execution for local daemons.
     pub force_cpu: bool,
     /// Optional before-path input for incremental workflows.
-    pub before: Option<&'a str>,
+    pub before: Option<&'a std::path::Path>,
     /// Optional explicit worker count.
     pub workers: Option<usize>,
     /// Optional daemon startup timeout.

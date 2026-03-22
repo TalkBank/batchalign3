@@ -7,6 +7,12 @@ and this test fails until the hand-written Python model is updated to match.
 This is the bridge between the current hand-written models and the eventual
 goal of fully generated types. See ``batchalign/generated/`` for the generated
 Pydantic models and ``ipc-schema/`` for the JSON Schema files.
+
+Cross-language contract note: this is the Python half of the schema conformance
+gate. The Rust half lives in ``crates/batchalign-app/tests/worker_protocol_v2_compat.rs``.
+Both sides must pass independently — a change to the wire format must update both.
+The ``Cmd2Task`` constant map (formerly tested in ``test_runtime.py``) is also
+covered by the IPC schema drift check in CI (``scripts/check_ipc_type_drift.sh``).
 """
 
 from __future__ import annotations

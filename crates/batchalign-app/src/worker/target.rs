@@ -4,7 +4,7 @@
 //! of top-level commands for warmup, memory checks, and scheduling, but Python
 //! workers are always bootstrapped around one inference task.
 
-use crate::api::{CommandName, MemoryMb};
+use crate::api::{ReleasedCommand, MemoryMb};
 use crate::runtime;
 use crate::workflow::command_workflow_descriptor;
 
@@ -112,7 +112,7 @@ impl WorkerProfile {
     }
 
     /// Map a command name to the profile needed for that command's infer-task worker.
-    pub fn for_command(command: &CommandName) -> Option<Self> {
+    pub fn for_command(command: ReleasedCommand) -> Option<Self> {
         WorkerTarget::for_command(command).map(|target| {
             let WorkerTarget::InferTask(task) = target;
             Self::for_task(task)
@@ -145,7 +145,7 @@ impl WorkerTarget {
     }
 
     /// Return the infer-task worker target used for one released command.
-    pub(crate) fn for_command(command: &CommandName) -> Option<Self> {
+    pub(crate) fn for_command(command: ReleasedCommand) -> Option<Self> {
         let task = command_workflow_descriptor(command)?.infer_task;
         Some(Self::InferTask(task))
     }
@@ -170,17 +170,18 @@ pub(crate) fn task_name(task: InferTask) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{InferTask, WorkerProfile, WorkerTarget};
+    use crate::api::ReleasedCommand;
 
     #[test]
     fn command_target_maps_transcribe_to_asr() {
-        let target = WorkerTarget::for_command(&"transcribe".into());
+        let target = WorkerTarget::for_command(ReleasedCommand::Transcribe);
         assert_eq!(target, Some(WorkerTarget::InferTask(InferTask::Asr)));
     }
 
     #[test]
     fn command_target_maps_compare_to_morphosyntax() {
         assert_eq!(
-            WorkerTarget::for_command(&"compare".into()),
+            WorkerTarget::for_command(ReleasedCommand::Compare),
             Some(WorkerTarget::InferTask(InferTask::Morphosyntax))
         );
     }
@@ -188,11 +189,6 @@ mod tests {
     #[test]
     fn infer_target_label_is_prefixed() {
         assert_eq!(WorkerTarget::infer_task(InferTask::Fa).label(), "infer:fa");
-    }
-
-    #[test]
-    fn unknown_command_has_no_worker_target() {
-        assert_eq!(WorkerTarget::for_command(&"unknown".into()), None);
     }
 
     // -- WorkerProfile tests --
@@ -246,7 +242,7 @@ mod tests {
     #[test]
     fn profile_for_command_maps_align_to_gpu() {
         assert_eq!(
-            WorkerProfile::for_command(&"align".into()),
+            WorkerProfile::for_command(ReleasedCommand::Align),
             Some(WorkerProfile::Gpu)
         );
     }
@@ -254,7 +250,7 @@ mod tests {
     #[test]
     fn profile_for_command_maps_morphotag_to_stanza() {
         assert_eq!(
-            WorkerProfile::for_command(&"morphotag".into()),
+            WorkerProfile::for_command(ReleasedCommand::Morphotag),
             Some(WorkerProfile::Stanza)
         );
     }

@@ -11,7 +11,7 @@ use crate::common::{
     assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
     submit_and_complete, submit_paths_and_complete,
 };
-use batchalign_app::api::FilePayload;
+use batchalign_app::api::{FilePayload, ReleasedCommand};
 use batchalign_app::options::{
     AlignOptions, CommandOptions, CommonOptions, FaEngineName, MorphotagOptions, WorTierPolicy,
 };
@@ -54,7 +54,7 @@ async fn option_morphotag_retokenize_changes_tokens() {
     let (info_a, results_a) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "gonna_no_retok.cha".into(),
@@ -77,7 +77,7 @@ async fn option_morphotag_retokenize_changes_tokens() {
     let (info_b, results_b) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "gonna_retok.cha".into(),
@@ -133,7 +133,7 @@ async fn option_align_wor_controls_tier_presence() {
     let (info_a, outputs_a) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![out_include.to_string_lossy().into()],
@@ -155,7 +155,7 @@ async fn option_align_wor_controls_tier_presence() {
     let (info_b, outputs_b) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![out_omit.to_string_lossy().into()],
@@ -205,7 +205,7 @@ async fn option_align_fa_engine_produces_different_timing() {
     let (info_a, outputs_a) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![out_w2v.to_string_lossy().into()],
@@ -227,7 +227,7 @@ async fn option_align_fa_engine_produces_different_timing() {
     let (info_b, outputs_b) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
-        "align",
+        ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
         vec![out_wh.to_string_lossy().into()],
@@ -277,7 +277,7 @@ async fn option_override_cache_forces_recompute() {
     let (info1, results1) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "cache_override.cha".into(),
@@ -297,7 +297,7 @@ async fn option_override_cache_forces_recompute() {
     let (info2, results2) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "cache_override.cha".into(),
@@ -353,7 +353,7 @@ async fn option_morphotag_skipmultilang() {
     let (info_a, results_a) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "bilingual.cha".into(),
@@ -376,7 +376,7 @@ async fn option_morphotag_skipmultilang() {
     let (info_b, results_b) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "bilingual.cha".into(),

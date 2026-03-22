@@ -14,21 +14,10 @@ validated_string_id!(
     pub JobId
 );
 
-string_id!(
-    /// Batchalign command name (e.g. `"morphotag"`, `"align"`).
-    pub CommandName
-);
-
-/// Closed released command vocabulary used at contributor-facing Rust seams.
+/// Closed released command vocabulary used at all Rust seams.
 ///
-/// This is intentionally distinct from [`CommandName`]:
-///
-/// - [`CommandName`] remains the open string type used at trust boundaries
-///   such as HTTP payloads, SQLite persistence, and interop with older
-///   callers.
-/// - [`ReleasedCommand`] is the closed set of commands that contributors
-///   should read in the code when reasoning about workflow families, dispatch
-///   policy, and CLI behavior.
+/// This is the single canonical command type. Unknown command strings are
+/// rejected at deserialization boundaries (HTTP 422, DB recovery skip).
 #[derive(
     Debug,
     Clone,
@@ -152,19 +141,6 @@ impl TryFrom<&str> for ReleasedCommand {
     }
 }
 
-impl TryFrom<&CommandName> for ReleasedCommand {
-    type Error = InvalidReleasedCommand;
-
-    fn try_from(value: &CommandName) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_ref())
-    }
-}
-
-impl From<ReleasedCommand> for CommandName {
-    fn from(value: ReleasedCommand) -> Self {
-        Self::from(value.as_str())
-    }
-}
 
 /// Borrowed CHAT document text at a contributor-facing boundary.
 ///

@@ -542,13 +542,13 @@ pub fn default_options_for(command: &str) -> CommandOptions {
 pub async fn run_job_to_completion(
     client: &reqwest::Client,
     base_url: &str,
-    command: &str,
+    command: batchalign_app::api::ReleasedCommand,
     lang: &str,
     files: Vec<batchalign_app::api::FilePayload>,
     options: CommandOptions,
 ) -> (JobInfo, Vec<batchalign_app::api::FileResult>) {
     let submission = batchalign_app::api::JobSubmission {
-        command: command.into(),
+        command,
         lang: batchalign_app::api::LanguageSpec::try_from(lang).expect("test lang"),
         num_speakers: NumSpeakers(1),
         files,

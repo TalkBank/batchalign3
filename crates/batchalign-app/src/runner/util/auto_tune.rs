@@ -1,6 +1,6 @@
 //! Per-job file parallelism auto-tuning and media constants.
 
-use crate::api::{CommandName, NumWorkers};
+use crate::api::{NumWorkers, ReleasedCommand};
 use crate::config::ServerConfig;
 use crate::runtime;
 
@@ -16,7 +16,7 @@ pub(crate) const KNOWN_MEDIA_EXTENSIONS: &[&str] = &[
 /// Host-wide memory clamping now happens in the coordinator-backed admission
 /// step so worker startup and job execution share one memory model.
 pub(in crate::runner) fn compute_job_workers(
-    command: &CommandName,
+    command: ReleasedCommand,
     num_files: usize,
     config: &ServerConfig,
 ) -> NumWorkers {

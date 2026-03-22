@@ -276,3 +276,88 @@ impl<'de> Deserialize<'de> for AsrEngineName {
     }
 }
 
+// ---------------------------------------------------------------------------
+// EngineOverrides — typed engine override selection
+// ---------------------------------------------------------------------------
+
+/// Typed engine overrides for one job or worker spawn.
+///
+/// Replaces `BTreeMap<String, String>` in `CommonOptions.engine_overrides`.
+/// Only populated fields are serialized; empty overrides produce `{}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct EngineOverrides {
+    /// ASR engine override (e.g., `AsrEngineName::HkTencent`).
+    pub asr: Option<AsrEngineName>,
+    /// FA engine override (e.g., `FaEngineName::Wav2vecCanto`).
+    pub fa: Option<FaEngineName>,
+}
+
+impl EngineOverrides {
+    /// Return `true` when no overrides are set.
+    pub fn is_empty(&self) -> bool {
+        self.asr.is_none() && self.fa.is_none()
+    }
+
+    /// Serialize to a JSON string for pool worker keying and CLI pass-through.
+    ///
+    /// Returns empty string when no overrides are set.
+    pub fn to_json_string(&self) -> String {
+        if self.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(self).unwrap_or_default()
+        }
+    }
+}
+
+impl Serialize for EngineOverrides {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let count = self.asr.is_some() as usize + self.fa.is_some() as usize;
+        let mut map = serializer.serialize_map(Some(count))?;
+        if let Some(ref asr) = self.asr {
+            map.serialize_entry("asr", asr.as_wire_name())?;
+        }
+        if let Some(ref fa) = self.fa {
+            map.serialize_entry("fa", fa.as_wire_name())?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EngineOverrides {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let map: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::deserialize(deserializer)?;
+        let mut overrides = Self::default();
+        for (key, value) in &map {
+            match key.as_str() {
+                "asr" => {
+                    overrides.asr = Some(
+                        AsrEngineName::from_wire_name(value)
+                            .map_err(serde::de::Error::custom)?,
+                    );
+                }
+                "fa" => {
+                    overrides.fa = Some(
+                        FaEngineName::from_wire_name(value)
+                            .map_err(serde::de::Error::custom)?,
+                    );
+                }
+                other => {
+                    return Err(serde::de::Error::custom(format!(
+                        "unknown engine override key: {other}"
+                    )));
+                }
+            }
+        }
+        Ok(overrides)
+    }
+}
+

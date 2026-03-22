@@ -6,7 +6,7 @@
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
 use crate::common::{poll_job_done, require_live_server, submit_and_complete};
-use batchalign_app::api::{FilePayload, JobStatus, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers};
+use batchalign_app::api::{ReleasedCommand, FilePayload, JobStatus, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers};
 use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 use batchalign_app::worker::InferTask;
 
@@ -47,7 +47,7 @@ async fn error_align_missing_audio() {
     });
 
     let submission = JobSubmission {
-        command: "align".into(),
+        command: ReleasedCommand::Align,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],
@@ -125,7 +125,7 @@ async fn error_morphotag_empty_file() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         files,
         options,
@@ -235,7 +235,7 @@ async fn edge_morphotag_xxx_utterance() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "xxx_test.cha".into(),
@@ -292,7 +292,7 @@ async fn edge_morphotag_www_utterance() {
     let (info, results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "www_test.cha".into(),
@@ -346,7 +346,7 @@ async fn error_morphotag_invalid_chat() {
     let (info, _results) = submit_and_complete(
         server.client(),
         server.base_url(),
-        "morphotag",
+        ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
             filename: "invalid.cha".into(),

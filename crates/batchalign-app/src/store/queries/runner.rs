@@ -18,6 +18,7 @@ mod tests {
 
     use crate::ws::BROADCAST_CAPACITY;
 
+    use crate::api::ReleasedCommand;
     use super::super::tests::{make_job, test_config};
     use super::*;
 
@@ -27,7 +28,7 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
 
-        let mut job = make_job("j1", "morphotag", vec!["a.cha".into(), "b.cha".into()]);
+        let mut job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into(), "b.cha".into()]);
         if let Some(status) = job.execution.file_statuses.get_mut("a.cha") {
             status.status = crate::api::FileStatusKind::Done;
         }

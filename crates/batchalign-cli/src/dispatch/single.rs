@@ -27,8 +27,8 @@ pub(super) async fn dispatch_single_server(
     lang: &str,
     num_speakers: u32,
     extensions: &[&str],
-    inputs: &[String],
-    out_dir: Option<&str>,
+    inputs: &[std::path::PathBuf],
+    out_dir: Option<&std::path::Path>,
     options: Option<&CommandOptions>,
     bank: Option<&str>,
     subdir: Option<&str>,
@@ -134,7 +134,7 @@ pub(super) async fn dispatch_single_server(
         .unwrap_or_else(|| base_dir.clone());
 
     let submission = JobSubmission {
-        command: command.as_wire_name().into(),
+        command,
         lang: batchalign_app::api::LanguageSpec::try_from(lang).map_err(|e| {
             CliError::InvalidArgument(format!("invalid language: {e}"))
         })?,

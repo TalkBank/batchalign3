@@ -445,15 +445,14 @@ pub(super) fn print_failure_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batchalign_app::api::{CommandName, FileStatusEntry, JobId, LanguageCode3, LanguageSpec};
+    use batchalign_app::api::{FileStatusEntry, JobId, LanguageCode3, LanguageSpec, ReleasedCommand};
     use batchalign_app::options::{CommandOptions, CommonOptions, MorphotagOptions};
-    use batchalign_app::ReleasedCommand;
 
     fn test_job_info(status: JobStatus, error: Option<&str>) -> JobInfo {
         JobInfo {
             job_id: JobId::from("job123"),
             status,
-            command: CommandName::from("benchmark"),
+            command: ReleasedCommand::Benchmark,
             options: CommandOptions::Morphotag(MorphotagOptions {
                 common: CommonOptions::default(),
                 retokenize: false,

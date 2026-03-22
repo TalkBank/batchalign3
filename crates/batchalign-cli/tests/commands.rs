@@ -9,7 +9,7 @@
 
 mod common;
 
-use batchalign_app::api::{FilePayload, JobInfo, JobSubmission, NumSpeakers};
+use batchalign_app::api::{FilePayload, JobInfo, JobSubmission, NumSpeakers, ReleasedCommand};
 use batchalign_app::api::{LanguageCode3, LanguageSpec};
 use batchalign_app::options::{CommandOptions, CommonOptions, TranscribeOptions};
 use batchalign_cli::args::{JobsArgs, ServeStatusArgs};
@@ -20,7 +20,7 @@ use common::{poll_job_done, require_python, start_test_server};
 
 fn test_submission(files: Vec<FilePayload>) -> JobSubmission {
     JobSubmission {
-        command: "transcribe".into(),
+        command: ReleasedCommand::Transcribe,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
@@ -226,7 +226,7 @@ async fn dispatch_no_server() {
         std::env::set_var("BATCHALIGN_STATE_DIR", &state_dir);
     }
 
-    let inputs = vec![input_dir.to_string_lossy().to_string()];
+    let inputs: Vec<std::path::PathBuf> = vec![input_dir.to_path_buf()];
 
     // No server, auto_daemon=false → prints error message, returns Ok(())
     let result = batchalign_cli::dispatch::dispatch(batchalign_cli::dispatch::DispatchRequest {

@@ -10,7 +10,7 @@ mod common;
 
 use batchalign_app::api::{
     FilePayload, FileResult, HealthResponse, HealthStatus, JobInfo, JobListItem, JobResultResponse,
-    JobStatus, JobSubmission, LanguageCode3, LanguageSpec, MemoryMb, NumSpeakers,
+    JobStatus, JobSubmission, LanguageCode3, LanguageSpec, MemoryMb, NumSpeakers, ReleasedCommand,
 };
 use batchalign_app::config::ServerConfig;
 use batchalign_app::create_app;
@@ -156,7 +156,7 @@ async fn start_test_server_with_config(
 
 fn test_submission(files: Vec<FilePayload>) -> JobSubmission {
     JobSubmission {
-        command: "transcribe".into(),
+        command: ReleasedCommand::Transcribe,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files,
@@ -222,7 +222,7 @@ async fn submit_and_get_job() {
     assert_eq!(resp.status(), 200);
 
     let info: JobInfo = resp.json().await.expect("parse job info");
-    assert_eq!(info.command, "transcribe");
+    assert_eq!(info.command, ReleasedCommand::Transcribe);
     assert_eq!(
         info.lang,
         LanguageSpec::Resolved(LanguageCode3::eng())
@@ -299,50 +299,8 @@ async fn submit_job_sets_request_id_header_when_missing() {
     assert_eq!(req_id, info.job_id.to_string());
 }
 
-#[tokio::test]
-async fn plugin_command_is_accepted_and_processed_when_available() {
-    let python = require_python!();
-    if !has_test_plugin(&python) {
-        eprintln!("SKIP: test plugin not installed");
-        return;
-    }
-
-    let (base_url, _tmp, _state, _permit) = start_test_server(&python).await;
-    let client = reqwest::Client::new();
-
-    let mut submission = test_submission(vec![FilePayload {
-        filename: "plugin.cha".into(),
-        content: "@UTF8\n@Begin\n*CHI:\tplugin route .\n@End\n".into(),
-    }]);
-    submission.command = "cantotag".into();
-
-    let resp = client
-        .post(format!("{base_url}/jobs"))
-        .json(&submission)
-        .send()
-        .await
-        .expect("POST /jobs");
-    assert_eq!(resp.status(), 200, "plugin command should be accepted");
-
-    let info: JobInfo = resp.json().await.expect("parse job info");
-    assert_eq!(info.command, "cantotag");
-    let job_id = info.job_id;
-
-    let done = poll_job_done(&client, &base_url, &job_id).await;
-    assert!(matches!(done.status, JobStatus::Completed));
-
-    let results_resp = client
-        .get(format!("{base_url}/jobs/{job_id}/results"))
-        .send()
-        .await
-        .expect("GET /jobs/{id}/results");
-    assert_eq!(results_resp.status(), 200);
-
-    let results: JobResultResponse = results_resp.json().await.expect("parse results");
-    assert!(!results.files.is_empty());
-    assert!(results.files[0].error.is_none());
-    assert!(!results.files[0].content.is_empty());
-}
+// Plugin command test removed: with ReleasedCommand (closed enum), unknown
+// commands are rejected at JSON deserialization. See unknown_command_returns_422.
 
 #[tokio::test]
 async fn submit_and_get_results() {
@@ -540,28 +498,34 @@ async fn delete_completed_job() {
 }
 
 #[tokio::test]
-async fn unknown_command_returns_400() {
+async fn unknown_command_returns_422() {
     let python = require_python!();
     let (base_url, _tmp, _state, _permit) = start_test_server(&python).await;
 
     let client = reqwest::Client::new();
 
-    let mut submission = test_submission(vec![FilePayload {
-        filename: "bad.cha".into(),
-        content: "content".into(),
-    }]);
-    submission.command = "nonexistent_command".into();
+    // Send raw JSON with an invalid command string — ReleasedCommand is a
+    // closed enum, so axum's JSON extractor rejects unknown variants at
+    // deserialization time (HTTP 422).
+    let raw = serde_json::json!({
+        "command": "nonexistent_command",
+        "lang": "eng",
+        "num_speakers": 1,
+        "files": [{"filename": "bad.cha", "content": "content"}],
+        "media_files": [],
+        "media_mapping": "",
+        "media_subdir": "",
+        "source_dir": "",
+        "options": null,
+    });
 
     let resp = client
         .post(format!("{base_url}/jobs"))
-        .json(&submission)
+        .json(&raw)
         .send()
         .await
         .expect("POST /jobs");
-    assert_eq!(resp.status(), 400);
-
-    let body: serde_json::Value = resp.json().await.expect("parse error");
-    assert!(body["detail"].as_str().unwrap().contains("Unknown command"));
+    assert_eq!(resp.status(), 422);
 }
 
 #[tokio::test]
@@ -805,7 +769,7 @@ async fn paths_mode_job() {
     std::fs::write(&input_path, "@UTF8\n@Begin\n*CHI:\tpaths .\n@End\n").expect("write input");
 
     let submission = JobSubmission {
-        command: "transcribe".into(),
+        command: ReleasedCommand::Transcribe,
         lang: LanguageSpec::Resolved(LanguageCode3::eng()),
         num_speakers: NumSpeakers(1),
         files: vec![],

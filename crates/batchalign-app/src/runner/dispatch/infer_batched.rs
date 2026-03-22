@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::api::{ContentType, FileName, LanguageCode3, ReleasedCommand};
+use crate::api::{ContentType, LanguageCode3, ReleasedCommand};
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::{FailureCategory, WorkUnitKind};
-use crate::workflow::text_batch::{TextBatchFileInput, into_legacy_batch_results};
+use crate::workflow::text_batch::{TextBatchFileInput, TextBatchFileResult, TextBatchFileResults};
 use tracing::warn;
 
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
@@ -45,13 +45,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
     let file_list = &job.pending_files;
     let fallback_lang = LanguageCode3::eng();
     let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
-    let Ok(command) = ReleasedCommand::try_from(&job.dispatch.command) else {
-        warn!(
-            command = %job.dispatch.command,
-            "Unknown released command in dispatch_batched_infer"
-        );
-        return;
-    };
+    let command = job.dispatch.command;
 
     let started_at = unix_now();
 
@@ -142,7 +136,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
             };
             // Use incremental processing when before texts are available
             if !before_texts.is_empty() {
-                let mut results = Vec::new();
+                let mut results: TextBatchFileResults = Vec::new();
                 for file in &file_texts {
                     let filename = file.filename.as_ref();
                     let after_text = file.chat_text.as_ref();
@@ -154,28 +148,27 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                             &mor_params,
                         )
                         .await
-                        .map_err(|e| e.to_string())
                     } else {
                         crate::morphosyntax::process_morphosyntax(after_text, services, &mor_params)
                             .await
-                            .map_err(|e| e.to_string())
                     };
-                    results.push((file.filename.to_string(), result));
+                    match result {
+                        Ok(text) => results.push(TextBatchFileResult::ok(file.filename.clone(), text)),
+                        Err(e) => results.push(TextBatchFileResult::err(file.filename.clone(), e.to_string())),
+                    }
                 }
                 results
             } else {
-                into_legacy_batch_results(
-                    crate::morphosyntax::process_morphosyntax_batch(
-                        &file_texts,
-                        services,
-                        &mor_params,
-                    )
-                    .await,
+                crate::morphosyntax::process_morphosyntax_batch(
+                    &file_texts,
+                    services,
+                    &mor_params,
                 )
+                .await
             }
         }
         ReleasedCommand::Utseg => {
-            into_legacy_batch_results(crate::utseg::process_utseg_batch(
+            crate::utseg::process_utseg_batch(
                 &file_texts,
                 lang,
                 services.pool,
@@ -183,10 +176,10 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 services.engine_version,
                 cache_policy,
             )
-            .await)
+            .await
         }
         ReleasedCommand::Translate => {
-            into_legacy_batch_results(crate::translate::process_translate_batch(
+            crate::translate::process_translate_batch(
                 &file_texts,
                 lang,
                 services.pool,
@@ -194,15 +187,15 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 services.engine_version,
                 cache_policy,
             )
-            .await)
+            .await
         }
         ReleasedCommand::Coref => {
-            into_legacy_batch_results(crate::coref::process_coref_batch(
+            crate::coref::process_coref_batch(
                 &file_texts,
                 lang,
                 services.pool,
             )
-            .await)
+            .await
         }
         ReleasedCommand::Compare => {
             dispatch_compare(
@@ -227,8 +220,9 @@ pub(in crate::runner) async fn dispatch_batched_infer(
 
     // Record results per file, reporting Writing progress as each file completes.
     let total_results = results.len() as i64;
-    for (result_idx, (filename_str, result)) in results.into_iter().enumerate() {
-        let filename = FileName::from(filename_str);
+    for (result_idx, file_result) in results.into_iter().enumerate() {
+        let filename = file_result.filename;
+        let result = file_result.result;
         let lifecycle = FileRunTracker::new(store, job_id, filename.as_ref());
         // Find the file_index for this filename
         let file_index = file_list
@@ -238,7 +232,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
             .unwrap_or(0);
 
         match result {
-            Ok(output_text) => {
+            Ok(output_chat) => {
                 // Signal the Writing stage with a per-file counter.
                 set_file_progress(
                     store,
@@ -252,9 +246,9 @@ pub(in crate::runner) async fn dispatch_batched_infer(
 
                 // Optionally merge abbreviations before writing
                 let output_text = if should_merge_abbrev {
-                    apply_merge_abbrev(&output_text)
+                    apply_merge_abbrev(output_chat.as_ref())
                 } else {
-                    output_text
+                    output_chat.into_string()
                 };
 
                 // Write output
@@ -284,7 +278,8 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                     .complete_with_result(filename.clone(), ContentType::Chat, finished_at)
                     .await;
             }
-            Err(err_msg) => {
+            Err(err) => {
+                let err_msg = err.into_message();
                 lifecycle
                     .fail(&err_msg, FailureCategory::ProviderTerminal, finished_at)
                     .await;

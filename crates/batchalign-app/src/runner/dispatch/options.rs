@@ -406,9 +406,7 @@ mod tests {
     #[test]
     fn transcribe_dispatch_prefers_common_asr_override() {
         let mut common = common_default();
-        common
-            .engine_overrides
-            .insert("asr".into(), "tencent".into());
+        common.engine_overrides.asr = Some(AsrEngineName::HkTencent);
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common,
             asr_engine: AsrEngineName::RevAi,
@@ -484,9 +482,7 @@ mod tests {
     #[test]
     fn benchmark_dispatch_prefers_common_asr_override() {
         let mut common = common_default();
-        common
-            .engine_overrides
-            .insert("asr".into(), "aliyun".into());
+        common.engine_overrides.asr = Some(AsrEngineName::HkAliyun);
         let opts = CommandOptions::Benchmark(BenchmarkOptions {
             common,
             asr_engine: AsrEngineName::RevAi,
@@ -554,8 +550,11 @@ mod tests {
 
     #[test]
     fn common_options_accessible_from_all_variants() {
-        let mut overrides = BTreeMap::new();
-        overrides.insert("asr".into(), "tencent".into());
+        use crate::options::EngineOverrides;
+        let overrides = EngineOverrides {
+            asr: Some(AsrEngineName::HkTencent),
+            fa: None,
+        };
         let common = CommonOptions {
             override_cache: true,
             lazy_audio: false,

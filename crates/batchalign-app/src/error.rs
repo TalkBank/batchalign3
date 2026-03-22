@@ -20,7 +20,7 @@ pub struct ConflictDetail {
     /// The `job_id` of the existing active job that owns this file.
     pub job_id: JobId,
     /// The command the conflicting job is running.
-    pub command: crate::api::CommandName,
+    pub command: crate::api::ReleasedCommand,
     /// The current status of the conflicting job.
     pub status: crate::api::JobStatus,
 }
@@ -202,7 +202,7 @@ mod tests {
             conflicts: vec![ConflictDetail {
                 filename: crate::api::FileName::from("a.cha"),
                 job_id: JobId::from("j1"),
-                command: crate::api::CommandName::from("morphotag"),
+                command: crate::api::ReleasedCommand::Morphotag,
                 status: crate::api::JobStatus::Running,
             }],
         };

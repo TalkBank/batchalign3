@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::api::{CommandName, ReleasedCommand};
+use crate::api::ReleasedCommand;
 use crate::options::{CommandOptions, UtrEngine};
 use crate::store::{PendingJobFile, RunnerJobSnapshot};
 
@@ -14,23 +14,23 @@ use super::auto_tune::KNOWN_MEDIA_EXTENSIONS;
 /// Preflight pre-submits all audio files to Rev.AI before processing,
 /// allowing Rev.AI to process them in parallel server-side.
 pub(in crate::runner) fn should_preflight(
-    command: &CommandName,
+    command: ReleasedCommand,
     typed_options: Option<&CommandOptions>,
 ) -> bool {
-    match (ReleasedCommand::try_from(command).ok(), typed_options) {
+    match (command, typed_options) {
         (
-            Some(ReleasedCommand::Transcribe | ReleasedCommand::TranscribeS),
+            ReleasedCommand::Transcribe | ReleasedCommand::TranscribeS,
             Some(CommandOptions::Transcribe(t) | CommandOptions::TranscribeS(t)),
         ) => t.effective_asr_engine().is_revai(),
-        (Some(ReleasedCommand::Transcribe | ReleasedCommand::TranscribeS), None) => true,
-        (Some(ReleasedCommand::Benchmark), Some(CommandOptions::Benchmark(b))) => {
+        (ReleasedCommand::Transcribe | ReleasedCommand::TranscribeS, None) => true,
+        (ReleasedCommand::Benchmark, Some(CommandOptions::Benchmark(b))) => {
             b.effective_asr_engine().is_revai()
         }
-        (Some(ReleasedCommand::Benchmark), None) => true,
-        (Some(ReleasedCommand::Align), Some(CommandOptions::Align(a))) => {
+        (ReleasedCommand::Benchmark, None) => true,
+        (ReleasedCommand::Align, Some(CommandOptions::Align(a))) => {
             matches!(a.utr_engine, Some(UtrEngine::RevAi))
         }
-        (Some(ReleasedCommand::Align), None) => true,
+        (ReleasedCommand::Align, None) => true,
         _ => false,
     }
 }
@@ -114,12 +114,12 @@ pub(in crate::runner) async fn preflight_validate_media(
 /// temporary WAV conversions, because preflight submission happens before the
 /// per-file processing pipeline starts.
 pub(in crate::runner) async fn collect_preflight_audio_paths(
-    command: &CommandName,
+    command: ReleasedCommand,
     job: &RunnerJobSnapshot,
     file_list: &[PendingJobFile],
 ) -> Vec<PathBuf> {
-    match ReleasedCommand::try_from(command).ok() {
-        Some(ReleasedCommand::Align) => collect_align_preflight_audio_paths(job, file_list).await,
+    match command {
+        ReleasedCommand::Align => collect_align_preflight_audio_paths(job, file_list).await,
         _ => file_list
             .iter()
             .filter(|file| !file.has_chat)
@@ -263,7 +263,7 @@ pub(in crate::runner) fn apply_result_filename(
 #[cfg(test)]
 mod tests {
     use super::should_preflight;
-    use crate::api::CommandName;
+    use crate::api::ReleasedCommand;
     use crate::options::{
         AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, TranscribeOptions,
     };
@@ -271,9 +271,7 @@ mod tests {
     #[test]
     fn transcribe_asr_override_disables_rev_preflight() {
         let mut common = CommonOptions::default();
-        common
-            .engine_overrides
-            .insert("asr".into(), "tencent".into());
+        common.engine_overrides.asr = Some(AsrEngineName::HkTencent);
         let opts = CommandOptions::Transcribe(TranscribeOptions {
             common,
             asr_engine: AsrEngineName::RevAi,
@@ -284,7 +282,7 @@ mod tests {
         });
 
         assert!(!should_preflight(
-            &CommandName::from("transcribe"),
+            ReleasedCommand::Transcribe,
             Some(&opts)
         ));
     }
@@ -292,9 +290,7 @@ mod tests {
     #[test]
     fn benchmark_asr_override_disables_rev_preflight() {
         let mut common = CommonOptions::default();
-        common
-            .engine_overrides
-            .insert("asr".into(), "aliyun".into());
+        common.engine_overrides.asr = Some(AsrEngineName::HkAliyun);
         let opts = CommandOptions::Benchmark(BenchmarkOptions {
             common,
             asr_engine: AsrEngineName::RevAi,
@@ -303,7 +299,7 @@ mod tests {
         });
 
         assert!(!should_preflight(
-            &CommandName::from("benchmark"),
+            ReleasedCommand::Benchmark,
             Some(&opts)
         ));
     }

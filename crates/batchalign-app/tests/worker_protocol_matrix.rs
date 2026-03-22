@@ -12,7 +12,7 @@
 mod common;
 
 use std::collections::BTreeSet;
-use batchalign_app::api::{LanguageCode3, WorkerLanguage};
+use batchalign_app::api::{LanguageCode3, ReleasedCommand, WorkerLanguage};
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -8,7 +8,7 @@ use super::*;
     use tokio_util::sync::CancellationToken;
 
     use crate::api::{
-        CommandName, FileName, JobId, JobStatus, LanguageCode3, LanguageSpec, NumSpeakers,
+        FileName, JobId, JobStatus, LanguageCode3, LanguageSpec, NumSpeakers, ReleasedCommand,
         UnixTimestamp,
     };
     use crate::db::JobDB;
@@ -42,7 +42,7 @@ use super::*;
                 correlation_id: format!("test-{job_id}").into(),
             },
             dispatch: JobDispatchConfig {
-                command: "opensmile".into(),
+                command: ReleasedCommand::Opensmile,
                 lang: LanguageSpec::Resolved(LanguageCode3::eng()),
                 num_speakers: NumSpeakers(1),
                 options: CommandOptions::Opensmile(OpensmileOptions {
@@ -96,88 +96,80 @@ use super::*;
     #[test]
     fn infer_task_mapping_is_stable() {
         assert_eq!(
-            infer_task_for_command(&CommandName::from("morphotag")),
+            infer_task_for_command(ReleasedCommand::Morphotag),
             Some(InferTask::Morphosyntax)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("utseg")),
+            infer_task_for_command(ReleasedCommand::Utseg),
             Some(InferTask::Utseg)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("translate")),
+            infer_task_for_command(ReleasedCommand::Translate),
             Some(InferTask::Translate)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("coref")),
+            infer_task_for_command(ReleasedCommand::Coref),
             Some(InferTask::Coref)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("align")),
+            infer_task_for_command(ReleasedCommand::Align),
             Some(InferTask::Fa)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("transcribe")),
+            infer_task_for_command(ReleasedCommand::Transcribe),
             Some(InferTask::Asr)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("compare")),
+            infer_task_for_command(ReleasedCommand::Compare),
             Some(InferTask::Morphosyntax)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("opensmile")),
+            infer_task_for_command(ReleasedCommand::Opensmile),
             Some(InferTask::Opensmile)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("avqi")),
+            infer_task_for_command(ReleasedCommand::Avqi),
             Some(InferTask::Avqi)
         );
         assert_eq!(
-            infer_task_for_command(&CommandName::from("benchmark")),
+            infer_task_for_command(ReleasedCommand::Benchmark),
             Some(InferTask::Asr)
         );
     }
 
     #[test]
     fn text_commands_always_require_infer() {
-        for command in [
-            "morphotag",
-            "utseg",
-            "translate",
-            "coref",
-            "opensmile",
-            "avqi",
+        for cmd in [
+            ReleasedCommand::Morphotag,
+            ReleasedCommand::Utseg,
+            ReleasedCommand::Translate,
+            ReleasedCommand::Coref,
+            ReleasedCommand::Opensmile,
+            ReleasedCommand::Avqi,
         ] {
-            let cmd = CommandName::from(command);
-            assert!(command_requires_infer(&cmd));
-            assert!(command_requires_infer(&cmd));
+            assert!(command_requires_infer(cmd));
         }
     }
 
     #[test]
     fn align_always_requires_infer() {
-        let cmd = CommandName::from("align");
-        assert!(command_requires_infer(&cmd));
-        assert!(command_requires_infer(&cmd));
+        assert!(command_requires_infer(ReleasedCommand::Align));
     }
 
     #[test]
     fn non_infer_commands_do_not_require_infer() {
-        assert!(!command_requires_infer(
-            &CommandName::from("transcribe"),
-        ));
-        assert!(!command_requires_infer(
-            &CommandName::from("benchmark"),
-        ));
+        assert!(!command_requires_infer(ReleasedCommand::Transcribe));
+        assert!(!command_requires_infer(ReleasedCommand::Benchmark));
     }
 
     #[test]
     fn transcribe_result_filename_preserves_relative_path() {
         assert_eq!(
-            result_filename_for_command(&CommandName::from("transcribe"), "sub/nested.wav"),
+            result_filename_for_command(ReleasedCommand::Transcribe, "sub/nested.wav"),
             "sub/nested.cha"
         );
         assert_eq!(
-            result_filename_for_command(&CommandName::from("transcribe_s"), "nested.mp3"),
+            result_filename_for_command(ReleasedCommand::TranscribeS, "nested.mp3"),
             "nested.cha"
         );
     }
@@ -185,7 +177,7 @@ use super::*;
     #[test]
     fn non_transcribe_result_filename_is_unchanged() {
         assert_eq!(
-            result_filename_for_command(&CommandName::from("morphotag"), "sub/nested.cha"),
+            result_filename_for_command(ReleasedCommand::Morphotag, "sub/nested.cha"),
             "sub/nested.cha"
         );
     }

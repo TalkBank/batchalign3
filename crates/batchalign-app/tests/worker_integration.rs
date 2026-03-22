@@ -9,7 +9,7 @@
 
 mod common;
 
-use batchalign_app::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
+use batchalign_app::api::{LanguageCode3, NumSpeakers, ReleasedCommand, WorkerLanguage};
 use batchalign_app::worker::error::WorkerError;
 use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
 use batchalign_app::worker::pool::{PoolConfig, WorkerPool};
@@ -301,8 +301,8 @@ async fn pool_warmup_uses_infer_targets() {
     });
 
     pool.warmup(&[
-        batchalign_app::server::WarmupTarget { command: "morphotag".into(), lang: WorkerLanguage::from(LanguageCode3::eng()) },
-        batchalign_app::server::WarmupTarget { command: "align".into(), lang: WorkerLanguage::from(LanguageCode3::eng()) },
+        batchalign_app::server::WarmupTarget { command: ReleasedCommand::Morphotag, lang: WorkerLanguage::from(LanguageCode3::eng()) },
+        batchalign_app::server::WarmupTarget { command: ReleasedCommand::Align, lang: WorkerLanguage::from(LanguageCode3::eng()) },
     ])
     .await;
 
@@ -341,7 +341,7 @@ async fn pool_pre_scale_respects_max_workers_per_key() {
         ..Default::default()
     });
 
-    pool.pre_scale(&"morphotag".into(), WorkerLanguage::from(LanguageCode3::eng()), 4)
+    pool.pre_scale(ReleasedCommand::Morphotag, WorkerLanguage::from(LanguageCode3::eng()), 4)
         .await;
     let count = pool.worker_count();
     assert!(
@@ -574,7 +574,7 @@ async fn profile_groups_related_tasks_into_single_worker() {
 
     // Dispatch morphosyntax and utseg — both Stanza profile.
     let morph_item = json!({"task": "morph"});
-    let utseg_item = json!({"task": "utseg"});
+    let utseg_item = json!({"task": ReleasedCommand::Utseg});
     pool.dispatch_batch_infer(
         &LanguageCode3::eng(),
         &batch_request(InferTask::Morphosyntax, vec![morph_item]),

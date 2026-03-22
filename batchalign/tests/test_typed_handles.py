@@ -1,32 +1,21 @@
-"""Tests for typed model handles replacing object/tuple/monkey-patch patterns.
+"""Tests for typed model handles — behavioral contracts only.
 
-These tests verify the structural contracts of WhisperASRHandle,
-WhisperFAHandle, and Wave2VecFAHandle without loading real ML models.
+Verifies non-trivial logic in WhisperASRHandle (gen_kwargs branching,
+callable forwarding) and WhisperFAHandle (instance-local monkey-patching).
+Field-storage tests removed: dataclass fields storing what was passed in
+is tested by Python itself, not us.
 """
 
 from __future__ import annotations
 
 from batchalign.inference.audio import bind_whisper_token_timestamp_extractor
 from batchalign.inference.types import (
-    Wave2VecFAHandle,
     WhisperASRHandle,
-    WhisperFAHandle,
 )
 
 
 class TestWhisperASRHandle:
     """WhisperASRHandle replaces monkey-patched _ba_* attributes."""
-
-    def test_stores_metadata(self) -> None:
-        handle = WhisperASRHandle(
-            pipe=lambda *a, **kw: {"chunks": []},
-            config="fake_config",
-            lang="english",
-            sample_rate=16000,
-        )
-        assert handle.config == "fake_config"
-        assert handle.lang == "english"
-        assert handle.sample_rate == 16000
 
     def test_callable_forwards_to_pipe(self) -> None:
         calls: list[tuple[str, dict[str, int | dict[str, str]]]] = []
@@ -86,23 +75,6 @@ class TestWhisperASRHandle:
 class TestWhisperFAHandle:
     """WhisperFAHandle replaces (model, processor, sample_rate) tuple."""
 
-    def test_stores_fields(self) -> None:
-        handle = WhisperFAHandle(
-            model="fake_model",
-            processor="fake_processor",
-            sample_rate=16000,
-        )
-        assert handle.model == "fake_model"
-        assert handle.processor == "fake_processor"
-        assert handle.sample_rate == 16000
-
-    def test_no_tuple_unpacking_needed(self) -> None:
-        """Typed handle eliminates the tuple[object, ...] cast pattern."""
-        handle = WhisperFAHandle(model="m", processor="p", sample_rate=22050)
-        # Previously: _bundle: tuple[object, ...] = model_bundle  # type: ignore
-        # Now: just access handle.model, handle.processor, handle.sample_rate
-        assert isinstance(handle.sample_rate, int)
-
     def test_timestamp_extractor_binding_stays_instance_local(self) -> None:
         """The Whisper workaround should patch one model instance, not a class."""
 
@@ -116,16 +88,3 @@ class TestWhisperFAHandle:
 
         bound = model._extract_token_timestamps  # type: ignore[attr-defined]
         assert bound.__self__ is model
-
-
-class TestWave2VecFAHandle:
-    """Wave2VecFAHandle replaces (model, sample_rate) tuple."""
-
-    def test_stores_fields(self) -> None:
-        handle = Wave2VecFAHandle(model="fake_model", sample_rate=16000)
-        assert handle.model == "fake_model"
-        assert handle.sample_rate == 16000
-
-    def test_no_tuple_unpacking_needed(self) -> None:
-        handle = Wave2VecFAHandle(model="m", sample_rate=44100)
-        assert isinstance(handle.sample_rate, int)

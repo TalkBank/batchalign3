@@ -114,12 +114,16 @@ generate-ipc-types:
 check-ipc-drift:
 	bash scripts/check_ipc_type_drift.sh
 
-# Fast local CI: fmt + affected compile checks.
+# Fast local CI: fmt + affected compile checks + structural lints.
 ci-local:
 	@echo "==> fmt check"
 	cargo fmt --all -- --check
 	@echo "==> affected compile check"
 	cargo xtask affected-rust check
+	@echo "==> wide struct audit"
+	cargo xtask lint-wide-structs
+	@echo "==> ci hygiene"
+	cargo xtask lint-ci-hygiene
 	@echo "==> dashboard API drift"
 	bash scripts/check_dashboard_api_drift.sh
 	@echo "✓ ci-local passed"

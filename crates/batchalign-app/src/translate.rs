@@ -32,8 +32,8 @@ use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::pipeline::text_infer::{CachedTextPipelineHooks, run_cached_text_pipeline};
 use crate::workflow::text_batch::{
-    TextBatchFileInput, TextBatchFileResults, TextBatchOperation, TextBatchWorkflow,
-    TextBatchWorkflowRequest, TextPerFileWorkflowRequest, wrap_legacy_batch_results,
+    TextBatchFileInput, TextBatchFileResult, TextBatchFileResults, TextBatchOperation,
+    TextBatchWorkflow, TextBatchWorkflowRequest, TextPerFileWorkflowRequest,
 };
 
 /// Cache task name — matches Python's `translation`.
@@ -201,7 +201,7 @@ async fn run_translate_batch_impl(
     cache_policy: CachePolicy,
 ) -> TextBatchFileResults {
     let tgt_lang = DEFAULT_TGT_LANG;
-    let mut results: Vec<(String, Result<String, String>)> = Vec::with_capacity(files.len());
+    let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
     // 1. Parse all files and collect payloads
     let mut parsed_files: Vec<ChatFile> = Vec::with_capacity(files.len());
@@ -313,9 +313,9 @@ async fn run_translate_batch_impl(
                         .and_then(|f| f.as_ref())
                         .is_some()
                     {
-                        results.push((
-                            file.filename.to_string(),
-                            Err(format!("Batch infer failed: {e}")),
+                        results.push(TextBatchFileResult::err(
+                            file.filename.clone(),
+                            format!("Batch infer failed: {e}"),
                         ));
                     } else {
                         // Apply cached translations and serialize
@@ -324,10 +324,10 @@ async fn run_translate_batch_impl(
                         if !cached.is_empty() {
                             apply_translate_results(chat_file, cached);
                         }
-                        results.push((file.filename.to_string(), Ok(to_chat_string(chat_file))));
+                        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(chat_file)));
                     }
                 }
-                return wrap_legacy_batch_results(results);
+                return results;
             }
         }
     };
@@ -337,7 +337,7 @@ async fn run_translate_batch_impl(
         let filename = file.filename.as_ref();
         // Skip files that failed pre-validation
         if let Some(ref err) = validation_errors[file_idx] {
-            results.push((file.filename.to_string(), Err(err.clone())));
+            results.push(TextBatchFileResult::err(file.filename.clone(), err.clone()));
             continue;
         }
 
@@ -380,10 +380,10 @@ async fn run_translate_batch_impl(
             warn!(filename = %filename, errors = ?msgs, "translate post-validation warnings (non-fatal)");
         }
 
-        results.push((file.filename.to_string(), Ok(to_chat_string(chat_file))));
+        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(chat_file)));
     }
 
-    wrap_legacy_batch_results(results)
+    results
 }
 
 // ---------------------------------------------------------------------------

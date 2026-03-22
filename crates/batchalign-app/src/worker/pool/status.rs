@@ -5,7 +5,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::api::{CommandName, WorkerLanguage};
+use crate::api::{ReleasedCommand, WorkerLanguage};
 use crate::worker::WorkerProfile;
 
 use super::{WorkerPool, lock_recovered};
@@ -16,7 +16,7 @@ impl WorkerPool {
     /// Used by the memory gate to skip the system memory check when reusable
     /// workers already exist -- those workers are already loaded, so no new
     /// memory allocation is needed. Checks both stdio and TCP workers.
-    pub fn has_idle_workers(&self, command: &CommandName, lang: impl Into<WorkerLanguage>) -> bool {
+    pub fn has_idle_workers(&self, command: ReleasedCommand, lang: impl Into<WorkerLanguage>) -> bool {
         let lang = lang.into();
         let Some(profile) = WorkerProfile::for_command(command) else {
             return false;

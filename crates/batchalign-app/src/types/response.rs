@@ -9,7 +9,7 @@ use crate::options::CommandOptions;
 use crate::scheduling::{FailureCategory, LeaseRecord};
 
 use super::domain::{
-    CommandName, ContentType, DurationSeconds, FileName, HealthStatus, JobId, LanguageSpec,
+    ReleasedCommand, ContentType, DurationSeconds, FileName, HealthStatus, JobId, LanguageSpec,
     MemoryMb, NodeId, UnixTimestamp,
 };
 use super::request::default_lang;
@@ -114,7 +114,7 @@ pub struct JobInfo {
     /// Current lifecycle state of the job.
     pub status: JobStatus,
     /// Batchalign command that was submitted (e.g. "morphotag", "align").
-    pub command: CommandName,
+    pub command: ReleasedCommand,
     /// Typed submitted command options captured at job creation time.
     ///
     /// The dashboard uses this to show the original argument/config payload for
@@ -201,7 +201,7 @@ pub struct JobListItem {
     /// Current lifecycle state of the job.
     pub status: JobStatus,
     /// Batchalign command (e.g. "morphotag", "align").
-    pub command: CommandName,
+    pub command: ReleasedCommand,
     /// Language specification: a resolved ISO 639-3 code or `"auto"`.
     #[serde(default = "default_lang")]
     pub lang: LanguageSpec,

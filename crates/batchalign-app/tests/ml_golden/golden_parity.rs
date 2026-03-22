@@ -13,7 +13,7 @@ use crate::common::{
     assert_ba2_parity, assert_completed_without_errors, load_ba2_golden, load_parity_fixture,
     require_live_server, submit_and_complete,
 };
-use batchalign_app::api::{FilePayload, JobStatus};
+use batchalign_app::api::{ReleasedCommand, FilePayload, JobStatus};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CorefOptions, MorphotagOptions, TranslateOptions, UtsegOptions,
 };
@@ -25,7 +25,7 @@ use batchalign_app::worker::InferTask;
 
 /// Submit a fixture through a command and compare to BA2 golden.
 async fn run_parity_test(
-    command: &str,
+    command: ReleasedCommand,
     task: InferTask,
     fixture_name: &str,
     lang: &str,
@@ -68,7 +68,7 @@ async fn run_parity_test(
     let output = &results[0].content;
 
     // Compare against BA2 golden if available.
-    if let Some(golden) = load_ba2_golden(command, fixture_name) {
+    if let Some(golden) = load_ba2_golden(command.as_ref(), fixture_name) {
         assert_ba2_parity(&format!("{command}_{fixture_name}"), output, &golden);
     }
 }
@@ -122,7 +122,7 @@ fn coref_opts() -> CommandOptions {
 #[tokio::test]
 async fn parity_morphotag_eng_disfluency() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "eng_disfluency",
         "eng",
@@ -134,7 +134,7 @@ async fn parity_morphotag_eng_disfluency() {
 #[tokio::test]
 async fn parity_morphotag_eng_multi_speaker() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "eng_multi_speaker",
         "eng",
@@ -146,7 +146,7 @@ async fn parity_morphotag_eng_multi_speaker() {
 #[tokio::test]
 async fn parity_morphotag_eng_retokenize() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "eng_retokenize",
         "eng",
@@ -158,7 +158,7 @@ async fn parity_morphotag_eng_retokenize() {
 #[tokio::test]
 async fn parity_morphotag_eng_overlap() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "eng_overlap_ca",
         "eng",
@@ -170,7 +170,7 @@ async fn parity_morphotag_eng_overlap() {
 #[tokio::test]
 async fn parity_morphotag_spa() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "spa_simple",
         "spa",
@@ -182,7 +182,7 @@ async fn parity_morphotag_spa() {
 #[tokio::test]
 async fn parity_morphotag_fra() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "fra_simple",
         "fra",
@@ -194,7 +194,7 @@ async fn parity_morphotag_fra() {
 #[tokio::test]
 async fn parity_morphotag_deu() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "deu_clinical",
         "deu",
@@ -206,7 +206,7 @@ async fn parity_morphotag_deu() {
 #[tokio::test]
 async fn parity_morphotag_jpn() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "jpn_clinical",
         "jpn",
@@ -218,7 +218,7 @@ async fn parity_morphotag_jpn() {
 #[tokio::test]
 async fn parity_morphotag_eng_bilingual() {
     run_parity_test(
-        "morphotag",
+        ReleasedCommand::Morphotag,
         InferTask::Morphosyntax,
         "eng_bilingual",
         "eng",
@@ -234,7 +234,7 @@ async fn parity_morphotag_eng_bilingual() {
 #[tokio::test]
 async fn parity_utseg_eng_multi() {
     run_parity_test(
-        "utseg",
+        ReleasedCommand::Utseg,
         InferTask::Utseg,
         "eng_multi_speaker",
         "eng",
@@ -245,13 +245,13 @@ async fn parity_utseg_eng_multi() {
 
 #[tokio::test]
 async fn parity_utseg_spa() {
-    run_parity_test("utseg", InferTask::Utseg, "spa_simple", "spa", utseg_opts()).await;
+    run_parity_test(ReleasedCommand::Utseg, InferTask::Utseg, "spa_simple", "spa", utseg_opts()).await;
 }
 
 #[tokio::test]
 async fn parity_utseg_eng_disfluency() {
     run_parity_test(
-        "utseg",
+        ReleasedCommand::Utseg,
         InferTask::Utseg,
         "eng_disfluency",
         "eng",
@@ -267,7 +267,7 @@ async fn parity_utseg_eng_disfluency() {
 #[tokio::test]
 async fn parity_translate_eng() {
     run_parity_test(
-        "translate",
+        ReleasedCommand::Translate,
         InferTask::Translate,
         "eng_disfluency",
         "eng",
@@ -279,7 +279,7 @@ async fn parity_translate_eng() {
 #[tokio::test]
 async fn parity_translate_spa() {
     run_parity_test(
-        "translate",
+        ReleasedCommand::Translate,
         InferTask::Translate,
         "spa_simple",
         "spa",
@@ -295,7 +295,7 @@ async fn parity_translate_spa() {
 #[tokio::test]
 async fn parity_coref_eng_disfluency() {
     run_parity_test(
-        "coref",
+        ReleasedCommand::Coref,
         InferTask::Coref,
         "eng_disfluency",
         "eng",
@@ -307,7 +307,7 @@ async fn parity_coref_eng_disfluency() {
 #[tokio::test]
 async fn parity_coref_eng_multi_speaker() {
     run_parity_test(
-        "coref",
+        ReleasedCommand::Coref,
         InferTask::Coref,
         "eng_multi_speaker",
         "eng",
