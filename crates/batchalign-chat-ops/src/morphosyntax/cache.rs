@@ -14,15 +14,44 @@ pub type MwtDict = BTreeMap<String, Vec<String>>;
 // Cache key computation
 // ---------------------------------------------------------------------------
 
+/// Morphosyntax pipeline version for cache invalidation.
+///
+/// Bump this constant whenever the morphosyntax pipeline changes in a way that
+/// would produce different results for the same input. Examples:
+///
+/// - Adding or removing POS post-processing (e.g., PyCantonese POS override)
+/// - Changing the UD→CHAT mapping rules
+/// - Changing Stanza model selection for a language
+///
+/// This is appended to the cache key so old cached results are automatically
+/// ignored after a pipeline change.
+///
+/// ## Change Log
+///
+/// | Version | Date       | Change |
+/// |---------|------------|--------|
+/// | 1       | pre-2026   | Original Stanza-only pipeline |
+/// | 2       | 2026-03-23 | Added PyCantonese POS override for Cantonese (yue) |
+const MORPHOSYNTAX_PIPELINE_VERSION: u32 = 2;
+
 /// Compute the cache key for a morphosyntax payload.
 ///
-/// Formula: `BLAKE3("{words joined by space}|{lang}|mwt:{sorted entries}")`.
-/// When `mwt` is empty the suffix is just `|mwt:` (backwards-compatible with
-/// the old `|mwt` sentinel when no lexicon is supplied).
+/// Formula: `BLAKE3("v{VERSION}|{words}|{lang}|mwt:{entries}[|retok]")`.
+/// The pipeline version prefix ensures cache invalidation when the pipeline
+/// changes (e.g., new POS post-processing, model changes).
 ///
 /// Uses incremental hashing to avoid intermediate `String` allocation from `join()`.
-pub fn cache_key(words: &[String], lang: &LanguageCode, mwt: &MwtDict) -> CacheKey {
+pub fn cache_key(
+    words: &[String],
+    lang: &LanguageCode,
+    mwt: &MwtDict,
+    retokenize: bool,
+) -> CacheKey {
     let mut hasher = blake3::Hasher::new();
+    // Pipeline version prefix — invalidates all old cache entries on bump.
+    hasher.update(b"v");
+    hasher.update(MORPHOSYNTAX_PIPELINE_VERSION.to_string().as_bytes());
+    hasher.update(b"|");
     for (i, w) in words.iter().enumerate() {
         if i > 0 {
             hasher.update(b" ");
@@ -43,6 +72,9 @@ pub fn cache_key(words: &[String], lang: &LanguageCode, mwt: &MwtDict) -> CacheK
             hasher.update(v.as_bytes());
         }
         hasher.update(b";");
+    }
+    if retokenize {
+        hasher.update(b"|retok");
     }
     CacheKey::from_hasher(hasher)
 }

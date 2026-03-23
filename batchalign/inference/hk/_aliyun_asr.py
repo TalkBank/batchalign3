@@ -338,7 +338,7 @@ def infer_aliyun_asr_v2(item: AsrBatchItem) -> MonologueAsrResponse:
 
     Aliyun still requires the websocket transport implemented in Python, but
     the live V2 worker path should call that transport directly instead of
-    wrapping a single item in the legacy batch-infer request shape.
+    wrapping a single item in the batch-infer request shape.
     """
 
     return _transcribe_to_monologues(item.audio_path)

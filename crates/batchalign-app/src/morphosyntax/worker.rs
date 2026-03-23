@@ -23,6 +23,7 @@ pub(crate) async fn infer_batch(
     items: &[BatchItemWithPosition],
     lang: &LanguageCode3,
     mwt: &MwtDict,
+    retokenize: bool,
 ) -> Result<Vec<UdResponse>, ServerError> {
     let payload_items: Vec<_> = items.iter().map(|(_, _, item, _)| item.clone()).collect();
 
@@ -32,13 +33,19 @@ pub(crate) async fn infer_batch(
         ))
     })?;
     let request_ids = PreparedTextRequestIdsV2::for_task("morphosyntax");
-    let request =
-        build_morphosyntax_request_v2(artifacts.store(), &request_ids, lang, &payload_items, mwt)
-            .map_err(|error| {
-            ServerError::Validation(format!(
-                "failed to build morphosyntax V2 worker request: {error}"
-            ))
-        })?;
+    let request = build_morphosyntax_request_v2(
+        artifacts.store(),
+        &request_ids,
+        lang,
+        &payload_items,
+        mwt,
+        retokenize,
+    )
+    .map_err(|error| {
+        ServerError::Validation(format!(
+            "failed to build morphosyntax V2 worker request: {error}"
+        ))
+    })?;
 
     info!(
         num_items = items.len(),

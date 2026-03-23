@@ -271,15 +271,20 @@ fn stage_partition_cache<'a, 'ctx>(
             ctx.miss_keys = ctx
                 .batch_items
                 .iter()
-                .map(|(_, _, item, _)| cache_key(&item.words, &item.lang, ctx.mwt))
+                .map(|(_, _, item, _)| {
+                    let retok = ctx.tokenization_mode == TokenizationMode::StanzaRetokenize;
+                    cache_key(&item.words, &item.lang, ctx.mwt, retok)
+                })
                 .collect();
             ctx.misses = ctx.batch_items.clone();
         } else {
+            let retok = ctx.tokenization_mode == TokenizationMode::StanzaRetokenize;
             let (hits, miss_keys, misses) = partition_by_cache(
                 &ctx.batch_items,
                 ctx.services.cache,
                 ctx.services.engine_version,
                 ctx.mwt,
+                retok,
             )
             .await;
             ctx.hits = hits;
@@ -312,7 +317,9 @@ fn stage_infer<'a, 'ctx>(ctx: &'a mut MorphosyntaxPipelineContext<'ctx>) -> Stag
         }
         ctx.miss_line_indices = ctx.misses.iter().map(|(idx, ..)| *idx).collect();
         let lang_code = ctx.lang.clone();
-        ctx.ud_responses = infer_batch(ctx.services.pool, &ctx.misses, &lang_code, ctx.mwt).await?;
+        let retokenize = ctx.tokenization_mode == TokenizationMode::StanzaRetokenize;
+        ctx.ud_responses =
+            infer_batch(ctx.services.pool, &ctx.misses, &lang_code, ctx.mwt, retokenize).await?;
         Ok(())
     })
 }

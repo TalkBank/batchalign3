@@ -17,7 +17,7 @@ from batchalign.inference.hk._cantonese_fa import (
 )
 from batchalign.worker._types import BatchInferRequest, InferTask
 
-from .conftest import PyCantoneseFake
+from .conftest import PyCantoneseFake  # still used by FA host fixture in conftest
 
 
 # ---------------------------------------------------------------------------
@@ -26,30 +26,32 @@ from .conftest import PyCantoneseFake
 
 
 class TestHanziToJyutping:
-    def test_single_char(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "好") == "hou"
+    """Tests use real PyCantonese — no faked jyutping dictionary."""
 
-    def test_multi_char(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "你好") == "nei'hou"
+    def test_single_char(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "好") == "hou"
 
-    def test_unknown_char_passthrough(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "xyz") == "xyz"
+    def test_multi_char(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "你好") == "nei'hou"
 
-    def test_mixed_known_unknown(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "好x") == "hou"
+    def test_unknown_char_passthrough(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "xyz") == "xyz"
 
-    def test_empty_string(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "") == ""
+    def test_mixed_known_unknown(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "好x") == "hou"
 
-    def test_corpus_word_gam(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "咁") == "gam"
+    def test_empty_string(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "") == ""
 
-    def test_corpus_word_gaau(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "搞") == "gaau"
+    def test_corpus_word_gam(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "咁") == "gam"
 
-    def test_tone_stripping(self, pc_fake: PyCantoneseFake) -> None:
-        assert _hanzi_to_jyutping(pc_fake, "我") == "ngo"
-        assert _hanzi_to_jyutping(pc_fake, "係") == "hai"
+    def test_corpus_word_gaau(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "搞") == "gaau"
+
+    def test_tone_stripping(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _hanzi_to_jyutping(pc_real, "我") == "ngo"
+        assert _hanzi_to_jyutping(pc_real, "係") == "hai"
 
     def test_type_error_returns_original_text(self) -> None:
         class _BrokenPc:
@@ -66,15 +68,17 @@ class TestHanziToJyutping:
 
 
 class TestMaybeRomanize:
-    def test_yue_romanizes(self, pc_fake: PyCantoneseFake) -> None:
-        assert _maybe_romanize(pc_fake, "好", "yue") == "hou"
+    """Tests use real PyCantonese — no faked jyutping dictionary."""
 
-    def test_non_yue_passthrough(self, pc_fake: PyCantoneseFake) -> None:
-        assert _maybe_romanize(pc_fake, "hello", "eng") == "hello"
+    def test_yue_romanizes(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _maybe_romanize(pc_real, "好", "yue") == "hou"
 
-    def test_corpus_phrase_words(self, pc_fake: PyCantoneseFake) -> None:
+    def test_non_yue_passthrough(self, pc_real) -> None:  # type: ignore[no-untyped-def]
+        assert _maybe_romanize(pc_real, "hello", "eng") == "hello"
+
+    def test_corpus_phrase_words(self, pc_real) -> None:  # type: ignore[no-untyped-def]
         words = ["咁", "搞", "笑"]
-        romanized = [_maybe_romanize(pc_fake, w, "yue") for w in words]
+        romanized = [_maybe_romanize(pc_real, w, "yue") for w in words]
         assert romanized == ["gam", "gaau", "siu"]
 
 

@@ -44,7 +44,7 @@ pub fn extract_payloads_json(
     let payloads: Vec<MorphosyntaxPayloadJson> = batch_items
         .into_iter()
         .map(|(line_idx, _utt_ordinal, item, _words)| {
-            let key = cache_key(&item.words, &item.lang, mwt);
+            let key = cache_key(&item.words, &item.lang, mwt, false);
             MorphosyntaxPayloadJson {
                 line_idx,
                 words: item.words,

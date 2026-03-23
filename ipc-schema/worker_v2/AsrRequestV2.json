@@ -26,8 +26,12 @@
       ]
     },
     "lang": {
-      "description": "Input language for the transcript.",
-      "type": "string"
+      "description": "Worker-runtime language hint for the transcript.\n\nThis may be a concrete ISO 639-3 code or the `\"auto\"` worker sentinel used by local Whisper auto-detect.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkerLanguage"
+        }
+      ]
     }
   },
   "definitions": {
@@ -142,6 +146,10 @@
           }
         }
       ]
+    },
+    "WorkerLanguage": {
+      "description": "Worker-runtime language string: ISO 639-3 code, \"auto\", or empty string.",
+      "type": "string"
     }
   }
 }

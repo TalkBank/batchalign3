@@ -54,7 +54,7 @@ def load_funaudio_asr(lang: LanguageCode, engine_overrides: EngineOverrides | No
     lang : str
         ISO 639-3 language code (e.g. ``"yue"``).
     engine_overrides : EngineOverrides or None
-        Plugin engine overrides dict (currently unused, reserved for
+        Engine overrides dict (currently unused, reserved for
         future model selection).
     """
     global _recognizer
@@ -169,7 +169,7 @@ def _transcribe_to_monologues(item: AsrBatchItem) -> MonologueAsrResponse:
 def infer_funaudio_asr_v2(item: AsrBatchItem) -> MonologueAsrResponse:
     """Run one typed FunAudio ASR request for worker protocol V2.
 
-    The live V2 worker path bypasses the legacy batch-infer wrapper so Python
+    The live V2 worker path calls the transport directly so Python
     does not reassemble a batch envelope for one request.
     """
 

@@ -30,22 +30,75 @@ fn extract_words(utt: &Utterance) -> Vec<extract::ExtractedWord> {
     words
 }
 
-/// Parse a %mor tier string into (mors, terminator) using the real parser.
-fn parse_mor(line: &str) -> (Vec<Mor>, Option<String>) {
-    let errors = talkbank_model::NullErrorSink;
-    let outcome = todo!("mor_tier parser removed with Chumsky — use tree-sitter"); // was: talkbank_direct_parser::mor_tier::parse_mor_tier_content(line, 0, &errors);
-    let tier = outcome.into_option().unwrap();
-    let terminator = tier.terminator.map(|s| s.to_string());
-    let items: Vec<Mor> = tier.items.iter().cloned().collect();
-    (items, terminator)
+/// Construct a `Mor` item from a compact `"POS|lemma"` or `"POS:sub|lemma-Feat"` string.
+///
+/// Supports:
+/// - `"v|eat"` → POS=v, lemma=eat
+/// - `"pro|I"` → POS=pro:sub, lemma=I
+/// - `"n|cookie-PL"` → POS=n, lemma=cookie, feature=PL
+/// - `"aux|go&PRESP"` → POS=aux, lemma=go, feature=PRESP
+/// - `"v|do-3S"` → POS=v, lemma=do, feature=3S
+///
+/// batchalign3 constructs `Mor` values from structured Stanza output (not CHAT text),
+/// so this helper mirrors that direct-construction path rather than parsing CHAT syntax.
+fn mor(spec: &str) -> Mor {
+    use talkbank_model::model::{MorFeature, MorStem, MorWord, PosCategory};
+
+    let (pos_str, rest) = spec.split_once('|').unwrap_or((spec, ""));
+
+    // Find the first feature separator ('-' or '&') to split lemma from features.
+    let sep_pos = rest.find(|c: char| c == '-' || c == '&');
+    let (lemma, features_str) = match sep_pos {
+        Some(pos) => (&rest[..pos], &rest[pos + 1..]),
+        None => (rest, ""),
+    };
+
+    let mut word = MorWord::new(PosCategory::new(pos_str), MorStem::new(lemma));
+    if !features_str.is_empty() {
+        // Features are separated by '-' (suffixes) or '&' (fusion)
+        for feat in features_str.split(|c: char| c == '-' || c == '&') {
+            if !feat.is_empty() {
+                word = word.with_feature(MorFeature::new(feat));
+            }
+        }
+    }
+    Mor::new(word)
 }
 
-/// Parse a %gra tier string into GrammaticalRelations using the real parser.
-fn parse_gra(line: &str) -> Vec<GrammaticalRelation> {
-    let errors = talkbank_model::NullErrorSink;
-    let outcome = todo!("gra_tier parser removed with Chumsky — use tree-sitter"); // was: talkbank_direct_parser::gra_tier::parse_gra_tier_content(line, 0, &errors);
-    let tier = outcome.into_option().unwrap();
-    tier.relations.0
+/// Construct a `GrammaticalRelation` from `"index|head|RELATION"`.
+fn gra(spec: &str) -> GrammaticalRelation {
+    let parts: Vec<&str> = spec.split('|').collect();
+    assert_eq!(parts.len(), 3, "GRA spec must be 'index|head|RELATION': {spec}");
+    GrammaticalRelation::new(
+        parts[0].parse::<usize>().unwrap(),
+        parts[1].parse::<usize>().unwrap(),
+        parts[2],
+    )
+}
+
+/// Build a Mor vector and optional terminator from a compact spec string.
+///
+/// Format: `"POS|lemma POS|lemma ."` — words separated by spaces, terminator is
+/// the trailing punctuation character.
+fn build_mor(spec: &str) -> (Vec<Mor>, Option<String>) {
+    let tokens: Vec<&str> = spec.split_whitespace().collect();
+    let mut mors = Vec::new();
+    let mut terminator = None;
+    for tok in tokens {
+        if tok == "." || tok == "?" || tok == "!" {
+            terminator = Some(tok.to_string());
+        } else {
+            mors.push(mor(tok));
+        }
+    }
+    (mors, terminator)
+}
+
+/// Build a GrammaticalRelation vector from a compact spec string.
+///
+/// Format: `"1|2|SUBJ 2|0|ROOT 3|2|PUNCT"` — relations separated by spaces.
+fn build_gra(spec: &str) -> Vec<GrammaticalRelation> {
+    spec.split_whitespace().map(gra).collect()
 }
 
 #[test]
@@ -132,8 +185,8 @@ fn test_same_tokenization() {
     let original_words = extract_words(utt);
     let stanza_tokens = vec!["I".to_string(), "eat".to_string()];
 
-    let (mors, term) = parse_mor("pro:sub|I v|eat .");
-    let gra_rels = parse_gra("1|2|SUBJ 2|0|ROOT 3|2|PUNCT");
+    let (mors, term) = build_mor("pro|I v|eat .");
+    let gra_rels = build_gra("1|2|SUBJ 2|0|ROOT 3|2|PUNCT");
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -143,7 +196,7 @@ fn test_same_tokenization() {
         "Main tier should be unchanged: {output}"
     );
     assert!(
-        output.contains("%mor:\tpro:sub|I v|eat ."),
+        output.contains("%mor:\tpro|I v|eat ."),
         "Should have %mor tier: {output}"
     );
     assert!(output.contains("%gra:"), "Should have %gra tier: {output}");
@@ -158,8 +211,8 @@ fn test_different_text_1_to_1() {
     let original_words = extract_words(utt);
     let stanza_tokens = vec!["going".to_string(), "eat".to_string()];
 
-    let (mors, term) = parse_mor("aux|go&PRESP v|eat .");
-    let gra_rels = parse_gra("1|2|AUX 2|0|ROOT 3|2|PUNCT");
+    let (mors, term) = build_mor("aux|go&PRESP v|eat .");
+    let gra_rels = build_gra("1|2|AUX 2|0|ROOT 3|2|PUNCT");
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -187,8 +240,8 @@ fn test_clitic_split_1_to_n() {
         "know".to_string(),
     ];
 
-    let (mors, term) = parse_mor("pro:sub|I v|do neg|not v|know .");
-    let gra_rels = parse_gra("1|2|SUBJ 2|0|ROOT 3|2|NEG 4|2|XCOMP 5|4|PUNCT");
+    let (mors, term) = build_mor("pro|I v|do neg|not v|know .");
+    let gra_rels = build_gra("1|2|SUBJ 2|0|ROOT 3|2|NEG 4|2|XCOMP 5|4|PUNCT");
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -213,8 +266,8 @@ fn test_preserves_non_word_content() {
 
     let stanza_tokens = vec!["I".to_string(), "need".to_string(), "cookie".to_string()];
 
-    let (mors, term) = parse_mor("pro:sub|I v|need n|cookie .");
-    let gra_rels = parse_gra("1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT");
+    let (mors, term) = build_mor("pro|I v|need n|cookie .");
+    let gra_rels = build_gra("1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT");
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -225,7 +278,7 @@ fn test_preserves_non_word_content() {
         "Retrace group should be preserved: {output}"
     );
     assert!(
-        output.contains("%mor:\tpro:sub|I v|need n|cookie ."),
+        output.contains("%mor:\tpro|I v|need n|cookie ."),
         "Should have correct %mor: {output}"
     );
 }
@@ -245,8 +298,8 @@ fn test_xbxxx_restoration() {
 
     let stanza_tokens = vec!["xbxxx".to_string(), "is".to_string(), "yummy".to_string()];
 
-    let (mors, term) = parse_mor("c|gumma v|be&3S adj|yummy .");
-    let gra_rels = parse_gra("1|2|FLAT 2|0|ROOT 3|2|XCOMP 4|2|PUNCT");
+    let (mors, term) = build_mor("c|gumma v|be&3S adj|yummy .");
+    let gra_rels = build_gra("1|2|FLAT 2|0|ROOT 3|2|XCOMP 4|2|PUNCT");
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -277,11 +330,11 @@ fn test_round_trip_serialization() {
         "know".to_string(),
     ];
 
-    let mor_str = "pro:sub|I v|do neg|not v|know .";
+    let mor_str = "pro|I v|do neg|not v|know .";
     let gra_str = "1|2|SUBJ 2|0|ROOT 3|2|NEG 4|2|XCOMP 5|4|PUNCT";
 
-    let (mors, term) = parse_mor(mor_str);
-    let gra_rels = parse_gra(gra_str);
+    let (mors, term) = build_mor(mor_str);
+    let gra_rels = build_gra(gra_str);
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -330,8 +383,8 @@ fn test_comma_separator_preserves_words() {
     let mor_str = "intj|okay cm|cm v|push det|the n|start n|button .";
     let gra_str = "1|3|DISCOURSE 2|1|PUNCT 3|6|ROOT 4|6|DET 5|6|COMPOUND 6|3|OBJ 7|3|PUNCT";
 
-    let (mors, term) = parse_mor(mor_str);
-    let gra_rels = parse_gra(gra_str);
+    let (mors, term) = build_mor(mor_str);
+    let gra_rels = build_gra(gra_str);
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -372,8 +425,8 @@ fn test_non_nlp_words_preserved() {
     let mor_str = "n|popcorn !";
     let gra_str = "1|0|ROOT 2|1|PUNCT";
 
-    let (mors, term) = parse_mor(mor_str);
-    let gra_rels = parse_gra(gra_str);
+    let (mors, term) = build_mor(mor_str);
+    let gra_rels = build_gra(gra_str);
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -421,8 +474,8 @@ fn test_xxx_preserved_in_utterance() {
     let gra_str =
         "1|6|DISCOURSE 2|1|PUNCT 3|6|SUBJ 4|6|AUX 5|6|ADVMOD 6|0|ROOT 7|6|OBJ 8|6|ADVMOD 9|6|PUNCT";
 
-    let (mors, term) = parse_mor(mor_str);
-    let gra_rels = parse_gra(gra_str);
+    let (mors, term) = build_mor(mor_str);
+    let gra_rels = build_gra(gra_str);
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -485,8 +538,8 @@ fn test_whitespace_in_stanza_token_stripped() {
     let mor_str = "n|ふす .";
     let gra_str = "1|0|ROOT 2|1|PUNCT";
 
-    let (mors, term) = parse_mor(mor_str);
-    let gra_rels = parse_gra(gra_str);
+    let (mors, term) = build_mor(mor_str);
+    let gra_rels = build_gra(gra_str);
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 
@@ -527,8 +580,8 @@ fn test_n_to_1_merge_no_duplication() {
     let mor_str = "aux|go&PRESP v|eat .";
     let gra_str = "1|2|AUX 2|0|ROOT 3|2|PUNCT";
 
-    let (mors, term) = parse_mor(mor_str);
-    let gra_rels = parse_gra(gra_str);
+    let (mors, term) = build_mor(mor_str);
+    let gra_rels = build_gra(gra_str);
 
     retokenize_utterance(utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
 

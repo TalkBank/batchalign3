@@ -11,8 +11,9 @@ use crate::workflow::text_batch::{
     TextBatchFileInput, TextBatchFileResult, TextBatchFileResults,
 };
 use batchalign_chat_ops::morphosyntax::{
-    BatchItemWithPosition, MwtDict, cache_key, clear_morphosyntax, collect_payloads,
-    declared_languages, extract_strings, inject_from_cache, inject_results, validate_mor_alignment,
+    BatchItemWithPosition, MwtDict, TokenizationMode, cache_key, clear_morphosyntax,
+    collect_payloads, declared_languages, extract_strings, inject_from_cache, inject_results,
+    validate_mor_alignment,
 };
 use batchalign_chat_ops::nlp::UdResponse;
 use batchalign_chat_ops::parse::{is_dummy, parse_lenient};
@@ -110,19 +111,46 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             continue;
         }
 
+        // Warn when Cantonese input appears to be per-character without --retokenize.
+        let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+        if !retokenize && params.lang.as_ref() == "yue" {
+            let per_char_count = batch_items
+                .iter()
+                .flat_map(|(_, _, item, _)| item.words.iter())
+                .filter(|w| w.chars().count() == 1 && w.chars().all(|c| c > '\u{2E80}'))
+                .count();
+            let total_words: usize = batch_items
+                .iter()
+                .map(|(_, _, item, _)| item.words.len())
+                .sum();
+            if total_words > 0 && per_char_count * 100 / total_words > 80 {
+                warn!(
+                    "Cantonese input appears to be per-character tokens \
+                     ({per_char_count}/{total_words} single-CJK words). \
+                     Consider --retokenize for word-level analysis."
+                );
+            }
+        }
+
         // Cache lookup
         let (hits, miss_keys, misses) = if params.cache_policy.should_skip() {
             let keys: Vec<CacheKey> = batch_items
                 .iter()
-                .map(|(_, _, item, _)| cache_key(&item.words, &item.lang, params.mwt))
+                .map(|(_, _, item, _)| {
+                    let retokenize =
+                        params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+                    cache_key(&item.words, &item.lang, params.mwt, retokenize)
+                })
                 .collect();
             (HashMap::new(), keys, batch_items)
         } else {
+            let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
             partition_by_cache(
                 &batch_items,
                 services.cache,
                 services.engine_version,
                 params.mwt,
+                retokenize,
             )
             .await
         };
@@ -156,7 +184,8 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     let all_ud_responses = if all_misses.is_empty() {
         Vec::new()
     } else {
-        match infer_batch(services.pool, &all_misses, params.lang, params.mwt).await {
+        let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+        match infer_batch(services.pool, &all_misses, params.lang, params.mwt, retokenize).await {
             Ok(responses) => responses,
             Err(e) => {
                 warn!(error = %e, "Batch infer failed for all files");
@@ -295,6 +324,7 @@ pub(crate) async fn partition_by_cache(
     cache: &UtteranceCache,
     engine_version: &EngineVersion,
     mwt: &MwtDict,
+    retokenize: bool,
 ) -> (
     HashMap<usize, serde_json::Value>,
     Vec<CacheKey>,
@@ -302,7 +332,7 @@ pub(crate) async fn partition_by_cache(
 ) {
     let keys: Vec<CacheKey> = batch_items
         .iter()
-        .map(|(_, _, item, _)| cache_key(&item.words, &item.lang, mwt))
+        .map(|(_, _, item, _)| cache_key(&item.words, &item.lang, mwt, retokenize))
         .collect();
 
     let key_strings: Vec<String> = keys.iter().map(|k| k.as_str().to_string()).collect();

@@ -82,7 +82,7 @@ This runs in the core Rust pipeline (`batchalign-chat-ops`), **not** in a
 separate plugin package. Every ASR engine's output benefits from it
 automatically.
 
-See [Cantonese Processing](cantonese-processing.md) for the full replacement
+See [Cantonese Processing](languages/cantonese.md) for the full replacement
 table and architecture.
 
 ### Stage 4: RTL Punctuation Normalization
@@ -147,7 +147,7 @@ Cross-language infrastructure:
 
 The Cantonese FA engine converts Chinese characters to tone-stripped jyutping
 romanization before alignment, because Wave2Vec MMS was trained on romanized
-text. See [Cantonese Processing](cantonese-processing.md).
+text. See [Cantonese Processing](languages/cantonese.md).
 
 ## Language Code Flow
 
@@ -180,11 +180,12 @@ the same normalization contract.
 ## Related Pages
 
 - [Language Code Resolution](language-code-resolution.md) — ISO mapping, model resolution
-- [Cantonese Processing](cantonese-processing.md) — normalization, char tokenization, FA
+- [Cantonese Processing](languages/cantonese.md) — normalization, char tokenization, FA
 - [Hebrew Morphosyntax](hebrew-morphosyntax.md) — HebBinyan, HebExistential
 - [Japanese Morphosyntax](japanese-morphosyntax.md) — verb forms, combined package
 - [Number Expansion](number-expansion.md) — num2chinese, NUM2LANG tables
 - [Utterance Segmentation](utterance-segmentation.md) — per-language models
 - [Non-English Workarounds](../developer/non-english-workarounds.md) — workaround and convention catalog
 - [Whisper ASR](whisper-asr.md) — engine selection, model IDs
-- [HK/Cantonese Engines](../architecture/hk-cantonese-engines.md) — Tencent, Aliyun, FunASR
+- [Cantonese Language Support](languages/cantonese.md) — engines, normalization, word segmentation, FA
+- [Cantonese Engines Architecture](../architecture/hk-cantonese-engines.md) — migration rationale, engine dispatch

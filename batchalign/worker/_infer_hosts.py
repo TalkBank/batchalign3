@@ -1,7 +1,7 @@
 """Bootstrap-owned runtime hosts for worker batch inference.
 
-This module exists to keep request-time dispatch thin for the worker tasks that
-still use the legacy ``batch_infer`` path. The worker bootstrap layer decides
+This module keeps request-time dispatch thin for text tasks that use the
+``BatchInferRequest`` dispatch path. The worker bootstrap layer decides
 which concrete engines are loaded and registers one batch-infer handler per
 task. Request-time code in ``_infer.py`` then routes requests to those
 prepared handlers instead of re-deriving engine policy on every call.

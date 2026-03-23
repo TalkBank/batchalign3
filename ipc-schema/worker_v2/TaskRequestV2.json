@@ -36,8 +36,12 @@
           ]
         },
         "lang": {
-          "description": "Input language for the transcript.",
-          "type": "string"
+          "description": "Worker-runtime language hint for the transcript.\n\nThis may be a concrete ISO 639-3 code or the `\"auto\"` worker sentinel used by local Whisper auto-detect.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkerLanguage"
+            }
+          ]
         }
       }
     },
@@ -118,6 +122,11 @@
         "payload_ref_id": {
           "description": "Reference to the prepared text batch payload.",
           "type": "string"
+        },
+        "retokenize": {
+          "description": "Whether Stanza/PyCantonese should re-tokenize the input.\n\nWhen `true`, CJK word segmentation is applied before POS tagging: - Cantonese (`yue`): PyCantonese `segment()` groups characters into words - Mandarin (`cmn`/`zho`): Stanza neural tokenizer segments the text\n\nDefaults to `false` for backward compatibility with workers that do not yet understand this field.",
+          "default": false,
+          "type": "boolean"
         }
       }
     },
@@ -521,6 +530,10 @@
           }
         }
       ]
+    },
+    "WorkerLanguage": {
+      "description": "Worker-runtime language string: ISO 639-3 code, \"auto\", or empty string.",
+      "type": "string"
     }
   }
 }

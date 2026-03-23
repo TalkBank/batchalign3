@@ -1,7 +1,7 @@
 # Testing
 
 **Status:** Current
-**Last modified:** 2026-03-21 22:32 EDT
+**Last modified:** 2026-03-23 15:00 EDT
 
 ## Philosophy
 
@@ -70,6 +70,14 @@ On 2026-03-19, two kernel OOM panics in one day were caused by ML test
 binaries spawning concurrent Whisper workers during `cargo nextest run`.
 Each golden test binary was a separate process that started its own server
 with its own worker pool. Running them in parallel exhausted 64 GB of RAM.
+
+On 2026-03-23, a third kernel OOM panic was caused by running Python
+`@pytest.mark.golden` tests repeatedly with the default `-n 3` from
+`pytest.ini`. Each xdist worker loaded its own Stanza model instance
+(~500 MB). Over 5+ invocations combined with cargo builds and a local
+batchalign daemon, cumulative memory pressure exceeded 64 GB. This led
+to the three-layer Python-side OOM guard in `conftest.py`.
+
 See `docs/postmortems/` for incident details.
 
 ### Implemented solution: single binary
@@ -95,6 +103,9 @@ These remain as additional safety nets:
 | **Global worker cap** | `max_total_workers` (RAM / 4GB, max 32) | Multi-key pool explosion |
 | **`WorkerPool::Drop`** | Kills idle workers when pool is dropped | Test cleanup on panic/exit |
 | **PID file reaper** | `~/.batchalign3/worker-pids/` scanned on startup | Orphans from crashed servers |
+| **pytest OOM guard (configure)** | Forces `-n 0` when `-m golden` on < 128 GB machine | Standard golden invocation |
+| **pytest OOM guard (collection)** | Aborts if golden tests collected with `-n > 0` on < 128 GB | Overridden addopts |
+| **pytest OOM guard (fixture)** | Per-test `_guard_golden_oom` autouse fixture fails in xdist workers on < 128 GB | Belt-and-suspenders; cannot be bypassed |
 | **Claude Code guard hook** | Blocks `cargo test`/`cargo nextest` if workers detected | AI assistant sessions |
 
 ## Quick reference

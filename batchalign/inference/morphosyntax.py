@@ -81,6 +81,59 @@ JSONObject = dict[str, WorkerJSONValue]
 
 
 # ---------------------------------------------------------------------------
+# CJK word segmentation
+# ---------------------------------------------------------------------------
+
+
+def _segment_cantonese(words: list[str]) -> list[str]:
+    """Segment Cantonese per-character tokens into words using PyCantonese.
+
+    Joins input characters into a single string and uses PyCantonese's
+    word segmentation to produce word-level tokens. This is called when
+    ``--retokenize`` is used with Cantonese (``yue``) morphotag.
+    """
+    if not words:
+        return []
+    import pycantonese
+
+    text = "".join(words)
+    if not text:
+        return []
+    return pycantonese.segment(text)
+
+
+def _override_pos_with_pycantonese(
+    ud_words: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Override Stanza POS tags with PyCantonese POS for Cantonese words.
+
+    Stanza's Mandarin-trained model misclassifies core Cantonese vocabulary
+    (~50% accuracy). PyCantonese's POS tagger scores ~94% on the same words.
+    This function replaces ``upos`` in each UD word dict while preserving
+    all other fields (lemma, deprel, head, etc.) from Stanza.
+
+    Called as a post-processing step when ``retokenize=True`` and ``lang=yue``.
+    """
+    import pycantonese
+
+    texts = [w.get("text", "") for w in ud_words]
+    if not texts:
+        return ud_words
+
+    tagged = pycantonese.pos_tag(texts)
+    tag_map = {word: pos for word, pos in tagged}
+
+    result = []
+    for w in ud_words:
+        text = w.get("text", "")
+        pyc_pos = tag_map.get(text)
+        if pyc_pos is not None:
+            w = {**w, "upos": pyc_pos}
+        result.append(w)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -189,8 +242,13 @@ def batch_infer_morphosyntax(
             continue
 
         words = list(item.words)
-        text = " ".join(words).replace("(", "").replace(")", "").strip()
         item_lang = item.lang or req.lang
+
+        # Apply PyCantonese word segmentation for Cantonese retokenize
+        if req.retokenize and item_lang in ("yue",):
+            words = _segment_cantonese(words)
+
+        text = " ".join(words).replace("(", "").replace(")", "").strip()
 
         if item_lang not in by_lang:
             by_lang[item_lang] = []
@@ -204,7 +262,24 @@ def batch_infer_morphosyntax(
         texts = [text for _, text, _ in lang_items]
         word_lists = [words for _, _, words in lang_items]
 
-        nlp = nlp_pipelines.get(lang_code)
+        # Mandarin retokenize: use Stanza neural tokenizer instead of pretokenized
+        use_retok_pipeline = req.retokenize and lang_code in ("zho", "cmn")
+        if use_retok_pipeline:
+            retok_key = f"{lang_code}:retok"
+            nlp = nlp_pipelines.get(retok_key)
+            if nlp is None:
+                # Lazy-load the retokenize pipeline on first request
+                from batchalign.worker._stanza_loading import load_stanza_retokenize_model
+
+                load_stanza_retokenize_model(lang_code)
+                nlp = nlp_pipelines.get(retok_key)
+            if nlp is None:
+                L.warning(
+                    "Failed to load retokenize pipeline for %s", lang_code,
+                )
+                use_retok_pipeline = False
+        if not use_retok_pipeline:
+            nlp = nlp_pipelines.get(lang_code)
         if nlp is None:
             L.warning(
                 "No Stanza pipeline for language %s -- items will have empty UdResponse",
@@ -212,15 +287,24 @@ def batch_infer_morphosyntax(
             )
             continue
 
-        combined = "\n\n".join(texts)
-        tok_ctx = contexts.get(lang_code) or contexts.get(req.lang)
+        # For Mandarin retokenize, join without spaces (CJK convention)
+        if use_retok_pipeline:
+            combined = "\n\n".join("".join(w) for w in word_lists)
+        else:
+            combined = "\n\n".join(texts)
+        if use_retok_pipeline:
+            retok_key = f"{lang_code}:retok"
+            tok_ctx = contexts.get(retok_key) or contexts.get(lang_code) or contexts.get(req.lang)
+        else:
+            tok_ctx = contexts.get(lang_code) or contexts.get(req.lang)
 
         try:
             with _maybe_lock():
-                if tok_ctx is not None:
+                # For retokenize, Stanza owns tokenization — don't set original_words
+                if tok_ctx is not None and not use_retok_pipeline:
                     tok_ctx.original_words = word_lists
                 doc = nlp(combined)
-                if tok_ctx is not None:
+                if tok_ctx is not None and not use_retok_pipeline:
                     tok_ctx.original_words = []
 
             sents = doc.to_dict()
@@ -233,10 +317,20 @@ def batch_infer_morphosyntax(
                     len(sents),
                 )
             else:
+                # For Cantonese, override Stanza POS with PyCantonese.
+                # Stanza's Mandarin model scores ~50% on Cantonese vocabulary;
+                # PyCantonese scores ~94%. We keep Stanza's dependency parse
+                # (deprel, head) and lemma — only upos is replaced.
+                # Applied to ALL Cantonese morphotag, not just retokenize,
+                # because the POS accuracy problem affects all Cantonese output.
+                apply_pyc_pos = lang_code in ("yue",)
+
                 for i, idx in enumerate(indices):
-                    # Return raw Stanza to_dict() output — Rust handles validation
+                    sent = sents[i]
+                    if apply_pyc_pos:
+                        sent = _override_pos_with_pycantonese(sent)
                     results[idx] = InferResponse(
-                        result={"raw_sentences": [sents[i]]},
+                        result={"raw_sentences": [sent]},
                         elapsed_s=0.0,
                     )
         except Exception as e:

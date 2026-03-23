@@ -585,6 +585,7 @@ pub fn recover_overlap_timing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use talkbank_parser::TreeSitterParser;
 
     fn make_asr_tokens(words_with_times: &[(&str, u64, u64)]) -> Vec<AsrTimingToken> {
         words_with_times

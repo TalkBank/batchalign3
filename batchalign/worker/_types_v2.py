@@ -270,6 +270,7 @@ class MorphosyntaxRequestV2(BaseModel):
     lang: LanguageCode
     payload_ref_id: WorkerArtifactIdV2
     item_count: int = Field(ge=0)
+    retokenize: bool = False
 
 
 class UtsegRequestV2(BaseModel):

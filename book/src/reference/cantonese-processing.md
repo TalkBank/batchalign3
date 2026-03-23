@@ -1,6 +1,11 @@
 # Cantonese Processing
 
-**Date:** 2026-03-09
+**Status:** Consolidated — see [Cantonese Language Support](languages/cantonese.md)
+**Last updated:** 2026-03-23 12:10 EDT
+
+> This page has been consolidated into the comprehensive
+> [Cantonese Language Support](languages/cantonese.md) page.
+> The content below is preserved for reference but may be outdated.
 
 Cantonese (`yue`) has the most extensive language-specific processing in
 batchalign3. This page covers the **core pipeline** behavior — for the
@@ -252,3 +257,15 @@ Python HK engines call these functions — no OpenCC Python dependency needed.
 
 ### Python (`test_common.py`, `test_helpers.py`, `test_integration.py`)
 - 66+ tests covering normalize, char_tokens, domain replacements
+
+## Word Segmentation
+
+Cantonese ASR engines (FunASR/SenseVoice) typically output per-character tokens.
+The `--retokenize` flag on `morphotag` uses PyCantonese's `segment()` function
+to group characters into words before POS tagging.
+
+This is distinct from the character tokenization (`cantonese_char_tokens()`)
+described above, which is an ASR-level operation for timestamp alignment.
+
+See [Chinese/Cantonese Word Segmentation](chinese-word-segmentation.md) for
+full details and examples.

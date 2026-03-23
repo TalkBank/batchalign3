@@ -528,4 +528,4 @@ Detailed documentation on specific aspects:
 - [L2 & Language Switching](../reference/l2-handling.md) — code-switching
 - [Per-Utterance Language Routing](../reference/per-utterance-language-routing.md)
 - [Per-Word Language Routing](../reference/per-word-language-routing.md)
-- [Cantonese Processing](../reference/cantonese-processing.md) — language-specific pipeline
+- [Cantonese Language Support](../reference/languages/cantonese.md) — comprehensive Cantonese reference

@@ -7,8 +7,8 @@ fn test_cache_key_deterministic() {
     let words = vec!["hello".to_string(), "world".to_string()];
     let eng = talkbank_model::model::LanguageCode::new("eng");
     let empty_mwt = std::collections::BTreeMap::new();
-    let k1 = cache_key(&words, &eng, &empty_mwt);
-    let k2 = cache_key(&words, &eng, &empty_mwt);
+    let k1 = cache_key(&words, &eng, &empty_mwt, false);
+    let k2 = cache_key(&words, &eng, &empty_mwt, false);
     assert_eq!(k1, k2);
     assert!(!k1.as_str().is_empty());
 }
@@ -19,9 +19,22 @@ fn test_cache_key_lang_differs() {
     let eng = talkbank_model::model::LanguageCode::new("eng");
     let spa = talkbank_model::model::LanguageCode::new("spa");
     let empty_mwt = std::collections::BTreeMap::new();
-    let k1 = cache_key(&words, &eng, &empty_mwt);
-    let k2 = cache_key(&words, &spa, &empty_mwt);
+    let k1 = cache_key(&words, &eng, &empty_mwt, false);
+    let k2 = cache_key(&words, &spa, &empty_mwt, false);
     assert_ne!(k1, k2);
+}
+
+#[test]
+fn cache_key_retokenize_differs() {
+    let words = vec!["hello".to_string(), "world".to_string()];
+    let eng = talkbank_model::model::LanguageCode::new("eng");
+    let empty_mwt = std::collections::BTreeMap::new();
+    let k_preserve = cache_key(&words, &eng, &empty_mwt, false);
+    let k_retok = cache_key(&words, &eng, &empty_mwt, true);
+    assert_ne!(
+        k_preserve, k_retok,
+        "retokenize=true must produce a different cache key"
+    );
 }
 
 #[test]
@@ -425,11 +438,11 @@ fn cache_key_uses_file_language_not_batch_default() {
     let (_, _, ref batch_item, _) = items[0];
 
     let empty_mwt = std::collections::BTreeMap::new();
-    let actual_key = cache_key(&batch_item.words, &batch_item.lang, &empty_mwt);
+    let actual_key = cache_key(&batch_item.words, &batch_item.lang, &empty_mwt, false);
     let eng = talkbank_model::model::LanguageCode::new("eng");
     let spa = talkbank_model::model::LanguageCode::new("spa");
-    let wrong_key = cache_key(&batch_item.words, &eng, &empty_mwt);
-    let correct_key = cache_key(&batch_item.words, &spa, &empty_mwt);
+    let wrong_key = cache_key(&batch_item.words, &eng, &empty_mwt, false);
+    let correct_key = cache_key(&batch_item.words, &spa, &empty_mwt, false);
 
     assert_eq!(
         actual_key, correct_key,

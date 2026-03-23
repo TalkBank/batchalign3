@@ -86,7 +86,7 @@ def build_default_fa_execution_host_v2(
 def _wrap_canto_runner(
     runner: Callable[[np.ndarray, PreparedFaPayloadV2, ForcedAlignmentRequestV2], object] | None,
 ) -> Callable[[np.ndarray, str, str], object] | None:
-    """Adapt the legacy typed Cantonese host hook to the Rust bridge shape."""
+    """Adapt the typed Cantonese host hook to the Rust bridge shape."""
 
     if runner is None:
         return None

@@ -110,6 +110,7 @@ pub fn build_morphosyntax_request_v2(
     lang: &LanguageCode3,
     items: &[MorphosyntaxBatchItem],
     mwt: &MwtDict,
+    retokenize: bool,
 ) -> Result<ExecuteRequestV2, TextRequestBuildErrorV2> {
     let payload = PreparedMorphosyntaxBatchV2 {
         items: items.to_vec(),
@@ -123,6 +124,7 @@ pub fn build_morphosyntax_request_v2(
             lang: lang.clone(),
             payload_ref_id: attachment.id.clone(),
             item_count: item_count(items.len())?,
+            retokenize,
         }),
         attachments: vec![ArtifactRefV2::PreparedText(attachment)],
     })

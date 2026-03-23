@@ -44,6 +44,17 @@ def pc_fake() -> PyCantoneseFake:
     return PyCantoneseFake()
 
 
+@pytest.fixture
+def pc_real():
+    """Provide the real pycantonese module for jyutping tests.
+
+    PyCantonese is a fast pure-Python library — no reason to fake it.
+    Tests using this fixture exercise the actual jyutping dictionary.
+    """
+    import pycantonese
+    return pycantonese
+
+
 # ---------------------------------------------------------------------------
 # Cantonese FA model fakes
 # ---------------------------------------------------------------------------

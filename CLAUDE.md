@@ -267,7 +267,13 @@ Development of code must use TDD. Debugging sessions must begin with writing a t
 
 **No mocks.** `unittest.mock` is banned — zero imports allowed anywhere in the test suite. Test doubles that are alternate implementations of a protocol are allowed. Shared doubles live in `batchalign/tests/doubles.py`.
 
-**CHAT test content gotcha:** Minimal valid CHAT needs `@Languages`, `@Participants`, AND `@ID` lines. Missing `@ID` causes `CHATValidationException: Encountered undeclared tier`.
+**Prefer real ML inference over synthetic doubles.** Tests should call actual ML libraries and models, not fabricate synthetic output. Models are downloaded and cached automatically on first run (Stanza, PyCantonese, etc.). Synthetic test doubles hide bugs where the real library behaves differently from expectations. Use the `@pytest.mark.golden` marker for tests that load heavy ML models (Stanza, Whisper). Use synthetic doubles only when real inference is truly impossible (cloud API credentials, proprietary engines). When a feature is motivated by external claims (e.g., "ASR engine X produces per-character output"), write tests that verify the claim against real library behavior before building on it.
+
+**OOM protection is enforced by code, not by convention.** The `conftest.py` autouse fixture `_guard_golden_oom` and `pytest_configure` hook automatically prevent golden/ML tests from running with parallel xdist workers on machines with < 128 GB RAM. This cannot be bypassed — each golden test checks its own safety before loading any models. See `batchalign/tests/conftest.py` for the implementation.
+
+**Tree-sitter fragment parsing.** The tree-sitter parser supports a source union mechanism that allows parsing individual CHAT fragments — a single word, a main tier line, a %mor tier — without synthesizing a fake full CHAT document. Use `talkbank_parser::parse_word()`, `talkbank_parser::synthetic_fragments::parse_main_tier()`, or the `ChatParser` trait's `parse_mor_tier()`/`parse_gra_tier()` methods for fragment-level tests. Do not wrap fragments in fake `@UTF8/@Begin/@End` scaffolding when a fragment parser exists.
+
+**CHAT test content gotcha:** When you DO need a full CHAT document (e.g., testing file-level validation or cross-tier alignment), minimal valid CHAT needs `@Languages`, `@Participants`, AND `@ID` lines. Missing `@ID` causes `CHATValidationException: Encountered undeclared tier`.
 
 ### Type Annotations
 

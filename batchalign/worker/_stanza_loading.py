@@ -147,6 +147,51 @@ def load_stanza_models(lang: LanguageCode) -> None:
         _state.stanza_version = "unknown"
 
 
+def load_stanza_retokenize_model(lang: LanguageCode) -> None:
+    """Lazy-load a Stanza pipeline with neural tokenization for Chinese retokenize.
+
+    Unlike the default Chinese pipeline (which uses ``tokenize_pretokenized=True``),
+    this variant lets Stanza's neural tokenizer segment the text into words.
+    Used when ``--retokenize`` is requested for Mandarin (``cmn``/``zho``).
+
+    The pipeline is stored under key ``"{lang}:retok"`` in worker state so it
+    coexists with the standard pretokenized pipeline.
+    """
+    import stanza
+    from stanza import DownloadMethod
+
+    from batchalign.inference._tokenizer_realign import TokenizerContext
+
+    alpha2 = iso3_to_alpha2(lang)
+    if alpha2 != "zh":
+        L.warning(
+            "load_stanza_retokenize_model called for non-Chinese lang %s — skipping",
+            lang,
+        )
+        return
+
+    processors = "tokenize,pos,lemma,depparse"
+    ctx = TokenizerContext()
+
+    nlp = stanza.Pipeline(
+        lang=alpha2,
+        processors=processors,
+        download_method=DownloadMethod.REUSE_RESOURCES,
+        tokenize_no_ssplit=True,
+        tokenize_pretokenized=False,
+    )
+
+    retok_key = f"{lang}:retok"
+    existing_pipelines = _state.stanza_pipelines or {}
+    existing_contexts = _state.stanza_contexts or {}
+    existing_pipelines[retok_key] = nlp
+    existing_contexts[retok_key] = ctx
+    _state.stanza_pipelines = existing_pipelines
+    _state.stanza_contexts = existing_contexts
+
+    L.info("Loaded Stanza retokenize pipeline for %s (key=%s)", lang, retok_key)
+
+
 def load_utseg_builder(lang: LanguageCode) -> None:
     """Load the utseg config builder for one primary language.
 

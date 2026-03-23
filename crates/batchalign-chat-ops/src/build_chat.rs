@@ -408,9 +408,8 @@ fn build_text_utterance(
 /// Parse a single word through TreeSitterParser, falling back to unchecked for ASR tokens.
 fn parse_asr_word(text: &str) -> Word {
     use talkbank_parser::TreeSitterParser;
-    use talkbank_model::ChatParser;
 
-    let parser = TreeSitterParser::new().expect("TreeSitterParser should construct");
+    let _parser = TreeSitterParser::new().expect("TreeSitterParser should construct");
     let errors = talkbank_model::NullErrorSink;
     match talkbank_parser::parse_word(text, 0, &errors).into_option() {
         Some(parsed) => parsed,

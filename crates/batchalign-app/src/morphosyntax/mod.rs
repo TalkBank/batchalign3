@@ -45,8 +45,9 @@ use crate::workflow::morphosyntax::{
 };
 use crate::workflow::{CrossFileBatchWorkflow, PerFileWorkflow};
 use batchalign_chat_ops::morphosyntax::{
-    BatchItemWithPosition, cache_key, clear_morphosyntax_selective, collect_payloads,
-    declared_languages, extract_strings, inject_results, validate_mor_alignment,
+    BatchItemWithPosition, TokenizationMode, cache_key, clear_morphosyntax_selective,
+    collect_payloads, declared_languages, extract_strings, inject_results,
+    validate_mor_alignment,
 };
 use batchalign_chat_ops::parse::{is_dummy, parse_lenient};
 use batchalign_chat_ops::serialize::to_chat_string;
@@ -296,11 +297,31 @@ pub(crate) async fn process_morphosyntax_incremental(
         "Incremental morphosyntax: sending only changed utterances to worker"
     );
 
+    // Warn when Cantonese input appears to be per-character without --retokenize.
+    let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+    if !retokenize && params.lang.as_ref() == "yue" {
+        let per_char_count = filtered_payloads
+            .iter()
+            .flat_map(|(_, _, item, _)| item.words.iter())
+            .filter(|w| w.chars().count() == 1 && w.chars().all(|c| c > '\u{2E80}'))
+            .count();
+        let total_words: usize = filtered_payloads
+            .iter()
+            .map(|(_, _, item, _)| item.words.len())
+            .sum();
+        if total_words > 0 && per_char_count * 100 / total_words > 80 {
+            warn!(
+                "Cantonese input appears to be per-character tokens ({per_char_count}/{total_words} single-CJK words). \
+                 Consider --retokenize for word-level analysis."
+            );
+        }
+    }
+
     // Step 4: Cache check + infer for the filtered payloads
     let (hits, miss_keys, misses) = if params.cache_policy.should_skip() {
         let keys: Vec<CacheKey> = filtered_payloads
             .iter()
-            .map(|(_, _, item, _)| cache_key(&item.words, &item.lang, params.mwt))
+            .map(|(_, _, item, _)| cache_key(&item.words, &item.lang, params.mwt, retokenize))
             .collect();
         (HashMap::new(), keys, filtered_payloads)
     } else {
@@ -309,6 +330,7 @@ pub(crate) async fn process_morphosyntax_incremental(
             services.cache,
             services.engine_version,
             params.mwt,
+            retokenize,
         )
         .await
     };
@@ -322,7 +344,7 @@ pub(crate) async fn process_morphosyntax_incremental(
     if !misses.is_empty() {
         let miss_line_indices: Vec<usize> = misses.iter().map(|(idx, ..)| *idx).collect();
 
-        match infer_batch(services.pool, &misses, params.lang, params.mwt).await {
+        match infer_batch(services.pool, &misses, params.lang, params.mwt, retokenize).await {
             Ok(responses) => {
                 match inject_results(
                     &mut after_file,

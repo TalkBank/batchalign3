@@ -409,6 +409,16 @@ pub struct MorphosyntaxRequestV2 {
     pub payload_ref_id: WorkerArtifactIdV2,
     /// Number of utterance items frozen into the prepared batch payload.
     pub item_count: u32,
+    /// Whether Stanza/PyCantonese should re-tokenize the input.
+    ///
+    /// When `true`, CJK word segmentation is applied before POS tagging:
+    /// - Cantonese (`yue`): PyCantonese `segment()` groups characters into words
+    /// - Mandarin (`cmn`/`zho`): Stanza neural tokenizer segments the text
+    ///
+    /// Defaults to `false` for backward compatibility with workers that do not
+    /// yet understand this field.
+    #[serde(default)]
+    pub retokenize: bool,
 }
 
 /// V2 utterance-segmentation request payload.
@@ -608,5 +618,31 @@ pub struct WhisperChunkSpanV2 {
     pub start_s: DurationSeconds,
     /// End timestamp in seconds.
     pub end_s: DurationSeconds,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn morphosyntax_request_v2_retokenize_round_trips() {
+        let req = MorphosyntaxRequestV2 {
+            lang: LanguageCode3::yue(),
+            payload_ref_id: WorkerArtifactIdV2::from("payload-1"),
+            item_count: 3,
+            retokenize: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: MorphosyntaxRequestV2 = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.retokenize);
+        assert_eq!(deserialized.lang.as_ref(), "yue");
+    }
+
+    #[test]
+    fn morphosyntax_request_v2_retokenize_defaults_false() {
+        let json = r#"{"lang":"eng","payload_ref_id":"p1","item_count":1}"#;
+        let req: MorphosyntaxRequestV2 = serde_json::from_str(json).unwrap();
+        assert!(!req.retokenize, "retokenize must default to false for backward compat");
+    }
 }
 

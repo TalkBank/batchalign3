@@ -168,6 +168,7 @@ class BatchInferRequest(BaseModel):
     lang: LanguageCode
     items: list[WorkerJSONValue] = Field(default_factory=list)
     mwt: dict[str, list[str]] = Field(default_factory=dict)
+    retokenize: bool = False
 
 
 class BatchInferResponse(BaseModel):

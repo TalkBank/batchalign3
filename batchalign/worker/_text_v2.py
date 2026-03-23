@@ -123,6 +123,7 @@ def execute_morphosyntax_request_v2(
                 lang=morphosyntax_request.lang,
                 items=[item.model_dump(mode="json") for item in batch.items],
                 mwt=batch.mwt,
+                retokenize=morphosyntax_request.retokenize,
             )
         )
 
