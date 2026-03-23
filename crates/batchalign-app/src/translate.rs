@@ -121,11 +121,7 @@ pub async fn process_translate(
         .run_per_file(TextPerFileWorkflowRequest {
             chat_text: ChatText::from(chat_text),
             lang,
-            shared: PipelineServices {
-                pool,
-                cache,
-                engine_version,
-            },
+            shared: PipelineServices::new(pool, cache, engine_version),
             params: TranslateWorkflowParams { cache_policy },
         })
         .await
@@ -151,11 +147,7 @@ pub(crate) async fn process_translate_batch(
         .run_batch_files(TextBatchWorkflowRequest {
             files,
             lang,
-            shared: PipelineServices {
-                pool,
-                cache,
-                engine_version,
-            },
+            shared: PipelineServices::new(pool, cache, engine_version),
             params: TranslateWorkflowParams { cache_policy },
         })
         .await
@@ -172,11 +164,7 @@ async fn run_translate_impl(
     run_cached_text_pipeline(
         chat_text,
         lang,
-        PipelineServices {
-            pool,
-            cache,
-            engine_version,
-        },
+        PipelineServices::new(pool, cache, engine_version),
         cache_policy,
         CachedTextPipelineHooks {
             command: "translate",

@@ -309,4 +309,40 @@ mod tests {
         let err = parse_raw_stanza_output(&raw).unwrap_err();
         assert!(err.to_string().contains("not a JSON array"));
     }
+
+    /// Regression: 6-word Cantonese sentence must produce 6 UD words AND 6 MOR items.
+    ///
+    /// Source: MOST corpus 40415b.cha, utterance with retrace.
+    /// Bug: morphotag --retokenize produced "MOR item count (5) does not match
+    /// alignable word count (6)".
+    #[test]
+    fn test_cantonese_6_words_produces_6_mors() {
+        use crate::nlp::{MappingContext, map_ud_sentence};
+
+        let raw = vec![json!([
+            {"id": 1, "text": "呢", "lemma": "呢", "upos": "PART", "head": 2, "deprel": "case"},
+            {"id": 2, "text": "度", "lemma": "度", "upos": "NUM", "head": 5, "deprel": "nmod"},
+            {"id": 3, "text": "食飯", "lemma": "食飯", "upos": "VERB", "head": 4, "deprel": "compound"},
+            {"id": 4, "text": "啦", "lemma": "啦", "upos": "NOUN", "head": 5, "deprel": "nmod"},
+            {"id": 5, "text": "飯", "lemma": "飯", "upos": "NOUN", "head": 0, "deprel": "root"},
+            {"id": 6, "text": "啦", "lemma": "啦", "upos": "NOUN", "head": 5, "deprel": "discourse:sp"}
+        ])];
+
+        let resp = parse_raw_stanza_output(&raw).unwrap();
+        assert_eq!(resp.sentences.len(), 1);
+        assert_eq!(resp.sentences[0].words.len(), 6, "Should parse 6 UD words");
+
+        let ctx = MappingContext {
+            lang: talkbank_model::model::LanguageCode::new("yue"),
+        };
+        let (mors, gras) = map_ud_sentence(&resp.sentences[0], &ctx).unwrap();
+        assert_eq!(mors.len(), 6, "Should produce 6 MOR items from 6 UD words");
+
+        // GRA has 7 entries for 6 MOR words — the 7th is the terminator PUNCT
+        // relation (e.g., 7|5|PUNCT for "."). This is correct CHAT behavior:
+        // %gra includes the terminator, %mor does not. The inject path handles
+        // this correctly — the terminator GRA is stored in the GraTier and the
+        // MOR count check only looks at MOR items vs alignable words.
+        assert_eq!(gras.len(), 7, "GRA should have 6 word relations + 1 terminator PUNCT");
+    }
 }

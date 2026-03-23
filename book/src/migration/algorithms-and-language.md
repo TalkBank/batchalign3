@@ -612,6 +612,19 @@ newtypes that prevent mixing text at different pipeline stages:
 **Key correctness improvement:** BA3's retrace detection marks words with
 `WordKind::Retrace` in the token pipeline, then `build_chat.rs` wraps them
 in proper CHAT `<...> [/]` AST nodes (`AnnotatedWord` / `AnnotatedGroup`).
+
+### Text Cleaning Divergences from BA2
+
+| Operation | BA2 | BA3 | Rationale |
+|-----------|-----|-----|-----------|
+| Hyphen stripping | Stripped `-` from words before Stanza | **Preserves hyphens** | Stanza handles hyphenated words correctly. Stripping loses compound info. |
+| Parenthesis stripping | Stripped `(` and `)` before Stanza | **No stripping** — Rust `cleaned_text()` handles CHAT notation at extraction time | Python-side stripping silently drops bare paren words, causing word count mismatches. |
+| Cantonese word segmentation | None | PyCantonese `segment()` via `--retokenize` | BA2 had no word segmentation for CJK per-character ASR output. |
+| Cantonese POS | Stanza zh (Mandarin model, ~62% accuracy) | PyCantonese POS override (~95% on core vocabulary) | BA2 used the same Mandarin model; batchalignHK used zh-hant (equally wrong). |
+
+These divergences mean BA3 morphotag output for Cantonese will differ from
+BA2 output. The differences are improvements — BA2's text stripping was lossy
+and its POS model was wrong for Cantonese.
 BA2 did string-level wrapping that could produce malformed CHAT when
 retraces crossed word boundaries or contained special characters.
 

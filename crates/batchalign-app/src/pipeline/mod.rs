@@ -22,4 +22,42 @@ pub(crate) struct PipelineServices<'a> {
     pub cache: &'a UtteranceCache,
     /// Current engine version for cache keying.
     pub engine_version: &'a EngineVersion,
+    /// Debug dumper for pipeline stage artifacts.
+    /// Defaults to disabled (no-op) when not explicitly provided.
+    pub debug_dumper: &'a crate::runner::debug_dumper::DebugDumper,
+}
+
+/// Static disabled dumper for construction sites that don't yet provide one.
+static DISABLED_DUMPER: std::sync::LazyLock<crate::runner::debug_dumper::DebugDumper> =
+    std::sync::LazyLock::new(|| crate::runner::debug_dumper::DebugDumper::new(None));
+
+impl<'a> PipelineServices<'a> {
+    /// Create services without debug dumping.
+    pub fn new(
+        pool: &'a WorkerPool,
+        cache: &'a UtteranceCache,
+        engine_version: &'a EngineVersion,
+    ) -> Self {
+        Self {
+            pool,
+            cache,
+            engine_version,
+            debug_dumper: &DISABLED_DUMPER,
+        }
+    }
+
+    /// Create services with debug dumping enabled.
+    pub fn with_debug(
+        pool: &'a WorkerPool,
+        cache: &'a UtteranceCache,
+        engine_version: &'a EngineVersion,
+        debug_dumper: &'a crate::runner::debug_dumper::DebugDumper,
+    ) -> Self {
+        Self {
+            pool,
+            cache,
+            engine_version,
+            debug_dumper,
+        }
+    }
 }

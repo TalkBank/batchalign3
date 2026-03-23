@@ -136,11 +136,7 @@ pub(in crate::runner) async fn dispatch_fa_infer(
             "align file task",
             async move {
                 let _permit = permit;
-                let services = PipelineServices {
-                    pool: &pool,
-                    cache: &cache,
-                    engine_version: &engine_version,
-                };
+                let services = PipelineServices::new(&pool, &cache, &engine_version);
                 let dumper = DebugDumper::new(
                     job.dispatch
                         .options

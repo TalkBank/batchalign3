@@ -88,14 +88,31 @@ JSONObject = dict[str, WorkerJSONValue]
 def _segment_cantonese(words: list[str]) -> list[str]:
     """Segment Cantonese per-character tokens into words using PyCantonese.
 
-    Joins input characters into a single string and uses PyCantonese's
-    word segmentation to produce word-level tokens. This is called when
-    ``--retokenize`` is used with Cantonese (``yue``) morphotag.
+    Only re-segments contiguous runs of single-CJK-character tokens.
+    Existing multi-character tokens are preserved as-is to avoid breaking
+    word boundaries that are already correct (e.g., from Tencent ASR or
+    hand-transcribed corpora).
+
+    This prevents the bug where joining all words into one string causes
+    PyCantonese to merge tokens across word boundaries (e.g., 啦+飯+啦
+    becoming 啦飯啦).
     """
     if not words:
         return []
     import pycantonese
 
+    # Only re-segment if the input looks like per-character ASR output:
+    # all CJK tokens are single characters. If any multi-char CJK token
+    # exists, the input already has some word boundaries — preserve them.
+    cjk_words = [w for w in words if any("\u4e00" <= c <= "\u9fff" for c in w)]
+    has_multichar_cjk = any(len(w) > 1 for w in cjk_words)
+
+    if has_multichar_cjk:
+        # Input already has word boundaries — don't re-segment.
+        # This prevents merging tokens across existing boundaries.
+        return list(words)
+
+    # All CJK tokens are single characters — safe to join and segment.
     text = "".join(words)
     if not text:
         return []
@@ -248,7 +265,11 @@ def batch_infer_morphosyntax(
         if req.retokenize and item_lang in ("yue",):
             words = _segment_cantonese(words)
 
-        text = " ".join(words).replace("(", "").replace(")", "").strip()
+        # Join words for Stanza input. Do NOT strip parentheses here —
+        # Rust cleaned_text() already handles CHAT notation. Stripping
+        # parens in Python silently drops bare "(" / ")" words, causing
+        # MOR count mismatches in the retokenize inject path.
+        text = " ".join(words).strip()
 
         if item_lang not in by_lang:
             by_lang[item_lang] = []
@@ -262,8 +283,14 @@ def batch_infer_morphosyntax(
         texts = [text for _, text, _ in lang_items]
         word_lists = [words for _, _, words in lang_items]
 
-        # Mandarin retokenize: use Stanza neural tokenizer instead of pretokenized
-        use_retok_pipeline = req.retokenize and lang_code in ("zho", "cmn")
+        # Mandarin retokenize: use Stanza neural tokenizer instead of pretokenized.
+        # Only activate when the JOB language is Mandarin — per-utterance language
+        # codes (e.g., [- zho] in a Cantonese file) must NOT trigger retokenization.
+        use_retok_pipeline = (
+            req.retokenize
+            and lang_code in ("zho", "cmn")
+            and req.lang in ("zho", "cmn")
+        )
         if use_retok_pipeline:
             retok_key = f"{lang_code}:retok"
             nlp = nlp_pipelines.get(retok_key)
@@ -287,9 +314,12 @@ def batch_infer_morphosyntax(
             )
             continue
 
-        # For Mandarin retokenize, join without spaces (CJK convention)
+        # For Mandarin retokenize, join with spaces. Stanza's neural tokenizer
+        # (tokenize_pretokenized=False) handles re-segmentation regardless of
+        # spacing. Using no-space join ("".join) would merge Latin+CJK words
+        # (e.g., "hello你好" → one token) in code-switched utterances.
         if use_retok_pipeline:
-            combined = "\n\n".join("".join(w) for w in word_lists)
+            combined = "\n\n".join(" ".join(w) for w in word_lists)
         else:
             combined = "\n\n".join(texts)
         if use_retok_pipeline:

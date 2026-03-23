@@ -35,6 +35,12 @@ pub fn inject_morphosyntax(
     );
     let word_count = extracted.len();
     let mor_count = mors.len();
+    tracing::debug!(
+        word_count,
+        mor_count,
+        extracted_words = ?extracted.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>(),
+        "inject_morphosyntax: alignment check"
+    );
     if word_count != mor_count {
         let utt_text = utterance.main.to_chat_string();
         tracing::warn!(

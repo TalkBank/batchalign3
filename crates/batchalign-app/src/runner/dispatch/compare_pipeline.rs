@@ -297,11 +297,7 @@ mod tests {
             .await
             .expect("open cache");
         let engine_version = EngineVersion::from("compare-test");
-        let services = PipelineServices {
-            pool: &pool,
-            cache: &cache,
-            engine_version: &engine_version,
-        };
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
 
         dispatch_compare(
             &snapshot,

@@ -64,3 +64,49 @@ def test_segment_cantonese_single_char():
 
     result = _segment_cantonese(["好"])
     assert result == ["好"]
+
+
+def test_segment_cantonese_preserves_existing_multichar():
+    """Multi-character tokens in input must NOT be re-segmented across boundaries.
+
+    Regression test: MOST corpus utterance with retrace had existing multi-char
+    words (食飯) mixed with single-char words (啦). Naive join-and-resegment
+    merged 啦+飯+啦 into one token, breaking word alignment.
+
+    Source: data/childes-other-data/Chinese/Cantonese/MOST/10002/40415b.cha
+    Utterance: *PAR0: 呢 度 <下次> [/] 食飯 啦 飯 啦 .
+    """
+    from batchalign.inference.morphosyntax import _segment_cantonese
+
+    # Input after MOR extraction (retrace skipped): existing multi-char 食飯
+    words = ["呢", "度", "食飯", "啦", "飯", "啦"]
+    result = _segment_cantonese(words)
+
+    # 食飯 must remain as one token — not merged with neighbors
+    assert "食飯" in result, (
+        f"食飯 should be preserved as one token, got {result}"
+    )
+    # 啦飯啦 must NOT appear — that's the bug
+    assert "啦飯啦" not in result, (
+        f"啦飯啦 should not exist — words were wrongly merged: {result}"
+    )
+    # All characters preserved
+    assert "".join(result) == "".join(words), (
+        f"All characters must be preserved: {''.join(result)} != {''.join(words)}"
+    )
+
+
+def test_segment_cantonese_mixed_single_and_multi():
+    """Mixed per-char and multi-char input: only per-char runs get segmented.
+
+    Input: ["我", "想", "去", "買", "故事", "書"]
+    故事 is already a multi-char word — should be preserved.
+    Per-char tokens 我想去買 and 書 may be re-segmented.
+    """
+    from batchalign.inference.morphosyntax import _segment_cantonese
+
+    words = ["我", "想", "去", "買", "故事", "書"]
+    result = _segment_cantonese(words)
+
+    assert "故事" in result, f"故事 should be preserved, got {result}"
+    assert "".join(result) == "".join(words), "All characters preserved"

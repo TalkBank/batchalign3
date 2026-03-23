@@ -453,3 +453,86 @@ fn cache_key_uses_file_language_not_batch_default() {
         "cache key must NOT use 'eng' batch default for a Spanish file"
     );
 }
+
+/// Regression: inject_results with retokenize on Cantonese retrace utterance.
+///
+/// The full pipeline: parse CHAT → extract words → construct UD response →
+/// inject with retokenize mode. This should succeed but fails with
+/// "MOR item count does not match alignable word count".
+///
+/// Source: MOST corpus 40415b.cha line 46.
+#[test]
+fn test_inject_results_retokenize_cantonese_retrace() {
+    use crate::morphosyntax::inject::inject_results;
+    use crate::nlp::{UdResponse, UdSentence, UdWord, UdId};
+    use crate::parse::parse_lenient;
+
+    let chat = include_str!("../../../../test-fixtures/retok_yue_retrace.cha");
+    let (mut chat_file, _errors) = parse_lenient(chat);
+
+    let primary_lang = talkbank_model::model::LanguageCode::new("yue");
+    let langs = declared_languages(&chat_file, &primary_lang);
+
+    let (batch_items, _summary) = collect_payloads(
+        &chat_file,
+        &primary_lang,
+        &langs,
+        MultilingualPolicy::ProcessAll,
+    );
+
+    assert!(!batch_items.is_empty(), "Should have batch items");
+
+    // Print what was extracted
+    for (line_idx, utt_ord, item, words) in &batch_items {
+        eprintln!(
+            "Batch item: line={line_idx} utt={utt_ord} words={:?} item_words={:?}",
+            words.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>(),
+            item.words,
+        );
+    }
+
+    // Build a matching UD response (one word per extracted word)
+    let first_item = &batch_items[0];
+    let word_count = first_item.2.words.len();
+    eprintln!("Word count from batch item: {word_count}");
+
+    // Simulate what Python actually returns: _segment_cantonese reduces
+    // 7 single-char words to 5 words (下+次→下次, 食+飯→食飯).
+    // Stanza processes 5 words and returns 5 MOR items.
+    let segmented_words = vec!["呢", "度", "下次", "食飯", "啦"];
+    eprintln!("Simulated PyCantonese segmentation: {:?} ({} words)", segmented_words, segmented_words.len());
+    let ud_words: Vec<UdWord> = segmented_words.iter().enumerate().map(|(i, w)| {
+        UdWord {
+            id: UdId::Single(i + 1),
+            text: w.to_string(),
+            lemma: w.to_string(),
+            upos: crate::nlp::UdPunctable::Value(crate::nlp::UniversalPos::Noun),
+            xpos: None,
+            feats: None,
+            head: 0,
+            deprel: "root".into(),
+            deps: None,
+            misc: None,
+        }
+    }).collect();
+
+    let ud_response = UdResponse {
+        sentences: vec![UdSentence { words: ud_words }],
+    };
+
+    let empty_mwt = std::collections::BTreeMap::new();
+    let result = inject_results(
+        &mut chat_file,
+        batch_items,
+        vec![ud_response],
+        &primary_lang,
+        TokenizationMode::StanzaRetokenize,
+        &empty_mwt,
+    );
+
+    assert!(
+        result.is_ok(),
+        "inject_results should succeed for retokenize + retrace: {:?}",
+        result.err()
+    );
+}

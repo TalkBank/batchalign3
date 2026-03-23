@@ -524,14 +524,16 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             .await;
         } else {
             let plan = BatchedInferDispatchPlan::from_job(&job);
+            let debug_dir = job.dispatch.options.common().debug_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(
+                debug_dir.as_deref(),
+            );
             dispatch_batched_infer(
                 &job,
                 store,
-                PipelineServices {
-                    pool,
-                    cache,
-                    engine_version: &engine_version,
-                },
+                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
                 plan,
             )
             .await;

@@ -7,7 +7,40 @@ use talkbank_model::alignment::helpers::{TierDomain, counts_for_tier, is_tag_mar
 use talkbank_model::model::content::BracketedItems;
 use talkbank_model::model::{BracketedItem, Mor, UtteranceContent, Word};
 
+use talkbank_model::model::{Annotated, Group, ScopedAnnotation, Word as ModelWord};
+
 use crate::extract::ExtractedWord;
+
+/// Check if an annotated group carries a retrace annotation.
+///
+/// Retrace groups (`[/]`, `[//]`, `[///]`, `[/-]`) are excluded from MOR
+/// extraction. The retokenize rebuild must skip them entirely to keep
+/// `word_counter` synchronized with the MOR-domain word mapping.
+fn is_retrace_annotated_word(annotated: &Annotated<ModelWord>) -> bool {
+    annotated.scoped_annotations.iter().any(|ann| {
+        matches!(
+            ann,
+            ScopedAnnotation::PartialRetracing
+                | ScopedAnnotation::Retracing
+                | ScopedAnnotation::MultipleRetracing
+                | ScopedAnnotation::Reformulation
+                | ScopedAnnotation::UncertainRetracing
+        )
+    })
+}
+
+fn is_retrace_annotated_group(annotated: &Annotated<Group>) -> bool {
+    annotated.scoped_annotations.iter().any(|ann| {
+        matches!(
+            ann,
+            ScopedAnnotation::PartialRetracing
+                | ScopedAnnotation::Retracing
+                | ScopedAnnotation::MultipleRetracing
+                | ScopedAnnotation::Reformulation
+                | ScopedAnnotation::UncertainRetracing
+        )
+    })
+}
 
 use super::mapping::WordTokenMapping;
 use super::parse_helpers::{
@@ -66,8 +99,11 @@ pub(super) fn rebuild_content(
                 }
             }
             UtteranceContent::AnnotatedWord(mut annotated) => {
-                if should_retokenize(&annotated.inner) {
-                    // For annotated words, update the inner word text but keep annotations
+                // Retrace-annotated words are excluded from MOR extraction.
+                // Pass through unchanged to keep word_counter in sync.
+                if is_retrace_annotated_word(&annotated) {
+                    new_content.push(UtteranceContent::AnnotatedWord(annotated));
+                } else if should_retokenize(&annotated.inner) {
                     handle_annotated_word_retokenize(&mut annotated.inner, ctx);
                     new_content.push(UtteranceContent::AnnotatedWord(annotated));
                 } else {
@@ -100,11 +136,20 @@ pub(super) fn rebuild_content(
                 new_content.push(UtteranceContent::Group(group));
             }
             UtteranceContent::AnnotatedGroup(mut annotated) => {
-                let old_bracketed = std::mem::take(&mut annotated.inner.content.content.0);
-                let mut new_bracketed = Vec::with_capacity(old_bracketed.len());
-                rebuild_bracketed_content(old_bracketed, ctx, &mut new_bracketed);
-                annotated.inner.content.content = BracketedItems(new_bracketed);
-                new_content.push(UtteranceContent::AnnotatedGroup(annotated));
+                // Retrace groups (PartialRetracing, Retracing, MultipleRetracing,
+                // Reformulation) are excluded from MOR extraction. Pass them
+                // through unchanged — do NOT recurse into their content, because
+                // word_counter would desynchronize with the mapping (which only
+                // covers MOR-domain words).
+                if is_retrace_annotated_group(&annotated) {
+                    new_content.push(UtteranceContent::AnnotatedGroup(annotated));
+                } else {
+                    let old_bracketed = std::mem::take(&mut annotated.inner.content.content.0);
+                    let mut new_bracketed = Vec::with_capacity(old_bracketed.len());
+                    rebuild_bracketed_content(old_bracketed, ctx, &mut new_bracketed);
+                    annotated.inner.content.content = BracketedItems(new_bracketed);
+                    new_content.push(UtteranceContent::AnnotatedGroup(annotated));
+                }
             }
             UtteranceContent::PhoGroup(mut pho) => {
                 let old_bracketed = std::mem::take(&mut pho.content.content.0);
@@ -316,14 +361,18 @@ fn rebuild_bracketed_content(
                 new_items.push(BracketedItem::ReplacedWord(replaced));
             }
             BracketedItem::AnnotatedGroup(mut annotated) => {
-                let old_bracketed = std::mem::replace(
-                    &mut annotated.inner.content.content,
-                    BracketedItems(Vec::new()),
-                );
-                let mut sub_items = Vec::with_capacity(old_bracketed.0.len());
-                rebuild_bracketed_content(old_bracketed.0, ctx, &mut sub_items);
-                annotated.inner.content.content = BracketedItems(sub_items);
-                new_items.push(BracketedItem::AnnotatedGroup(annotated));
+                if is_retrace_annotated_group(&annotated) {
+                    new_items.push(BracketedItem::AnnotatedGroup(annotated));
+                } else {
+                    let old_bracketed = std::mem::replace(
+                        &mut annotated.inner.content.content,
+                        BracketedItems(Vec::new()),
+                    );
+                    let mut sub_items = Vec::with_capacity(old_bracketed.0.len());
+                    rebuild_bracketed_content(old_bracketed.0, ctx, &mut sub_items);
+                    annotated.inner.content.content = BracketedItems(sub_items);
+                    new_items.push(BracketedItem::AnnotatedGroup(annotated));
+                }
             }
             BracketedItem::PhoGroup(mut pho) => {
                 let old_bracketed =

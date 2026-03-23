@@ -82,11 +82,7 @@ pub(in crate::runner) async fn dispatch_transcribe_infer(
             "transcribe file task",
             async move {
                 let _permit = permit;
-                let services = PipelineServices {
-                    pool: &pool,
-                    cache: &cache,
-                    engine_version: &engine_version,
-                };
+                let services = PipelineServices::new(&pool, &cache, &engine_version);
                 process_one_transcribe_file(
                     &job,
                     &store,
@@ -432,11 +428,7 @@ mod tests {
             .await
             .expect("open cache");
         let engine_version = EngineVersion::from("test-asr");
-        let services = PipelineServices {
-            pool: &pool,
-            cache: &cache,
-            engine_version: &engine_version,
-        };
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
         let mut opts = crate::transcribe::TranscribeOptions {
             backend: AsrBackend::Worker(crate::transcribe::AsrWorkerMode::LocalWhisperV2),
             diarize: false,

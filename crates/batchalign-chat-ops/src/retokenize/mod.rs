@@ -80,5 +80,12 @@ pub fn retokenize_utterance(
     }
 
     // Step 3: Inject tier markers (reuse inject.rs logic)
+    tracing::debug!(
+        mor_count = mors.len(),
+        gra_count = gra_relations.len(),
+        word_counter = ctx.word_counter,
+        mor_cursor = ctx.mor_cursor,
+        "retokenize_utterance: about to inject"
+    );
     inject::inject_morphosyntax(utterance, mors, terminator, gra_relations)
 }

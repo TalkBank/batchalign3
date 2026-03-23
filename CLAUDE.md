@@ -263,7 +263,13 @@ uv run maturin build --release -i python3.12
 
 ### Testing
 
-Development of code must use TDD. Debugging sessions must begin with writing a test that demonstrates the bug.
+**Red/green TDD is mandatory for all new features and bug fixes, no exceptions.**
+
+1. **RED**: Write a failing test that specifies the desired behavior or reproduces the bug
+2. **GREEN**: Write the minimum code to make the test pass
+3. **REFACTOR**: Clean up while keeping all tests green
+
+**Every bug report or discovered bug MUST start with a failing test.** Do not investigate or fix a bug without first writing a test that reproduces it. The test proves the bug exists, prevents regressions, and documents the expected behavior. Fixing before testing leads to incomplete fixes and missed edge cases.
 
 **No mocks.** `unittest.mock` is banned — zero imports allowed anywhere in the test suite. Test doubles that are alternate implementations of a protocol are allowed. Shared doubles live in `batchalign/tests/doubles.py`.
 

@@ -177,14 +177,19 @@ def _temporary_conv_scale_weights_override(msdd_module: object):
 
 
 def _device_for_speaker_runtime(device_policy=None) -> str:
-    """Resolve the concrete runtime device for diarization backends."""
+    """Resolve the concrete runtime device for diarization backends.
+
+    MPS is explicitly excluded: Pyannote produces wrong timestamps on MPS
+    (pyannote/pyannote-audio#1337, closed wontfix) and NeMo is CUDA-only.
+    Diarization runs on CUDA when available, CPU otherwise.
+    """
     import torch
 
     from batchalign.device import force_cpu_preferred
 
     if force_cpu_preferred(device_policy):
         return "cpu"
-    return "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _write_prepared_audio_wav(

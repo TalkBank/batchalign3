@@ -200,7 +200,9 @@ def test_resolve_speaker_config_points_at_repo_config() -> None:
     [
         (True, False, False, "cpu"),
         (False, True, False, "cuda"),
-        (False, False, True, "mps"),
+        # MPS must fall back to CPU: Pyannote produces wrong timestamps on MPS
+        # (pyannote/pyannote-audio#1337, wontfix) and NeMo is CUDA-only.
+        (False, False, True, "cpu"),
         (False, False, False, "cpu"),
     ],
 )

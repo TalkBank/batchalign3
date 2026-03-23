@@ -594,11 +594,7 @@ mod tests {
             .expect("cache");
         let pool = WorkerPool::new(PoolConfig::default());
         let engine_version = EngineVersion::from("test-asr");
-        let services = PipelineServices {
-            pool: &pool,
-            cache: &cache,
-            engine_version: &engine_version,
-        };
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
         let audio_path = tempdir.path().join("sample.wav");
         let opts = test_transcribe_options(Some(SpeakerBackendV2::Pyannote));
         let mut ctx =
@@ -632,11 +628,7 @@ mod tests {
             .expect("cache");
         let pool = WorkerPool::new(PoolConfig::default());
         let engine_version = EngineVersion::from("test-asr");
-        let services = PipelineServices {
-            pool: &pool,
-            cache: &cache,
-            engine_version: &engine_version,
-        };
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
         let audio_path = tempdir.path().join("sample.wav");
         let opts = test_transcribe_options(None);
         let mut ctx =
@@ -673,11 +665,7 @@ mod tests {
             .expect("cache");
         let pool = WorkerPool::new(PoolConfig::default());
         let engine_version = EngineVersion::from("test-asr");
-        let services = PipelineServices {
-            pool: &pool,
-            cache: &cache,
-            engine_version: &engine_version,
-        };
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
         let audio_path = tempdir.path().join("sample.wav");
 
         // Opts with lang="auto" — simulates --lang auto from CLI
@@ -733,11 +721,7 @@ mod tests {
             .expect("cache");
         let pool = WorkerPool::new(PoolConfig::default());
         let engine_version = EngineVersion::from("test-asr");
-        let services = PipelineServices {
-            pool: &pool,
-            cache: &cache,
-            engine_version: &engine_version,
-        };
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
         let audio_path = tempdir.path().join("sample.wav");
 
         let mut opts = test_transcribe_options(None);

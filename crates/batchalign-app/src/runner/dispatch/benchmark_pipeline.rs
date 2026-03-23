@@ -103,11 +103,7 @@ pub(in crate::runner) async fn dispatch_benchmark_infer(
             "benchmark file task",
             async move {
                 let _permit = permit;
-                let services = PipelineServices {
-                    pool: &pool,
-                    cache: &cache,
-                    engine_version: &engine_version,
-                };
+                let services = PipelineServices::new(&pool, &cache, &engine_version);
                 let context = BenchmarkFileContext {
                     job: &job,
                     store: &store,

@@ -1,7 +1,7 @@
 # Apple MPS Workarounds
 
 **Status:** Current
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-23 18:44 EDT
 
 Apple's Metal Performance Shaders (MPS) backend in PyTorch provides GPU
 acceleration on Apple Silicon but has significant limitations that require
@@ -88,8 +88,8 @@ See `docs/postmortems/2026-03-16-wave2vec-mps-crash.md`.
 return "cuda" if torch.cuda.is_available() else "mps" if ... else "cpu"
 ```
 
-Speaker diarization passes MPS as the device to Pyannote/NeMo **without**
-dtype safety. This is a **known latent issue**:
+Speaker diarization now explicitly falls back to CPU when CUDA is unavailable.
+MPS is never used for diarization because:
 
 - **Pyannote on MPS** produces wrong timestamps
   ([pyannote/pyannote-audio#1337](https://github.com/pyannote/pyannote-audio/issues/1337),
@@ -97,9 +97,8 @@ dtype safety. This is a **known latent issue**:
   ([#1886](https://github.com/pyannote/pyannote-audio/issues/1886)).
 - **NeMo** is CUDA-only by design — no MPS support at all.
 
-Both should run on CPU when CUDA is unavailable. **TODO:** Add explicit CPU
-fallback for diarization on MPS, matching the float32 pattern used everywhere
-else.
+The device selector (`_device_for_speaker_runtime`) returns `"cuda"` or
+`"cpu"`, never `"mps"`.
 
 ### Device Policy (`device.py`)
 

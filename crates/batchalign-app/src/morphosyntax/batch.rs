@@ -106,6 +106,21 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             params.multilingual_policy,
         );
 
+        // Debug: dump extracted payloads
+        let filename = &files[file_idx].filename;
+        services.debug_dumper.dump_morphosyntax_extracted(
+            filename,
+            &batch_items.iter().map(|(li, uo, item, words)| {
+                serde_json::json!({
+                    "line_idx": li,
+                    "utt_ordinal": uo,
+                    "item_words": &item.words,
+                    "extracted_words": words.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>(),
+                    "word_count": words.len(),
+                })
+            }).collect::<Vec<_>>(),
+        );
+
         if batch_items.is_empty() {
             per_file_info.push(None);
             continue;
@@ -186,7 +201,14 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     } else {
         let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
         match infer_batch(services.pool, &all_misses, params.lang, params.mwt, retokenize).await {
-            Ok(responses) => responses,
+            Ok(responses) => {
+                // Debug: dump UD responses
+                services.debug_dumper.dump_morphosyntax_ud_responses(
+                    "batch",
+                    &responses,
+                );
+                responses
+            }
             Err(e) => {
                 warn!(error = %e, "Batch infer failed for all files");
                 for (file_idx, file) in files.iter().enumerate() {

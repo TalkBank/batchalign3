@@ -604,3 +604,130 @@ fn test_n_to_1_merge_no_duplication() {
     );
     assert!(output.contains("%mor:"), "Should have %mor tier: {output}");
 }
+
+/// CJK retokenize with retrace marker: `<下 次> [/]`.
+///
+/// Retraces are excluded from MOR domain word extraction. When retokenize
+/// is active, the word count sent to Stanza (non-retraced only) must match
+/// the MOR items returned. The retrace content in the AST should be
+/// preserved but not counted for MOR alignment.
+///
+/// Regression test for MOST corpus failure:
+/// "MOR item count (5) does not match alignable word count (6)"
+/// Source: data/childes-other-data/Chinese/Cantonese/MOST/10002/40415b.cha
+#[test]
+fn test_cjk_retokenize_with_retrace() {
+    let chat_text = include_str!("../../../../test-fixtures/retok_yue_retrace.cha");
+    let mut chat = parse_chat(chat_text);
+    let utt = get_utterance(&mut chat, 0);
+    let original_words = extract_words(utt);
+
+    // MOR domain extraction should skip the retraced <下 次> [/]
+    // Non-retraced words only
+    let non_retrace_count = original_words.len();
+    assert!(
+        non_retrace_count > 0,
+        "Should have non-retraced words"
+    );
+
+    // Stanza tokens match non-retraced words (1:1, no merging for this test)
+    let stanza_tokens: Vec<String> = original_words
+        .iter()
+        .map(|w| w.text.as_ref().to_string())
+        .collect();
+
+    // Build matching MOR/GRA items
+    let mor_specs: Vec<&str> = (0..non_retrace_count).map(|_| "noun|x").collect();
+    let mor_str = format!("{} .", mor_specs.join(" "));
+    let gra_specs: Vec<String> = (1..=non_retrace_count)
+        .map(|i| format!("{i}|0|ROOT"))
+        .collect();
+    let gra_str = gra_specs.join(" ");
+
+    let (mors, term) = build_mor(&mor_str);
+    let gra_rels = build_gra(&gra_str);
+
+    let result = retokenize_utterance(
+        utt, &original_words, &stanza_tokens, mors, term, gra_rels,
+    );
+    assert!(
+        result.is_ok(),
+        "Retokenize should handle retrace markers: {:?}",
+        result.err()
+    );
+
+    let output = chat.to_chat_string();
+    assert!(output.contains("[/]"), "Retrace preserved: {output}");
+    assert!(output.contains("%mor:"), "Has %mor tier: {output}");
+}
+
+/// Exact reproduction of MOST corpus retrace bug with N:1 merges.
+///
+/// Debug dump showed:
+/// - Extracted: 7 words ["呢", "度", "下", "次", "食", "飯", "啦"]
+/// - Stanza:    5 tokens ["呢", "度", "下次", "食飯", "啦"]
+/// - Two N:1 merges: 下+次→下次, 食+飯→食飯
+/// - Bug: rebuild_content produces 6 alignable words instead of 5
+///
+/// The retrace <下 次> [/] in the AST means "下 次" is repeated.
+/// MOR extraction skips the retrace, giving 7 non-retrace words.
+/// PyCantonese segments 7→5 (merging 下+次 and 食+飯).
+/// After retokenize, the AST should have 5 alignable words.
+#[test]
+fn test_cjk_retokenize_retrace_with_n1_merges() {
+    let chat_text = include_str!("../../../../test-fixtures/retok_yue_retrace.cha");
+    let mut chat = parse_chat(chat_text);
+    let utt = get_utterance(&mut chat, 0);
+    let original_words = extract_words(utt);
+
+    // Debug dump confirmed: 7 extracted words
+    let texts: Vec<&str> = original_words.iter().map(|w| w.text.as_ref()).collect();
+    eprintln!("Extracted words: {:?} (count: {})", texts, texts.len());
+    assert_eq!(texts.len(), 7, "Should extract 7 MOR-domain words");
+
+    // Exact Stanza tokens from debug dump (after PyCantonese segmentation)
+    let stanza_tokens = vec![
+        "呢".to_string(),
+        "度".to_string(),
+        "下次".to_string(),   // N:1 merge: 下+次
+        "食飯".to_string(),   // N:1 merge: 食+飯
+        "啦".to_string(),
+    ];
+
+    // 5 MOR items matching 5 Stanza tokens
+    let (mors, term) = build_mor("noun|呢 noun|度 noun|下次 verb|食飯 part|啦 .");
+    let gra_rels = build_gra("1|5|CASE 2|5|NMOD 3|5|NMOD 4|5|COMPOUND 5|0|ROOT");
+
+    eprintln!("Stanza tokens: {:?} (count: {})", stanza_tokens, stanza_tokens.len());
+    eprintln!("MOR count: {}, GRA count: {}", mors.len(), gra_rels.len());
+
+    // Debug: show the word-token mapping
+    let mapping = mapping::build_word_token_mapping(&original_words, &stanza_tokens);
+    for i in 0..original_words.len() {
+        let tokens = mapping.tokens_for_word(i);
+        eprintln!("  word[{i}] '{}' → tokens {:?}", original_words[i].text.as_ref(), tokens);
+    }
+
+    let result = retokenize_utterance(
+        utt, &original_words, &stanza_tokens, mors, term, gra_rels,
+    );
+
+    if let Err(ref e) = result {
+        // Print the rewritten AST for debugging
+        let output = chat.to_chat_string();
+        eprintln!("ERROR: {e}");
+        eprintln!("Rewritten AST:\n{output}");
+    }
+
+    assert!(
+        result.is_ok(),
+        "Retokenize with N:1 merges should succeed: {:?}",
+        result.err()
+    );
+
+    let output = chat.to_chat_string();
+    assert!(output.contains("[/]"), "Retrace preserved: {output}");
+    assert!(output.contains("下次"), "Merged 下次 should appear: {output}");
+    assert!(output.contains("食飯"), "Merged 食飯 should appear: {output}");
+    assert!(output.contains("%mor:"), "Has %mor tier: {output}");
+}

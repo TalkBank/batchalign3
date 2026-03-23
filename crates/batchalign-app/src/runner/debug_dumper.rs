@@ -284,6 +284,93 @@ impl DebugDumper {
             debug!(%e, "failed to write pre-morphosyntax CHAT");
         }
     }
+
+    /// Dump extracted morphosyntax payloads (what gets sent to Python).
+    ///
+    /// Writes one JSON file per utterance with extracted words, special forms,
+    /// and the batch item structure. This is the handoff point between Rust
+    /// extraction and Python NLP inference.
+    pub(crate) fn dump_morphosyntax_extracted(
+        &self,
+        filename: &str,
+        payloads: &impl serde::Serialize,
+    ) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_morphosyntax_extracted.json"));
+        match serde_json::to_string_pretty(payloads) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    debug!(%e, "failed to write morphosyntax extracted payloads");
+                } else {
+                    info!(path = %path.display(), "wrote morphosyntax extracted payloads");
+                }
+            }
+            Err(e) => debug!(%e, "failed to serialize morphosyntax payloads"),
+        }
+    }
+
+    /// Dump UD responses from Python worker (what comes back from Stanza).
+    pub(crate) fn dump_morphosyntax_ud_responses(
+        &self,
+        filename: &str,
+        responses: &impl serde::Serialize,
+    ) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_morphosyntax_ud_responses.json"));
+        match serde_json::to_string_pretty(responses) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    debug!(%e, "failed to write morphosyntax UD responses");
+                } else {
+                    info!(path = %path.display(), "wrote morphosyntax UD responses");
+                }
+            }
+            Err(e) => debug!(%e, "failed to serialize UD responses"),
+        }
+    }
+
+    /// Dump morphosyntax injection diagnostics (MOR/GRA counts, errors).
+    pub(crate) fn dump_morphosyntax_inject_diagnostics(
+        &self,
+        filename: &str,
+        diagnostics: &impl serde::Serialize,
+    ) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_morphosyntax_inject.json"));
+        match serde_json::to_string_pretty(diagnostics) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    debug!(%e, "failed to write morphosyntax inject diagnostics");
+                } else {
+                    info!(path = %path.display(), "wrote morphosyntax inject diagnostics");
+                }
+            }
+            Err(e) => debug!(%e, "failed to serialize inject diagnostics"),
+        }
+    }
+
+    /// Dump CHAT text after morphosyntax injection.
+    pub(crate) fn dump_post_morphosyntax_chat(&self, filename: &str, chat_text: &str) {
+        let Some(dir) = self.ensure_dir() else {
+            return;
+        };
+        let stem = Self::stem(filename);
+        let path = dir.join(format!("{stem}_post_morphosyntax.cha"));
+        if let Err(e) = std::fs::write(&path, chat_text) {
+            debug!(%e, "failed to write post-morphosyntax CHAT");
+        } else {
+            info!(path = %path.display(), "wrote post-morphosyntax CHAT");
+        }
+    }
 }
 
 #[cfg(test)]
