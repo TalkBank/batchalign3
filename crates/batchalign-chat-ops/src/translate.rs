@@ -289,7 +289,7 @@ pub fn postprocess_translation(raw: &str, punct_chars: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_direct_parser::DirectParser;
+    use talkbank_parser::DirectParser;
     use talkbank_model::model::WriteChat;
 
     fn parse_chat(text: &str) -> ChatFile {

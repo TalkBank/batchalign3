@@ -355,7 +355,6 @@ dependencies = [
  "serde_json",
  "smallvec",
  "strsim",
- "talkbank-direct-parser",
  "talkbank-model",
  "talkbank-parser",
  "thiserror 2.0.18",
@@ -4192,18 +4191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "talkbank-direct-parser"
-version = "0.1.0"
-dependencies = [
- "chumsky",
- "indexmap",
- "smallvec",
- "smol_str",
- "talkbank-model",
- "tracing",
-]
-
-[[package]]
 name = "talkbank-model"
 version = "0.1.0"
 dependencies = [
@@ -4227,10 +4214,10 @@ dependencies = [
 name = "talkbank-parser"
 version = "0.1.0"
 dependencies = [
+ "chumsky",
  "indexmap",
  "smallvec",
  "smol_str",
- "talkbank-direct-parser",
  "talkbank-model",
  "thiserror 2.0.18",
  "tracing",

@@ -153,7 +153,7 @@ impl PartialEq<&str> for AsrNormalizedText {
 ///
 /// **Semantically identical** to [`AsrNormalizedText`] but marks the boundary
 /// crossing from the ASR domain into the CHAT domain. After this point,
-/// the text is parsed by `talkbank_direct_parser` into CHAT AST nodes.
+/// the text is parsed by `talkbank_parser` into CHAT AST nodes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 #[repr(transparent)]

@@ -87,7 +87,7 @@ pub fn replace_or_add_tier(tiers: &mut SmallVec<[DependentTier; 3]>, new_tier: D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_direct_parser::DirectParser;
+    use talkbank_parser::DirectParser;
     use talkbank_model::model::{ChatFile, Line, WriteChat};
 
     fn parse_chat(text: &str) -> ChatFile {

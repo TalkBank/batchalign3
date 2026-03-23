@@ -785,7 +785,7 @@ mod tests {
     /// fallback should use global results instead.
     #[test]
     fn test_best_of_both_falls_back_to_global() {
-        use talkbank_direct_parser::DirectParser;
+        use talkbank_parser::DirectParser;
 
         let chat_text = "\
 @UTF8
@@ -886,7 +886,7 @@ mod tests {
     /// global results even if two-pass timed more utterances.
     #[test]
     fn test_grouping_fallback_prefers_more_groups() {
-        use talkbank_direct_parser::DirectParser;
+        use talkbank_parser::DirectParser;
 
         // Construct a scenario where two-pass changes bullet placement enough
         // to merge FA groups. We use a file with a +< backchannel between two
@@ -989,7 +989,7 @@ mod tests {
     /// should be preferred (better backchannel placement).
     #[test]
     fn test_grouping_keeps_two_pass_when_groups_equal_or_better() {
-        use talkbank_direct_parser::DirectParser;
+        use talkbank_parser::DirectParser;
 
         let chat_text = "\
 @UTF8

@@ -286,7 +286,7 @@ pub fn clear_coref(chat_file: &mut ChatFile) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_direct_parser::DirectParser;
+    use talkbank_parser::DirectParser;
     use talkbank_model::model::WriteChat;
 
     fn parse_chat(text: &str) -> ChatFile {

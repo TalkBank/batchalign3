@@ -255,7 +255,7 @@ pub fn split_utterance(utt: Utterance, assignments: &[usize]) -> Vec<Utterance> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_direct_parser::DirectParser;
+    use talkbank_parser::DirectParser;
     use talkbank_model::model::WriteChat;
 
     fn parse_chat(text: &str) -> ChatFile {

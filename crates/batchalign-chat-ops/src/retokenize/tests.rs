@@ -2,7 +2,7 @@ use super::*;
 use crate::extract;
 use mapping::{build_word_token_mapping, try_deterministic_word_token_mapping};
 use parse_helpers::{handle_ending_punct_skip, try_parse_token_as_word};
-use talkbank_direct_parser::DirectParser;
+use talkbank_parser::DirectParser;
 use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, GrammaticalRelation, Line, Mor, WriteChat};
 
@@ -33,7 +33,7 @@ fn extract_words(utt: &Utterance) -> Vec<extract::ExtractedWord> {
 /// Parse a %mor tier string into (mors, terminator) using the real parser.
 fn parse_mor(line: &str) -> (Vec<Mor>, Option<String>) {
     let errors = talkbank_model::NullErrorSink;
-    let outcome = talkbank_direct_parser::mor_tier::parse_mor_tier_content(line, 0, &errors);
+    let outcome = todo!("mor_tier parser removed with Chumsky — use tree-sitter"); // was: talkbank_direct_parser::mor_tier::parse_mor_tier_content(line, 0, &errors);
     let tier = outcome.into_option().unwrap();
     let terminator = tier.terminator.map(|s| s.to_string());
     let items: Vec<Mor> = tier.items.iter().cloned().collect();
@@ -43,7 +43,7 @@ fn parse_mor(line: &str) -> (Vec<Mor>, Option<String>) {
 /// Parse a %gra tier string into GrammaticalRelations using the real parser.
 fn parse_gra(line: &str) -> Vec<GrammaticalRelation> {
     let errors = talkbank_model::NullErrorSink;
-    let outcome = talkbank_direct_parser::gra_tier::parse_gra_tier_content(line, 0, &errors);
+    let outcome = todo!("gra_tier parser removed with Chumsky — use tree-sitter"); // was: talkbank_direct_parser::gra_tier::parse_gra_tier_content(line, 0, &errors);
     let tier = outcome.into_option().unwrap();
     tier.relations.0
 }

@@ -1,7 +1,7 @@
 //! Tests for forced alignment module.
 
 use super::*;
-use talkbank_direct_parser::DirectParser;
+use talkbank_parser::DirectParser;
 use talkbank_model::model::{Line, UtteranceContent, WriteChat};
 
 fn parse_chat(text: &str) -> talkbank_model::model::ChatFile {
