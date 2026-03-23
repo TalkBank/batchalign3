@@ -133,7 +133,7 @@ pub(super) fn handle_ending_punct_skip(
 pub(super) fn try_parse_token_as_word(text: &str, diagnostics: &mut Vec<String>) -> Option<Word> {
     let parser = DirectParser::new().expect("DirectParser should always construct");
     let errors = NullErrorSink;
-    match talkbank_parser::word_parser::parse_word_impl(text, 0, &errors).into_option() {
+    match talkbank_parser::parse_word(text, 0, &errors).into_option() {
         Some(word) => Some(word),
         None => {
             tracing::warn!(

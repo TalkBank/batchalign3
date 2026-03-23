@@ -412,7 +412,7 @@ fn parse_asr_word(text: &str) -> Word {
 
     let parser = DirectParser::new().expect("DirectParser should construct");
     let errors = talkbank_model::NullErrorSink;
-    match talkbank_parser::word_parser::parse_word_impl(text, 0, &errors).into_option() {
+    match talkbank_parser::parse_word(text, 0, &errors).into_option() {
         Some(parsed) => parsed,
         None => {
             tracing::warn!(
