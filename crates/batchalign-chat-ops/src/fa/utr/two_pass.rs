@@ -785,7 +785,7 @@ mod tests {
     /// fallback should use global results instead.
     #[test]
     fn test_best_of_both_falls_back_to_global() {
-        use talkbank_parser::DirectParser;
+        use talkbank_parser::TreeSitterParser;
 
         let chat_text = "\
 @UTF8
@@ -800,7 +800,7 @@ mod tests {
 *PAR:\tand bought some groceries .
 @End
 ";
-        let parser = DirectParser::new().unwrap();
+        let parser = TreeSitterParser::new().unwrap();
         let mut chat = parser.parse_chat_file(chat_text).unwrap();
 
         // ASR tokens: PAR's words + "ja" appears far from predecessor window.
@@ -886,7 +886,6 @@ mod tests {
     /// global results even if two-pass timed more utterances.
     #[test]
     fn test_grouping_fallback_prefers_more_groups() {
-        use talkbank_parser::DirectParser;
 
         // Construct a scenario where two-pass changes bullet placement enough
         // to merge FA groups. We use a file with a +< backchannel between two
@@ -905,7 +904,7 @@ mod tests {
 *PAR:\tand bought some groceries .
 @End
 ";
-        let parser = DirectParser::new().unwrap();
+        let parser = TreeSitterParser::new().unwrap();
         let mut chat = parser.parse_chat_file(chat_text).unwrap();
 
         // ASR tokens: "ja" far from predecessor → two-pass can't find it,
@@ -989,7 +988,6 @@ mod tests {
     /// should be preferred (better backchannel placement).
     #[test]
     fn test_grouping_keeps_two_pass_when_groups_equal_or_better() {
-        use talkbank_parser::DirectParser;
 
         let chat_text = "\
 @UTF8
@@ -1004,7 +1002,7 @@ mod tests {
 *PAR:\tand bought some groceries .
 @End
 ";
-        let parser = DirectParser::new().unwrap();
+        let parser = TreeSitterParser::new().unwrap();
         let mut chat = parser.parse_chat_file(chat_text).unwrap();
 
         // "mhm" close to predecessor → two-pass windowed recovery succeeds.

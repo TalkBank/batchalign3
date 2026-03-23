@@ -103,7 +103,7 @@ pub struct UtteranceDesc {
 /// A single word token with optional timing.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WordDesc {
-    /// Word text (ready for CHAT assembly via DirectParser).
+    /// Word text (ready for CHAT assembly via TreeSitterParser).
     pub text: asr_postprocess::ChatWordText,
     /// Start time in milliseconds.
     pub start_ms: Option<u64>,
@@ -405,12 +405,12 @@ fn build_text_utterance(
     Ok(None)
 }
 
-/// Parse a single word through DirectParser, falling back to unchecked for ASR tokens.
+/// Parse a single word through TreeSitterParser, falling back to unchecked for ASR tokens.
 fn parse_asr_word(text: &str) -> Word {
-    use talkbank_parser::DirectParser;
+    use talkbank_parser::TreeSitterParser;
     use talkbank_model::ChatParser;
 
-    let parser = DirectParser::new().expect("DirectParser should construct");
+    let parser = TreeSitterParser::new().expect("TreeSitterParser should construct");
     let errors = talkbank_model::NullErrorSink;
     match talkbank_parser::parse_word(text, 0, &errors).into_option() {
         Some(parsed) => parsed,

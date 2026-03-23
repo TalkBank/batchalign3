@@ -4,7 +4,7 @@
 //!
 //! - [`AsrRawText`] — raw tokens from an ASR provider (before any normalization)
 //! - [`AsrNormalizedText`] — tokens after the full 8-stage pipeline
-//! - [`ChatWordText`] — text ready for CHAT assembly via `DirectParser`
+//! - [`ChatWordText`] — text ready for CHAT assembly via `TreeSitterParser`
 //!
 //! The progression is: `AsrRawText` (on [`AsrElement`]) → `AsrNormalizedText`
 //! (on [`AsrWord`]) → `ChatWordText` (on [`WordDesc`]).
@@ -78,7 +78,7 @@ impl PartialEq<&str> for AsrRawText {
 /// Filled pauses are in `&-um` form, orthographic replacements applied
 /// (`'cause` → `(be)cause`), Cantonese normalization done (for `yue`).
 ///
-/// **NOT yet CHAT syntax** — still needs `DirectParser` to become AST nodes.
+/// **NOT yet CHAT syntax** — still needs `TreeSitterParser` to become AST nodes.
 /// The next step is conversion to [`ChatWordText`] at the boundary between
 /// ASR post-processing and CHAT assembly.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -147,7 +147,7 @@ impl PartialEq<&str> for AsrNormalizedText {
     }
 }
 
-/// Text ready for CHAT assembly via `DirectParser`.
+/// Text ready for CHAT assembly via `TreeSitterParser`.
 ///
 /// **Source**: `transcript_from_asr_utterances()` in `build_chat.rs`.
 ///

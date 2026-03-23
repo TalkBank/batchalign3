@@ -286,11 +286,11 @@ pub fn clear_coref(chat_file: &mut ChatFile) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_parser::DirectParser;
+    use talkbank_parser::TreeSitterParser;
     use talkbank_model::model::WriteChat;
 
     fn parse_chat(text: &str) -> ChatFile {
-        let parser = DirectParser::new().unwrap();
+        let parser = TreeSitterParser::new().unwrap();
         parser.parse_chat_file(text).unwrap()
     }
 

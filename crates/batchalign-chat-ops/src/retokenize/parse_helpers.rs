@@ -1,6 +1,6 @@
 //! Small helpers for parsing Stanza tokens into CHAT AST nodes.
 
-use talkbank_parser::DirectParser;
+use talkbank_parser::TreeSitterParser;
 use talkbank_model::ChatParser;
 use talkbank_model::NullErrorSink;
 use talkbank_model::model::{BracketedItem, UtteranceContent, Word};
@@ -131,7 +131,7 @@ pub(super) fn handle_ending_punct_skip(
 /// Emits `tracing::warn!` when a token fails to parse, making these events
 /// visible in `-vv` output for debugging retokenization issues.
 pub(super) fn try_parse_token_as_word(text: &str, diagnostics: &mut Vec<String>) -> Option<Word> {
-    let parser = DirectParser::new().expect("DirectParser should always construct");
+    let parser = TreeSitterParser::new().expect("TreeSitterParser should always construct");
     let errors = NullErrorSink;
     match talkbank_parser::parse_word(text, 0, &errors).into_option() {
         Some(word) => Some(word),

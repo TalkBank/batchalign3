@@ -2,12 +2,12 @@ use super::*;
 use crate::extract;
 use mapping::{build_word_token_mapping, try_deterministic_word_token_mapping};
 use parse_helpers::{handle_ending_punct_skip, try_parse_token_as_word};
-use talkbank_parser::DirectParser;
+use talkbank_parser::TreeSitterParser;
 use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, GrammaticalRelation, Line, Mor, WriteChat};
 
 fn parse_chat(text: &str) -> ChatFile {
-    let parser = DirectParser::new().unwrap();
+    let parser = TreeSitterParser::new().unwrap();
     parser.parse_chat_file(text).unwrap()
 }
 

@@ -1,11 +1,11 @@
 //! Tests for forced alignment module.
 
 use super::*;
-use talkbank_parser::DirectParser;
+use talkbank_parser::TreeSitterParser;
 use talkbank_model::model::{Line, UtteranceContent, WriteChat};
 
 fn parse_chat(text: &str) -> talkbank_model::model::ChatFile {
-    let parser = DirectParser::new().unwrap();
+    let parser = TreeSitterParser::new().unwrap();
     parser.parse_chat_file(text).unwrap()
 }
 
