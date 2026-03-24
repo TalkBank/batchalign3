@@ -20,6 +20,7 @@ from batchalign.worker._infer_hosts import (
 from batchalign.worker._model_loading.asr import load_asr_engine
 from batchalign.worker._model_loading.forced_alignment import load_fa_engine
 from batchalign.worker._model_loading.translation import load_translation_engine
+from batchalign.worker._model_loading.utterance import load_utterance_model
 from batchalign.worker._stanza_loading import load_stanza_models, load_utseg_builder
 from batchalign.worker._types import (
     PROFILE_TASKS,
@@ -58,6 +59,7 @@ def _configure_loaded_tasks(
         )
     if "utterance" in tasks or "utseg" in tasks:
         load_utseg_builder(lang)
+        load_utterance_model(lang)
         _state.register_batch_infer_handler(
             InferTask.UTSEG,
             build_utseg_batch_infer_handler(),

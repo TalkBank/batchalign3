@@ -493,6 +493,7 @@ class MorphosyntaxResultPayloadV2(BaseModel):
 class UtsegItemResultV2(BaseModel):
     """One utterance-segmentation item result returned by Python."""
 
+    assignments: list[int] | None = None
     trees: list[str] | None = None
     error: str | None = None
 

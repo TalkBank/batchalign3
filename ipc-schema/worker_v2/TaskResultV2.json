@@ -646,6 +646,18 @@
       "description": "One utseg item result returned by Python.",
       "type": "object",
       "properties": {
+        "assignments": {
+          "description": "Direct word-group assignments when inference succeeded without raw trees.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          }
+        },
         "error": {
           "description": "Optional per-item runtime error.",
           "type": [

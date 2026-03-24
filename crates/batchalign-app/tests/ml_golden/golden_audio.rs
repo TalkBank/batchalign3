@@ -88,6 +88,36 @@ fn assert_valid_chat_structure(chat: &str, label: &str) {
     // the parser enforces these structurally.
 }
 
+fn assert_min_utterances(chat: &str, label: &str, min_utterances: usize) {
+    let file = parse_chat(chat, label);
+    assert!(
+        file.utterance_count() >= min_utterances,
+        "{label}: expected at least {min_utterances} utterances, got {}",
+        file.utterance_count()
+    );
+}
+
+fn assert_first_utterance_max_words(chat: &str, label: &str, max_words: usize) {
+    let file = parse_chat(chat, label);
+    let first = file
+        .utterances()
+        .next()
+        .unwrap_or_else(|| panic!("{label}: expected at least one utterance"));
+    let words = extract_words(&file, TierDomain::Mor);
+    let first_words = words
+        .first()
+        .unwrap_or_else(|| panic!("{label}: missing extracted words for first utterance"));
+    assert!(
+        first_words.words.len() <= max_words,
+        "{label}: expected first utterance to have at most {max_words} words, got {}",
+        first_words.words.len()
+    );
+    assert!(
+        first.main.content.bullet.is_some(),
+        "{label}: expected first utterance to carry a timing bullet"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3: Align tests
 // ---------------------------------------------------------------------------
@@ -706,6 +736,116 @@ async fn transcribe_biling_cat_spa_whisper() {
 #[tokio::test]
 async fn transcribe_eng_multi_speaker_whisper() {
     transcribe_audio_clip("eng_multi_speaker", "eng", "transcribe_eng_multi_speaker").await;
+}
+
+/// Short clipped English fixture derived from ACR-ac. This guards against
+/// regressions where a lightly punctuated run collapses into one giant turn.
+#[tokio::test]
+async fn transcribe_eng_acr_clip_whisper_produces_multiple_utterances() {
+    let Some(server) =
+        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    else {
+        return;
+    };
+
+    let Some(fixtures) = prepare_named_audio(server.state_dir(), "eng_acr_first13p5", None) else {
+        return;
+    };
+
+    let out_dir = server.state_dir().join("out_transcribe_eng_acr_clip");
+    std::fs::create_dir_all(&out_dir).expect("mkdir output dir");
+    let output_path = out_dir.join("eng_acr_first13p5.cha");
+
+    let options = CommandOptions::Transcribe(TranscribeOptions {
+        common: CommonOptions {
+            override_cache: true,
+            ..CommonOptions::default()
+        },
+        asr_engine: AsrEngineName::Whisper,
+        diarize: false,
+        wor: WorTierPolicy::Omit,
+        merge_abbrev: false.into(),
+        batch_size: 8,
+    });
+
+    let (info, outputs) = submit_paths_and_complete(
+        server.client(),
+        server.base_url(),
+        ReleasedCommand::Transcribe,
+        "eng",
+        vec![fixtures.audio.to_string_lossy().into()],
+        vec![output_path.to_string_lossy().into()],
+        options,
+    )
+    .await;
+
+    assert_eq!(
+        info.status,
+        JobStatus::Completed,
+        "transcribe_eng_acr_clip: job should complete"
+    );
+    assert_eq!(outputs.len(), 1);
+
+    let output = &outputs[0];
+    assert_valid_chat_structure(output, "transcribe_eng_acr_clip");
+    assert_min_utterances(output, "transcribe_eng_acr_clip", 3);
+}
+
+#[tokio::test]
+async fn transcribe_eng_acr_clip_revai_avoids_giant_first_utterance() {
+    if require_revai_key().is_none() {
+        eprintln!("SKIP: REVAI_API_KEY / BATCHALIGN_REV_API_KEY not set");
+        return;
+    }
+
+    let Some(server) =
+        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    else {
+        return;
+    };
+
+    let Some(fixtures) = prepare_named_audio(server.state_dir(), "eng_acr_first13p5", None) else {
+        return;
+    };
+
+    let out_dir = server.state_dir().join("out_transcribe_eng_acr_clip_revai");
+    std::fs::create_dir_all(&out_dir).expect("mkdir output dir");
+    let output_path = out_dir.join("eng_acr_first13p5.cha");
+
+    let options = CommandOptions::Transcribe(TranscribeOptions {
+        common: CommonOptions {
+            override_cache: true,
+            ..CommonOptions::default()
+        },
+        asr_engine: AsrEngineName::RevAi,
+        diarize: false,
+        wor: WorTierPolicy::Omit,
+        merge_abbrev: false.into(),
+        batch_size: 8,
+    });
+
+    let (info, outputs) = submit_paths_and_complete(
+        server.client(),
+        server.base_url(),
+        ReleasedCommand::Transcribe,
+        "eng",
+        vec![fixtures.audio.to_string_lossy().into()],
+        vec![output_path.to_string_lossy().into()],
+        options,
+    )
+    .await;
+
+    assert_eq!(
+        info.status,
+        JobStatus::Completed,
+        "transcribe_eng_acr_clip_revai: job should complete"
+    );
+    assert_eq!(outputs.len(), 1);
+
+    let output = &outputs[0];
+    assert_valid_chat_structure(output, "transcribe_eng_acr_clip_revai");
+    assert_min_utterances(output, "transcribe_eng_acr_clip_revai", 4);
+    assert_first_utterance_max_words(output, "transcribe_eng_acr_clip_revai", 6);
 }
 
 #[tokio::test]

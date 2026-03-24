@@ -558,6 +558,12 @@ def test_text_execute_v2_rejects_result_count_mismatch(
             id="utseg",
         ),
         pytest.param(
+            "utseg",
+            {"assignments": [0, 1]},
+            UtsegResultV2,
+            id="utseg-assignments",
+        ),
+        pytest.param(
             "translate",
             {"raw_translation": "hola"},
             TranslationResultV2,
@@ -608,6 +614,12 @@ def test_text_execute_v2_accepts_valid_result_shapes(
             {"trees": [1]},
             "list[str]",
             id="utseg-trees",
+        ),
+        pytest.param(
+            "utseg",
+            {"assignments": ["bad"]},
+            "list[usize]",
+            id="utseg-assignments",
         ),
         pytest.param(
             "translate",

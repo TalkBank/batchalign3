@@ -16,6 +16,7 @@ from batchalign.inference._domain_types import LanguageCode
 
 if TYPE_CHECKING:
     from batchalign.inference.types import ConstituencyTree, StanzaNLP
+    from batchalign.models.utterance import BertUtteranceModel
 
 from batchalign.providers import (
     BatchInferRequest,
@@ -40,6 +41,7 @@ class UtsegBatchItem(BaseModel):
 def batch_infer_utseg(
     req: BatchInferRequest,
     build_stanza_config: Callable[[list[str]], tuple[list[str], dict[str, dict[str, str | bool]]]],
+    utterance_boundary_model: "BertUtteranceModel | None" = None,
 ) -> BatchInferResponse:
     """Batch Stanza constituency inference: (words) -> tree strings.
 
@@ -73,13 +75,38 @@ def batch_infer_utseg(
             continue
         if len(item.words) <= 1:
             results[i] = InferResponse(
-                result={"trees": []},
+                result={"assignments": [0] * len(item.words)},
                 elapsed_s=0.0,
             )
             continue
         miss_indices.append(i)
 
     if not miss_indices:
+        return BatchInferResponse(results=results)
+
+    if utterance_boundary_model is not None:
+        for idx in miss_indices:
+            item = items[idx]
+            assert item is not None
+            try:
+                assignments = utterance_boundary_model.predict_assignments(item.words)
+                results[idx] = InferResponse(
+                    result={"assignments": assignments},
+                    elapsed_s=0.0,
+                )
+            except (IndexError, AttributeError, TypeError, ValueError) as error:
+                L.warning("Utseg boundary-model infer failed for item %d: %s", idx, error)
+                results[idx] = InferResponse(
+                    result={"assignments": [0] * len(item.words)},
+                    elapsed_s=0.0,
+                )
+        elapsed = time.monotonic() - t0
+        if results:
+            first = results[0]
+            results[0] = InferResponse(
+                result=first.result, error=first.error, elapsed_s=elapsed
+            )
+        L.info("batch_infer utseg(boundary-model): %d items, %.3fs", n, elapsed)
         return BatchInferResponse(results=results)
 
     langs: list[str] = [req.lang] if req.lang else ["eng"]

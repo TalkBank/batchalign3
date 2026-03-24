@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         WhisperASRHandle,
         WhisperFAHandle,
     )
+    from batchalign.models.utterance.infer import BertUtteranceModel
 
 JSONPrimitive = str | int | float | bool | None
 
@@ -214,6 +215,8 @@ class _WorkerState:
         self.utseg_config_builder: Callable[
             [list[str]], tuple[list[str], dict[str, dict[str, str | bool]]]
         ] | None = None
+        self.utterance_boundary_model: BertUtteranceModel | None = None
+        self.utterance_model_name: str = ""
         self.utseg_version: str = ""
 
         # Translation

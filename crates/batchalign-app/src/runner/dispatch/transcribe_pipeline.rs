@@ -107,6 +107,18 @@ pub(in crate::runner) async fn dispatch_transcribe_infer(
     }
 }
 
+fn transcribe_media_name_for_chat(
+    original_audio_path: &Path,
+    converted_audio_path: &Path,
+) -> Option<String> {
+    original_audio_path
+        .file_stem()
+        .or_else(|| original_audio_path.file_name())
+        .or_else(|| converted_audio_path.file_stem())
+        .or_else(|| converted_audio_path.file_name())
+        .map(|s| s.to_string_lossy().into_owned())
+}
+
 /// Process a single audio file through the transcribe pipeline.
 async fn process_one_transcribe_file(
     job: &RunnerJobSnapshot,
@@ -158,10 +170,9 @@ async fn process_one_transcribe_file(
         }
     };
 
-    // Set media filename for @Media header from resolved audio path
-    opts.media_name = audio_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned());
+    // Preserve the source media basename for CHAT even when ffmpeg conversion
+    // routes inference through a cached WAV artifact.
+    opts.media_name = transcribe_media_name_for_chat(&original_audio_path, &audio_path);
 
     let audio_path_str = audio_path.to_string_lossy();
     tracing::info!(
@@ -475,5 +486,44 @@ mod tests {
             .expect("job detail");
         assert_eq!(detail.file_statuses.len(), 1);
         assert_eq!(detail.file_statuses[0].status, FileStatusKind::Error);
+    }
+
+    #[tokio::test]
+    async fn transcribe_media_name_uses_original_basename_after_mp4_conversion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache_dir = dir.path().join("cache");
+        let original_audio_path = dir.path().join("interview.mp4");
+        let ffmpeg_out = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=16000:cl=mono",
+                "-t",
+                "0.1",
+                original_audio_path.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .await;
+        if ffmpeg_out.is_err() || !ffmpeg_out.expect("ffmpeg output").status.success() {
+            eprintln!("skipping: could not generate test mp4");
+            return;
+        }
+
+        let converted_audio_path = crate::ensure_wav::ensure_wav(&original_audio_path, Some(&cache_dir))
+            .await
+            .expect("convert mp4 to cached wav");
+
+        assert_ne!(
+            converted_audio_path.file_stem(),
+            original_audio_path.file_stem(),
+            "test requires cached wav basename to differ from original media basename"
+        );
+        assert_eq!(
+            transcribe_media_name_for_chat(&original_audio_path, &converted_audio_path).as_deref(),
+            Some("interview"),
+            "CHAT @Media should preserve the original media basename after conversion"
+        );
     }
 }

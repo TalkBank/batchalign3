@@ -124,6 +124,16 @@ pub async fn process_utseg(
         .await
 }
 
+/// Infer utterance-boundary assignments for pretokenized word batches.
+pub async fn infer_utseg_assignments(
+    pool: &WorkerPool,
+    lang: &LanguageCode3,
+    items: &[UtsegBatchItem],
+) -> Result<Vec<UtsegResponse>, ServerError> {
+    let indexed_items: Vec<(usize, UtsegBatchItem)> = items.iter().cloned().enumerate().collect();
+    infer_batch(pool, &indexed_items, lang).await
+}
+
 // ---------------------------------------------------------------------------
 // Cross-file batch utseg processing
 // ---------------------------------------------------------------------------
@@ -524,6 +534,13 @@ async fn infer_batch(
             continue;
         }
 
+        if let Some(assignments) = &item_result.assignments {
+            utseg_responses.push(UtsegResponse {
+                assignments: assignments.clone(),
+            });
+            continue;
+        }
+
         if let Some(trees) = &item_result.trees {
             let num_words = items[i].1.words.len();
             let assignments = utseg_compute::compute_assignments(trees, num_words);
@@ -533,7 +550,7 @@ async fn infer_batch(
 
         warn!(
             item = i,
-            "Utseg V2 returned no trees and no error (using empty response)"
+            "Utseg V2 returned no assignments, no trees, and no error (using empty response)"
         );
         utseg_responses.push(UtsegResponse {
             assignments: Vec::new(),

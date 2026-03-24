@@ -23,12 +23,14 @@ from batchalign.worker._model_loading.bootstrap import (
 )
 from batchalign.worker._model_loading.forced_alignment import load_fa_engine
 from batchalign.worker._model_loading.translation import load_translation_engine
+from batchalign.worker._model_loading.utterance import load_utterance_model
 
 __all__ = [
     "enable_test_echo",
     "load_asr_engine",
     "load_fa_engine",
     "load_translation_engine",
+    "load_utterance_model",
     "load_worker_profile",
     "load_worker_task",
     "parse_engine_overrides",

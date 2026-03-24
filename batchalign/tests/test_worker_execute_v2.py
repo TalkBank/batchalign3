@@ -835,6 +835,48 @@ def test_routes_utseg_execute_v2_request(tmp_path: Path) -> None:
     assert response.result.items[0].trees == ["(ROOT (S hello world))"]
 
 
+def test_routes_utseg_execute_v2_request_with_assignments(tmp_path: Path) -> None:
+    """The live V2 router should preserve direct utseg assignments."""
+
+    payload_path = tmp_path / "utseg-batch-assignments.json"
+    _write_json_payload(
+        payload_path,
+        {"items": [{"words": ["hello", "world"], "text": "hello world"}]},
+    )
+
+    response = execute_request_v2(
+        request=ExecuteRequestV2(
+            request_id="req-execute-v2-utseg-assignments-1",
+            task=InferenceTaskV2.UTSEG,
+            payload=UtsegRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-utseg-assignments-1",
+                item_count=1,
+            ),
+            attachments=[
+                PreparedTextRefV2(
+                    id="text-ref-utseg-assignments-1",
+                    path=str(payload_path),
+                    encoding=PreparedTextEncodingV2.UTF8_JSON,
+                    byte_offset=0,
+                    byte_len=payload_path.stat().st_size,
+                )
+            ],
+        ),
+        host=WorkerExecutionHostV2(
+            text=TextExecutionHostV2(
+                utseg_runner=lambda req: BatchInferResponse(
+                    results=[InferResponse(result={"assignments": [0, 1]}, elapsed_s=0.0)]
+                )
+            ),
+        ),
+    )
+
+    assert isinstance(response.outcome, ExecuteSuccessV2)
+    assert isinstance(response.result, UtsegResultV2)
+    assert response.result.items[0].assignments == [0, 1]
+
+
 def test_invalid_utseg_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
     """Malformed utseg host output should be classified as runtime failure."""
 
@@ -864,6 +906,43 @@ def test_invalid_utseg_host_output_becomes_runtime_failure(tmp_path: Path) -> No
             text=TextExecutionHostV2(
                 utseg_runner=lambda _req: BatchInferResponse(
                     results=[InferResponse(result={"trees": [1, 2]}, elapsed_s=0.0)]
+                )
+            ),
+        ),
+    )
+
+    _assert_runtime_failure_response(response, "invalid utseg host output")
+
+
+def test_invalid_utseg_assignment_host_output_becomes_runtime_failure(tmp_path: Path) -> None:
+    """Malformed utseg assignments should be classified as runtime failure."""
+
+    payload_path = tmp_path / "utseg-invalid-assignments-batch.json"
+    _write_json_payload(payload_path, {"items": [{"words": ["hello"], "text": "hello"}]})
+
+    response = execute_request_v2(
+        request=ExecuteRequestV2(
+            request_id="req-execute-v2-utseg-invalid-assignments-1",
+            task=InferenceTaskV2.UTSEG,
+            payload=UtsegRequestV2(
+                lang="eng",
+                payload_ref_id="text-ref-utseg-invalid-assignments-1",
+                item_count=1,
+            ),
+            attachments=[
+                PreparedTextRefV2(
+                    id="text-ref-utseg-invalid-assignments-1",
+                    path=str(payload_path),
+                    encoding=PreparedTextEncodingV2.UTF8_JSON,
+                    byte_offset=0,
+                    byte_len=payload_path.stat().st_size,
+                )
+            ],
+        ),
+        host=WorkerExecutionHostV2(
+            text=TextExecutionHostV2(
+                utseg_runner=lambda _req: BatchInferResponse(
+                    results=[InferResponse(result={"assignments": ["bad"]}, elapsed_s=0.0)]
                 )
             ),
         ),

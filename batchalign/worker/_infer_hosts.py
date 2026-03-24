@@ -94,7 +94,11 @@ def build_utseg_batch_infer_handler() -> BatchInferHandler:
         """Run utterance segmentation using the configured Stanza config builder."""
         if _state.utseg_config_builder is None:
             return unsupported_batch_infer("No utseg config builder loaded")(req)
-        return batch_infer_utseg(req=req, build_stanza_config=_state.utseg_config_builder)
+        return batch_infer_utseg(
+            req=req,
+            build_stanza_config=_state.utseg_config_builder,
+            utterance_boundary_model=_state.utterance_boundary_model,
+        )
 
     return _handler
 

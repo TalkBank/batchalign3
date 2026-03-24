@@ -453,6 +453,7 @@ async fn infer_utr_asr_response(
                     })
                     .collect(),
                 lang: context.lang.clone(),
+                source_monologues: None,
             })
         }
         UtrEngine::Whisper | UtrEngine::HkTencent => {

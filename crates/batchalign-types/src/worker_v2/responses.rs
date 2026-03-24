@@ -126,6 +126,9 @@ pub struct MorphosyntaxResultV2 {
 /// One utseg item result returned by Python.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct UtsegItemResultV2 {
+    /// Direct word-group assignments when inference succeeded without raw trees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignments: Option<Vec<usize>>,
     /// Raw constituency trees when inference succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trees: Option<Vec<String>>,

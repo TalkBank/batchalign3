@@ -1,7 +1,7 @@
 # Batchalign Command I/O Parity: Local CLI vs Server
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-24 15:37 EDT
 
 This document describes the input/output flow for every batchalign command,
 comparing local CLI dispatch with the server-based (`--server`) dispatch.
@@ -94,10 +94,28 @@ paths mode.
 
 **Current routing note (Rust CLI):** explicit `--server` is ignored for
 `transcribe`/`transcribe_s`; these commands run via local daemon paths-mode.
+If the local daemon is already running from an older build, the CLI warns about
+the build mismatch; restart the daemon before validating transcribe changes or
+you may unknowingly exercise stale code.
 
 **What gets created:** A new `.cha` file per audio file. Contains `@Comment`
 line with Batchalign version and ASR engine name, `@Languages`, `@Participants`,
 `@ID`, and utterance lines with timing. No `%mor`/`%gra` tiers.
+
+**Rev.AI `--lang auto` note:** `--lang auto` is not always equivalent to
+explicit `--lang eng`, even when the final transcript is treated as English.
+There are two internal paths:
+
+1. **Language ID succeeds before transcript submission** — BA3 resolves the
+   request to English up front, and the Rev request path matches explicit
+   `--lang eng`.
+2. **Language ID fails or returns an unmapped code** — BA3 submits a true Rev
+   auto request. Later stages may still resolve the resulting transcript to
+   English for segmentation and CHAT headers, but provider-side request options
+   differ from explicit English.
+
+This distinction matters because provider punctuation, diarization, and turn
+boundaries can differ across those two request paths.
 
 **Note on hidden BA2 aliases:** Hidden compatibility flags such as `--diarize`,
 `--whisper`, and `--rev` still parse, but they are migration shims. Public docs

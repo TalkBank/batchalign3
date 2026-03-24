@@ -209,6 +209,7 @@ mod tests {
                 },
             ],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         };
 
         let output = convert_asr_response(&response);
@@ -246,6 +247,7 @@ mod tests {
                 },
             ],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         };
 
         let output = convert_asr_response(&response);
@@ -260,6 +262,7 @@ mod tests {
         let response = AsrResponse {
             tokens: vec![],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         };
         let output = convert_asr_response(&response);
         assert!(output.monologues.is_empty());
@@ -276,6 +279,7 @@ mod tests {
                 confidence: None,
             }],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         };
 
         let output = convert_asr_response(&response);
@@ -312,6 +316,7 @@ mod tests {
                 },
             ],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         };
 
         // Speaker labels must be respected regardless of any diarization flag.
@@ -347,6 +352,7 @@ mod tests {
                 confidence: None,
             }],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         };
 
         assert!(response_has_speaker_labels(&response));
@@ -609,6 +615,7 @@ mod tests {
                 },
             ],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         }
     }
 
@@ -710,6 +717,7 @@ mod tests {
                 },
             ],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         }
     }
 

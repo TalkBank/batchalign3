@@ -17,6 +17,12 @@ use super::types::{AsrResponse, TranscribeOptions};
 /// Groups consecutive tokens by speaker. Adjacent tokens with the same speaker
 /// are combined into a single monologue. Speaker changes create new monologues.
 pub(crate) fn convert_asr_response(response: &AsrResponse) -> AsrOutput {
+    if let Some(monologues) = &response.source_monologues {
+        return AsrOutput {
+            monologues: monologues.clone(),
+        };
+    }
+
     if response.tokens.is_empty() {
         return AsrOutput {
             monologues: Vec::new(),
@@ -174,4 +180,3 @@ pub(crate) fn insert_transcribe_comment(chat_text: &str, opts: &TranscribeOption
     out.push_str(&comment);
     out
 }
-

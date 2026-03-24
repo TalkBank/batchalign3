@@ -91,6 +91,43 @@ fn normalize_string_list(
     }
 }
 
+fn normalize_usize_list(
+    result: Option<&serde_json::Value>,
+    field_name: &str,
+    task: &str,
+) -> PyResult<Option<Vec<usize>>> {
+    let Some(obj) = response_object(result, task)? else {
+        return Ok(None);
+    };
+
+    let Some(value) = obj.get(field_name) else {
+        return Ok(None);
+    };
+
+    match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                serde_json::Value::Number(value) => value
+                    .as_u64()
+                    .and_then(|number| usize::try_from(number).ok())
+                    .ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "{task} V2 field {field_name:?} values must be non-negative integers"
+                        ))
+                    }),
+                _ => Err(PyValueError::new_err(format!(
+                    "{task} V2 field {field_name:?} must be a list[usize]"
+                ))),
+            })
+            .collect::<PyResult<Vec<_>>>()
+            .map(Some),
+        _ => Err(PyValueError::new_err(format!(
+            "{task} V2 field {field_name:?} must be a list[usize]"
+        ))),
+    }
+}
+
 fn normalize_string_field(
     result: Option<&serde_json::Value>,
     field_name: &str,
@@ -179,6 +216,11 @@ fn normalize_utseg_result(
             .iter()
             .map(|infer_result| {
                 Ok(UtsegItemResultV2 {
+                    assignments: normalize_usize_list(
+                        infer_result.result.as_ref(),
+                        "assignments",
+                        "utseg",
+                    )?,
                     trees: normalize_string_list(infer_result.result.as_ref(), "trees", "utseg")?,
                     error: infer_result.error.clone(),
                 })

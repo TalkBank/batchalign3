@@ -1,7 +1,7 @@
 # Command Lifecycles
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-24 15:37 EDT
 
 End-to-end sequence diagrams showing how jobs flow through the system,
 from CLI invocation to output files. Every batchalign command now fits one
@@ -289,9 +289,15 @@ suppress ASR-provided labels. This means `batchalign3 transcribe` (without
 `--diarization`) still produces multi-speaker output when Rev.AI returns
 speaker-labeled monologues.
 
-**Rev.AI `skip_postprocessing`:** For English and French,
+**Rev.AI `skip_postprocessing`:** For English only,
 `skip_postprocessing=true` is sent to Rev.AI (matching BA2), so BA3's own
-utseg BERT model handles segmentation from raw output.
+pre-CHAT utterance model handles segmentation from raw output. In `--lang auto`
+mode, the Rust server first runs Rev.AI language ID. If that resolves to a
+supported language such as English before submission, the request path becomes
+the same as explicit `--lang eng`. If language ID fails or returns an unmapped
+code, BA3 keeps a true Rev auto request instead; downstream processing may
+still later resolve the output to English, but the provider request was not the
+same as `--lang eng`.
 
 ```mermaid
 sequenceDiagram
@@ -306,8 +312,19 @@ sequenceDiagram
     Note over Server: Runner: mark Running
 
     opt Rev.AI engine selected
-        Server->>Server: parallel Rev.AI preflight uploads
-        Note over Server: Rust Rev.AI client, skip_postprocessing=true for en/fr
+        alt --lang is explicit
+            Server->>Server: parallel Rev.AI preflight uploads
+            Note over Server: Use explicit language request settings
+        else --lang auto
+            Server->>Server: Rev.AI language ID
+            alt Language ID maps to supported ISO-639-3
+                Note over Server: Collapse to resolved language before submission<br/>If resolved=eng, request path matches explicit --lang eng
+                Server->>Server: parallel Rev.AI preflight uploads
+            else Language ID fails or code is unmapped
+                Note over Server: Keep true Rev auto request<br/>speakers_count and skip_postprocessing differ from explicit eng
+                Server->>Server: parallel Rev.AI preflight uploads
+            end
+        end
     end
 
     Server->>Server: resolve audio path
@@ -331,7 +348,7 @@ sequenceDiagram
         Note over Server: Worker returned to pool
     end
 
-    Note over Server: Rust post-processing: process_raw_asr()<br/>(batchalign-chat-ops::asr_postprocess)
+    Note over Server: Rust ASR normalization over typed monologues
 
     Server->>Server: 1. Compound merging (adjacent subword tokens)
     Server->>Server: 2. Timed word extraction (seconds to ms)
@@ -339,7 +356,15 @@ sequenceDiagram
     Server->>Server: 4. Number expansion (digits to words)
     Server->>Server: 4b. Cantonese normalization (lang=yue only)
     Server->>Server: 5. Long-turn splitting (chunk at >300 words)
-    Server->>Server: 6. Retokenization (punctuation-based utterance splitting)
+    Server->>Server: 5b. Long-pause fallback splitting
+    opt language has BA2 utterance model (eng/zho/yue)
+        Server->>W: execute_v2(task="utseg", prepared word batch)
+        Note over W: BA2-style model returns typed boundary assignments
+        W-->>Server: typed assignments
+        Note over Server: Apply assignments before CHAT build
+    end
+    Server->>Server: 6. Retokenization (punctuation fallback / cleanup)
+    Server->>Server: 7. Disfluency cleanup + retrace detection
 
     Server->>Server: build_chat() — ChatFile AST
     Note over Server: Generate headers: @Languages, @Participants,<br/>@ID (PAR/INV/CHI/MOT...), @Media<br/>Build utterances with %wor tiers<br/>Speaker codes from ASR labels used directly
@@ -364,10 +389,21 @@ sequenceDiagram
    pre-submits all audio files in parallel before the per-file loop. This lets
    Rev.AI start processing immediately, reducing wall-clock time 2-5x for large
    batches. The `rev_job_id` is stored in the job's runtime state and passed to
-   the worker later. For English and French, `skip_postprocessing=true` is sent
-   so BA3's own utseg model handles segmentation.
-2. The worker runs ASR and returns **raw tokens** — words with timestamps,
-   optional speaker labels, and confidence scores. The worker has zero CHAT
+   the worker later. For English, `skip_postprocessing=true` is sent so BA3's
+   own pre-CHAT utterance model handles segmentation.
+   In `--lang auto` mode there are two real branches:
+   - **Language ID succeeds and maps cleanly** — BA3 collapses to a resolved
+     language before submission. If it resolves to `eng`, the Rev request path
+     is the same as explicit `--lang eng`.
+   - **Language ID fails or returns an unmapped code** — BA3 submits a true Rev
+     auto request. Downstream code may still later resolve the transcript to
+     English for segmentation and CHAT headers, but provider-side options such
+     as `speakers_count` and `skip_postprocessing` were not the explicit-English
+     ones.
+2. The worker or Rust-owned Rev path returns a typed ASR response. BA3
+   preserves both a flattened token view and provider-shaped monologues so
+   later stages can keep punctuation and speaker boundaries instead of trying to
+   re-infer them from plain text. The inference boundary has zero CHAT
    awareness.
 2b. **Speaker label handling:** `convert_asr_response()` **always** groups tokens
    by their speaker labels when present. There is no `use_speaker_labels`
@@ -380,7 +416,7 @@ sequenceDiagram
    already has speaker labels (e.g., Rev.AI monologues), this stage is skipped
    even when diarization is requested.
 3. **All post-processing happens in Rust** (`batchalign-chat-ops`), not Python.
-   The six stages in `process_raw_asr()` are:
+   The normalization stages in `prepare_asr_chunks()` are:
    1. *Compound merging* — joins adjacent subword tokens
    2. *Timed word extraction* — seconds to milliseconds, filter pauses
    3. *Multi-word splitting* — split space-separated tokens, interpolate timestamps
@@ -388,13 +424,23 @@ sequenceDiagram
    4b. *Cantonese normalization* (lang=yue only) — simplified to HK traditional
        via `zhconv` + domain replacements (pure Rust)
    5. *Long-turn splitting* — chunk monologues at >300 words
-   6. *Retokenization* — punctuation-based utterance splitting
-4. **CHAT assembly** (`build_chat`) creates a complete `ChatFile` AST with
+   5b. *Long-pause fallback splitting* — split strongly separated runs when
+       provider punctuation is missing
+4. **Pre-CHAT utterance segmentation:** For supported languages (`eng`, `zho`,
+   `yue`), BA3 now calls the BA2 utterance model at this seam through the V2
+   `utseg` worker task. Python returns typed word-group assignments, Rust
+   applies them to the prepared ASR chunks, and only then does punctuation
+   retokenization run as fallback/cleanup. This seam runs on the effective
+   resolved language seen by post-processing, so both Rev `auto -> resolved eng`
+   and Rev `auto -> true auto request -> later resolved eng` can eventually
+   reach the English utterance model. Only the first branch is provider-request
+   equivalent to explicit `--lang eng`.
+5. **CHAT assembly** (`build_chat`) creates a complete `ChatFile` AST with
    proper headers (participant codes derived from speaker indices: PAR, INV,
    CHI, MOT, etc.) and utterances with `%wor` timing tiers. If dedicated
    speaker diarization produced segments, Rust then rewrites utterance speaker
    codes plus `@Participants` / `@ID` headers via `reassign_speakers()`.
-5. Optional **follow-up commands** (utseg defaults on, morphotag defaults off)
+6. Optional **follow-up commands** (utseg defaults on, morphotag defaults off)
    are chained automatically, reusing the same worker pool.
 
 ---

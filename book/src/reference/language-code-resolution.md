@@ -268,6 +268,11 @@ maintain our own validation tables.
 - Our mapping: `try_revai_language_hint()` in `revai/preflight.rs` (~75 entries)
 - **Validation approach:** `try_revai_language_hint(lang)` returns `None` for
   unsupported languages; callers log a warning and fall back to `"auto"`
+- **Important runtime nuance:** Rev `"auto"` is a real second request path, not
+  just a late alias for English. If Rev language ID resolves to English before
+  submission, BA3 uses the explicit-English request settings. If language ID
+  fails and BA3 submits true Rev auto, later downstream stages may still
+  resolve the transcript to English, but the provider request was different.
 - **Example validation:**
   ```rust
   if try_revai_language_hint(&lang).is_none() {

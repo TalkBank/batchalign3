@@ -1,10 +1,11 @@
 //! Transcribe pipeline built on the internal stage runner.
 
-use batchalign_chat_ops::asr_postprocess::{self, Utterance};
+use batchalign_chat_ops::asr_postprocess::{self, PreparedMonologueChunk, Utterance};
 use batchalign_chat_ops::build_chat;
 use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, TokenizationMode};
 use batchalign_chat_ops::serialize::to_chat_string;
 use batchalign_chat_ops::speaker::{SpeakerSegment as ChatSpeakerSegment, reassign_speakers};
+use batchalign_chat_ops::utseg::UtsegBatchItem;
 use std::path::Path;
 
 use tracing::info;
@@ -268,8 +269,10 @@ fn stage_asr_postprocess<'a, 'ctx>(
             "ASR response received, starting post-processing"
         );
 
-        let lang_str = ctx.opts.lang.to_string();
-        let utterances = asr_postprocess::process_raw_asr(&asr_output, &lang_str);
+        let resolved_lang = resolved_asr_language(ctx.opts, response);
+        ctx.resolved_lang = Some(resolved_lang.clone());
+        let utterances =
+            process_asr_with_prechat_segmentation(ctx, &asr_output, &resolved_lang).await?;
         info!(
             num_utterances = utterances.len(),
             "Post-processing complete, building CHAT"
@@ -278,6 +281,89 @@ fn stage_asr_postprocess<'a, 'ctx>(
         ctx.utterances = Some(utterances);
         Ok(())
     })
+}
+
+fn resolved_asr_language(opts: &TranscribeOptions, response: &AsrResponse) -> LanguageCode3 {
+    match &opts.lang {
+        LanguageSpec::Auto => {
+            let detected = response.lang.clone();
+            if &*detected == "auto" || detected.is_empty() {
+                let all_text: String = response
+                    .tokens
+                    .iter()
+                    .map(|t| t.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let detected_iso3 =
+                    batchalign_chat_ops::asr_postprocess::lang_detect::detect_primary_language(
+                        &[&all_text],
+                    )
+                    .unwrap_or_else(|| "eng".to_string());
+                LanguageCode3::try_new(&detected_iso3).unwrap_or_else(|_| LanguageCode3::eng())
+            } else {
+                detected
+            }
+        }
+        LanguageSpec::Resolved(code) => code.clone(),
+    }
+}
+
+fn uses_prechat_utterance_model(lang: &LanguageCode3) -> bool {
+    matches!(lang.as_ref(), "eng" | "zho" | "yue")
+}
+
+fn build_prechat_utseg_items(chunks: &[PreparedMonologueChunk]) -> Vec<UtsegBatchItem> {
+    chunks
+        .iter()
+        .map(|chunk| {
+            let words: Vec<String> = chunk
+                .words
+                .iter()
+                .map(|word| word.text.as_str().to_string())
+                .collect();
+            UtsegBatchItem {
+                text: words.join(" "),
+                words,
+            }
+        })
+        .collect()
+}
+
+fn apply_prechat_assignments(
+    chunks: &[PreparedMonologueChunk],
+    assignments: &[batchalign_chat_ops::utseg::UtsegResponse],
+) -> Vec<PreparedMonologueChunk> {
+    chunks
+        .iter()
+        .zip(assignments.iter())
+        .flat_map(|(chunk, response)| {
+            asr_postprocess::split_prepared_chunk_by_assignments(chunk, &response.assignments)
+        })
+        .collect()
+}
+
+async fn process_asr_with_prechat_segmentation(
+    ctx: &TranscribePipelineContext<'_>,
+    asr_output: &batchalign_chat_ops::asr_postprocess::AsrOutput,
+    resolved_lang: &LanguageCode3,
+) -> Result<Vec<Utterance>, ServerError> {
+    let lang_str = resolved_lang.to_string();
+    if !uses_prechat_utterance_model(resolved_lang) {
+        return Ok(asr_postprocess::process_raw_asr(asr_output, &lang_str));
+    }
+
+    let prepared_chunks = asr_postprocess::prepare_asr_chunks(asr_output, &lang_str);
+    if prepared_chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let items = build_prechat_utseg_items(&prepared_chunks);
+    let assignments =
+        crate::utseg::infer_utseg_assignments(ctx.services.pool, resolved_lang, &items).await?;
+    let split_chunks = apply_prechat_assignments(&prepared_chunks, &assignments);
+    let mut utterances = asr_postprocess::utterances_from_prepared_chunks(split_chunks);
+    asr_postprocess::finalize_utterances(&mut utterances, &lang_str);
+    Ok(utterances)
 }
 
 fn stage_speaker_diarization<'a, 'ctx>(
@@ -333,30 +419,7 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
         // response carries the engine's detected language code (e.g. "spa").
         // Store the resolved language so post-ASR stages (utseg, morphotag)
         // use the real language, not Auto.
-        let resolved_lang = match &ctx.opts.lang {
-            LanguageSpec::Auto => {
-                let detected = response.lang.clone();
-                // If the ASR engine echoed back "auto" (e.g. Whisper path),
-                // use trigram detection on the full transcript text as fallback.
-                if &*detected == "auto" || detected.is_empty() {
-                    let all_text: String = response
-                        .tokens
-                        .iter()
-                        .map(|t| t.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let detected_iso3 =
-                        batchalign_chat_ops::asr_postprocess::lang_detect::detect_primary_language(
-                            &[&all_text],
-                        )
-                        .unwrap_or_else(|| "eng".to_string());
-                    LanguageCode3::try_new(&detected_iso3).unwrap_or_else(|_| LanguageCode3::eng())
-                } else {
-                    detected
-                }
-            }
-            LanguageSpec::Resolved(code) => code.clone(),
-        };
+        let resolved_lang = resolved_asr_language(ctx.opts, response);
         ctx.resolved_lang = Some(resolved_lang.clone());
 
         if response.tokens.is_empty() {
@@ -608,6 +671,7 @@ mod tests {
                 confidence: None,
             }],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -642,6 +706,7 @@ mod tests {
                 confidence: None,
             }],
             lang: LanguageCode3::eng(),
+            source_monologues: None,
         });
 
         stage_speaker_diarization(&mut ctx)
@@ -686,6 +751,7 @@ mod tests {
                 confidence: None,
             }],
             lang: LanguageCode3::spa(),
+            source_monologues: None,
         });
 
         // Run post-processing to generate utterances
@@ -711,6 +777,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn postprocess_stage_resolves_auto_before_chat_build() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let cache = UtteranceCache::sqlite(Some(tempdir.path().join("cache")))
+            .await
+            .expect("cache");
+        let pool = WorkerPool::new(PoolConfig::default());
+        let engine_version = EngineVersion::from("test-asr");
+        let services = PipelineServices::new(&pool, &cache, &engine_version);
+        let audio_path = tempdir.path().join("sample.wav");
+
+        let mut opts = test_transcribe_options(None);
+        opts.lang = LanguageSpec::Auto;
+        opts.diarize = false;
+
+        let mut ctx =
+            TranscribePipelineContext::new(&audio_path, services, &opts, DebugDumper::disabled());
+        ctx.asr_response = Some(AsrResponse {
+            tokens: vec![AsrToken {
+                text: "hola".into(),
+                start_s: Some(DurationSeconds(0.0)),
+                end_s: Some(DurationSeconds(0.5)),
+                speaker: None,
+                confidence: None,
+            }],
+            lang: LanguageCode3::spa(),
+            source_monologues: None,
+        });
+
+        stage_asr_postprocess(&mut ctx).await.expect("postprocess");
+        assert_eq!(ctx.resolved_lang, Some(LanguageCode3::spa()));
+    }
+
     /// When opts.lang is "auto" and ASR returns empty tokens,
     /// build_chat should still resolve to the ASR response language.
     #[tokio::test]
@@ -732,6 +831,7 @@ mod tests {
         ctx.asr_response = Some(AsrResponse {
             tokens: vec![],
             lang: LanguageCode3::fra(),
+            source_monologues: None,
         });
 
         stage_build_chat(&mut ctx).await.expect("build_chat");

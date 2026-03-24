@@ -7,6 +7,10 @@
 
 use std::path::Path;
 
+use batchalign_chat_ops::asr_postprocess::{
+    AsrElement, AsrElementKind, AsrMonologue, AsrOutput, AsrRawText, AsrTimestampSecs,
+    SpeakerIndex,
+};
 use batchalign_revai::{RevAiClient, SubmitOptions, Transcript, TranscriptResult};
 use tracing::info;
 
@@ -290,6 +294,39 @@ fn transcript_to_asr_response(transcript: &Transcript, lang: &LanguageCode3) -> 
     AsrResponse {
         tokens,
         lang: lang.clone(),
+        source_monologues: Some(transcript_to_asr_output(transcript).monologues),
+    }
+}
+
+fn transcript_to_asr_output(transcript: &Transcript) -> AsrOutput {
+    AsrOutput {
+        monologues: transcript
+            .monologues
+            .iter()
+            .map(|monologue| AsrMonologue {
+                speaker: SpeakerIndex(monologue.speaker as usize),
+                elements: monologue
+                    .elements
+                    .iter()
+                    .filter_map(|element| {
+                        let text = element.value.trim();
+                        if text.is_empty() {
+                            return None;
+                        }
+                        Some(AsrElement {
+                            value: AsrRawText::new(text),
+                            ts: AsrTimestampSecs(element.ts.unwrap_or(0.0)),
+                            end_ts: AsrTimestampSecs(element.end_ts.unwrap_or(0.0)),
+                            kind: if element.element_type == "text" {
+                                AsrElementKind::Text
+                            } else {
+                                AsrElementKind::Punctuation
+                            },
+                        })
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -300,7 +337,7 @@ mod tests {
     use batchalign_revai::Transcript;
 
     #[test]
-    fn transcript_projection_keeps_only_text_elements() {
+    fn transcript_projection_keeps_flat_text_tokens_for_legacy_paths() {
         let transcript: Transcript = serde_json::from_str(
             r#"{
             "monologues": [{
@@ -322,6 +359,47 @@ mod tests {
         assert_eq!(response.tokens[0].speaker.as_deref(), Some("3"));
         assert_eq!(response.tokens[0].confidence, Some(0.75));
         assert_eq!(response.tokens[1].text, "world");
+    }
+
+    #[test]
+    fn transcript_projection_preserves_punctuation_and_monologue_boundaries() {
+        let transcript: Transcript = serde_json::from_str(
+            r#"{
+            "monologues": [
+                {
+                    "speaker": 3,
+                    "elements": [
+                        {"type": "text", "value": "hello", "ts": 0.5, "end_ts": 0.9, "confidence": 0.75},
+                        {"type": "punct", "value": ","},
+                        {"type": "text", "value": "world", "ts": 1.0, "end_ts": 1.4}
+                    ]
+                },
+                {
+                    "speaker": 3,
+                    "elements": [
+                        {"type": "text", "value": "again", "ts": 2.0, "end_ts": 2.4},
+                        {"type": "punct", "value": "?"}
+                    ]
+                }
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        let response = transcript_to_asr_response(&transcript, &LanguageCode3::eng());
+        let monologues = response
+            .source_monologues
+            .expect("Rev projection should preserve provider-shaped monologues");
+
+        assert_eq!(monologues.len(), 2);
+        assert_eq!(monologues[0].speaker, SpeakerIndex(3));
+        assert_eq!(monologues[0].elements.len(), 3);
+        assert_eq!(monologues[0].elements[1].value, ",");
+        assert_eq!(monologues[0].elements[1].kind, AsrElementKind::Punctuation);
+        assert_eq!(monologues[1].speaker, SpeakerIndex(3));
+        assert_eq!(monologues[1].elements.len(), 2);
+        assert_eq!(monologues[1].elements[1].value, "?");
+        assert_eq!(monologues[1].elements[1].kind, AsrElementKind::Punctuation);
     }
 
     #[test]

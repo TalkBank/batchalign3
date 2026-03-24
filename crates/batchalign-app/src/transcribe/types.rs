@@ -2,6 +2,7 @@
 
 use crate::api::{DurationSeconds, LanguageCode3, LanguageSpec, RevAiJobId};
 use crate::types::worker_v2::{AsrBackendV2, SpeakerBackendV2};
+use batchalign_chat_ops::asr_postprocess::AsrMonologue;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,12 @@ pub struct AsrResponse {
     /// Language code.
     #[serde(default = "default_lang")]
     pub lang: LanguageCode3,
+    /// Optional provider-shaped monologues preserved from the ASR boundary.
+    ///
+    /// BA2 parity depends on not discarding provider punctuation elements and
+    /// same-speaker monologue breaks before Rust post-processing runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_monologues: Option<Vec<AsrMonologue>>,
 }
 
 fn default_lang() -> LanguageCode3 {
@@ -137,4 +144,3 @@ pub struct TranscribeOptions {
     /// Rev.AI pre-submitted job ID (from preflight).
     pub rev_job_id: Option<RevAiJobId>,
 }
-

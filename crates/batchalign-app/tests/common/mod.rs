@@ -783,17 +783,49 @@ pub async fn submit_paths_and_complete(
 }
 
 fn expected_paths_mode_result_path(source_path: &str, output_path: &str) -> PathBuf {
-    let source_name = PathBuf::from(source_path)
-        .file_name()
-        .unwrap_or_else(|| {
-            panic!("source path has no filename for paths-mode output derivation: {source_path}")
-        })
-        .to_owned();
+    let source = PathBuf::from(source_path);
+    let source_stem = source.file_stem().unwrap_or_else(|| {
+        panic!("source path has no filename stem for paths-mode output derivation: {source_path}")
+    });
+    let source_name = source.file_name().unwrap_or_else(|| {
+        panic!("source path has no filename for paths-mode output derivation: {source_path}")
+    });
 
-    PathBuf::from(output_path)
+    let requested_output = PathBuf::from(output_path);
+    let expected_name = match requested_output.extension() {
+        Some(ext) => {
+            let mut filename = source_stem.to_os_string();
+            filename.push(".");
+            filename.push(ext);
+            filename
+        }
+        None => source_name.to_os_string(),
+    };
+
+    requested_output
         .parent()
-        .map(|dir| dir.join(&source_name))
-        .unwrap_or_else(|| source_name.into())
+        .map(|dir| dir.join(&expected_name))
+        .unwrap_or_else(|| expected_name.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expected_paths_mode_result_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn expected_paths_mode_result_path_preserves_requested_extension() {
+        let expected =
+            expected_paths_mode_result_path("/tmp/input/eng_acr_first13p5.mp3", "/tmp/out/test.cha");
+        assert_eq!(expected, PathBuf::from("/tmp/out/eng_acr_first13p5.cha"));
+    }
+
+    #[test]
+    fn expected_paths_mode_result_path_keeps_source_name_without_output_extension() {
+        let expected =
+            expected_paths_mode_result_path("/tmp/input/eng_acr_first13p5.mp3", "/tmp/out");
+        assert_eq!(expected, PathBuf::from("/tmp/eng_acr_first13p5.mp3"));
+    }
 }
 
 /// Read the Rev.AI API key from environment variables.

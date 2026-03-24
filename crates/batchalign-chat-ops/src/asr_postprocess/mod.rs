@@ -92,6 +92,16 @@ pub struct Utterance {
     pub lang: Option<String>,
 }
 
+/// One prepared pre-CHAT chunk after ASR normalization but before utterance
+/// segmentation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PreparedMonologueChunk {
+    /// Speaker index (0-based).
+    pub speaker: SpeakerIndex,
+    /// Normalized ASR words for this chunk.
+    pub words: Vec<AsrWord>,
+}
+
 /// Raw monologue from ASR output (before post-processing).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AsrMonologue {
@@ -157,6 +167,18 @@ const RTL_PUNCT: &[(&str, &str)] = &[("؟", "?"), ("۔", "."), ("،", ","), ("؛
 /// Maximum words per turn before splitting.
 const MAX_TURN_LEN: usize = 300;
 
+/// Long silence threshold used as a fallback boundary when ASR omits sentence
+/// punctuation but timing gaps strongly suggest a new utterance.
+const LONG_PAUSE_SPLIT_MS: i64 = 800;
+
+/// Common English sentence starters worth treating as utterance starts after a
+/// long pause in otherwise unpunctuated ASR output.
+const LONG_PAUSE_SENTENCE_STARTERS: &[&str] = &[
+    "and", "but", "did", "do", "does", "go", "have", "has", "had", "he", "how", "i", "is",
+    "it", "no", "now", "okay", "so", "then", "they", "we", "well", "what", "when", "where",
+    "who", "why", "yes", "you",
+];
+
 // ---------------------------------------------------------------------------
 // Pipeline
 // ---------------------------------------------------------------------------
@@ -168,11 +190,17 @@ const MAX_TURN_LEN: usize = 300;
 /// disfluency replacement, and n-gram retrace detection. Returns
 /// speaker-attributed utterances ready for CHAT assembly via `build_chat()`.
 pub fn process_raw_asr(output: &AsrOutput, lang: &str) -> Vec<Utterance> {
-    let mut all_utterances = Vec::new();
+    let mut all_utterances = utterances_from_prepared_chunks(prepare_asr_chunks(output, lang));
+    finalize_utterances(&mut all_utterances, lang);
+    all_utterances
+}
+
+/// Normalize raw ASR monologues into pre-CHAT chunks while preserving speaker
+/// boundaries.
+pub fn prepare_asr_chunks(output: &AsrOutput, lang: &str) -> Vec<PreparedMonologueChunk> {
+    let mut prepared = Vec::new();
 
     for monologue in &output.monologues {
-        let speaker = monologue.speaker;
-
         // Stage 1: compound merging
         let merged = merge_compounds(&monologue.elements);
 
@@ -193,22 +221,75 @@ pub fn process_raw_asr(output: &AsrOutput, lang: &str) -> Vec<Utterance> {
         // Stage 5: long turn splitting
         let chunks = split_long_turns(words);
 
-        // Stage 6: retokenize (split into utterances by punctuation)
-        for chunk in chunks {
-            let utts = retokenize(speaker, chunk);
-            all_utterances.extend(utts);
-        }
+        // Stage 5b: add timing-gap boundaries for long unpunctuated runs.
+        let chunks = split_on_long_pauses(chunks);
+
+        prepared.extend(chunks.into_iter().filter(|chunk| !chunk.is_empty()).map(|words| {
+            PreparedMonologueChunk {
+                speaker: monologue.speaker,
+                words,
+            }
+        }));
     }
 
-    // Stage 7: disfluency replacement (filled pauses + orthographic normalizations).
+    prepared
+}
+
+/// Retokenize prepared chunks into utterances using punctuation boundaries.
+pub fn utterances_from_prepared_chunks(chunks: Vec<PreparedMonologueChunk>) -> Vec<Utterance> {
+    let mut utterances = Vec::new();
+    for chunk in chunks {
+        utterances.extend(retokenize(chunk.speaker, chunk.words));
+    }
+    utterances
+}
+
+/// Apply the post-retokenization cleanup passes shared by all ASR paths.
+pub fn finalize_utterances(utterances: &mut Vec<Utterance>, lang: &str) {
     // Matches BA2's DisfluencyReplacementEngine which ran after ASR on all utterances.
-    cleanup::apply_disfluency_replacements(&mut all_utterances, lang);
+    cleanup::apply_disfluency_replacements(utterances, lang);
 
-    // Stage 8: n-gram retrace detection.
     // Matches BA2's NgramRetraceEngine which ran after disfluency on all utterances.
-    cleanup::apply_retrace_detection(&mut all_utterances, lang);
+    cleanup::apply_retrace_detection(utterances, lang);
+}
 
-    all_utterances
+/// Split one prepared chunk into smaller prepared chunks according to word-level
+/// utterance assignments.
+pub fn split_prepared_chunk_by_assignments(
+    chunk: &PreparedMonologueChunk,
+    assignments: &[usize],
+) -> Vec<PreparedMonologueChunk> {
+    if chunk.words.len() <= 1 || assignments.is_empty() || assignments.len() != chunk.words.len() {
+        return vec![chunk.clone()];
+    }
+
+    let mut split_chunks = Vec::new();
+    let mut current_group = assignments[0];
+    let mut current_words = Vec::new();
+
+    for (word, group) in chunk.words.iter().cloned().zip(assignments.iter().copied()) {
+        if !current_words.is_empty() && group != current_group {
+            split_chunks.push(PreparedMonologueChunk {
+                speaker: chunk.speaker,
+                words: std::mem::take(&mut current_words),
+            });
+            current_group = group;
+        }
+        current_words.push(word);
+    }
+
+    if !current_words.is_empty() {
+        split_chunks.push(PreparedMonologueChunk {
+            speaker: chunk.speaker,
+            words: current_words,
+        });
+    }
+
+    if split_chunks.is_empty() {
+        vec![chunk.clone()]
+    } else {
+        split_chunks
+    }
 }
 
 /// Extract timed words from ASR elements, converting seconds to milliseconds.
@@ -424,6 +505,61 @@ fn split_long_turns(words: Vec<AsrWord>) -> Vec<Vec<AsrWord>> {
     words.chunks(MAX_TURN_LEN).map(|c| c.to_vec()).collect()
 }
 
+fn split_on_long_pauses(chunks: Vec<Vec<AsrWord>>) -> Vec<Vec<AsrWord>> {
+    let mut result = Vec::new();
+
+    for chunk in chunks {
+        if chunk.len() <= 1 {
+            result.push(chunk);
+            continue;
+        }
+
+        let mut current = Vec::new();
+        let mut previous_timed: Option<AsrWord> = None;
+
+        for word in chunk {
+            if previous_timed
+                .as_ref()
+                .is_some_and(|prev| long_pause_starts_new_utterance(prev, &word, current.len()))
+                && !current.is_empty()
+            {
+                result.push(std::mem::take(&mut current));
+            }
+
+            if word.start_ms.is_some() && word.end_ms.is_some() {
+                previous_timed = Some(word.clone());
+            }
+            current.push(word);
+        }
+
+        if !current.is_empty() {
+            result.push(current);
+        }
+    }
+
+    result
+}
+
+fn long_pause_starts_new_utterance(prev: &AsrWord, next: &AsrWord, current_len: usize) -> bool {
+    if current_len < 2 {
+        return false;
+    }
+
+    let (Some(prev_end), Some(next_start)) = (prev.end_ms, next.start_ms) else {
+        return false;
+    };
+    if next_start - prev_end < LONG_PAUSE_SPLIT_MS {
+        return false;
+    }
+
+    let starter = next
+        .text
+        .as_str()
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_ascii_lowercase();
+    LONG_PAUSE_SENTENCE_STARTERS.contains(&starter.as_str())
+}
+
 /// Check if a word is or ends with a sentence-ending punctuation mark.
 fn is_ending_punct(word: &str) -> bool {
     if ENDING_PUNCT.contains(&word) {
@@ -629,6 +765,53 @@ mod tests {
     }
 
     #[test]
+    fn test_split_on_long_pauses_uses_sentence_starters() {
+        let chunks = split_on_long_pauses(vec![vec![
+            AsrWord::new("On", Some(65), Some(285)),
+            AsrWord::new("television", Some(285), Some(765)),
+            AsrWord::new("Have", Some(1595), Some(1885)),
+            AsrWord::new("you", Some(1885), Some(1965)),
+            AsrWord::new("ever", Some(1965), Some(2085)),
+            AsrWord::new("been", Some(2085), Some(2285)),
+            AsrWord::new("on", Some(2285), Some(2445)),
+            AsrWord::new("television", Some(2445), Some(2925)),
+            AsrWord::new("Well", Some(4845), Some(5135)),
+            AsrWord::new("you", Some(5135), Some(5295)),
+            AsrWord::new("know", Some(5295), Some(5375)),
+            AsrWord::new("we", Some(5375), Some(5535)),
+            AsrWord::new("bring", Some(5535), Some(5735)),
+            AsrWord::new("some", Some(5735), Some(5935)),
+            AsrWord::new("kids", Some(5935), Some(6135)),
+            AsrWord::new("Do", Some(7875), Some(8095)),
+            AsrWord::new("you", Some(8095), Some(8175)),
+            AsrWord::new("like", Some(8175), Some(8375)),
+            AsrWord::new("to", Some(8375), Some(8495)),
+            AsrWord::new("play", Some(8495), Some(8695)),
+        ]]);
+
+        let texts: Vec<String> = chunks
+            .into_iter()
+            .map(|chunk| {
+                chunk
+                    .into_iter()
+                    .map(|word| word.text.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+
+        assert_eq!(
+            texts,
+            vec![
+                "On television",
+                "Have you ever been on television",
+                "Well you know we bring some kids",
+                "Do you like to play",
+            ]
+        );
+    }
+
+    #[test]
     fn test_retokenize_simple() {
         let words = vec![
             AsrWord::new("hello", Some(0), Some(500)),
@@ -766,6 +949,145 @@ mod tests {
         let utts = process_raw_asr(&output, "eng");
         assert_eq!(utts.len(), 1);
         assert_eq!(utts[0].words[2].text, "five");
+    }
+
+    #[test]
+    fn test_process_raw_asr_splits_unpunctuated_turn_on_long_pause_starters() {
+        let output = AsrOutput {
+            monologues: vec![AsrMonologue {
+                speaker: SpeakerIndex(0),
+                elements: vec![
+                    elem("On", 0.065, 0.285),
+                    elem("television", 0.285, 0.765),
+                    elem("Have", 1.595, 1.885),
+                    elem("you", 1.885, 1.965),
+                    elem("ever", 1.965, 2.085),
+                    elem("been", 2.085, 2.285),
+                    elem("on", 2.285, 2.445),
+                    elem("television", 2.445, 2.925),
+                    elem("Well", 4.845, 5.135),
+                    elem("you", 5.135, 5.295),
+                    elem("know", 5.295, 5.375),
+                    elem("we", 5.375, 5.535),
+                    elem("bring", 5.535, 5.735),
+                    elem("some", 5.735, 5.935),
+                    elem("kids", 5.935, 6.135),
+                    elem("in", 6.135, 6.335),
+                    elem("here", 6.335, 6.455),
+                    elem("and", 6.455, 6.575),
+                    elem("we'd", 6.575, 6.815),
+                    elem("be", 6.815, 6.895),
+                    elem("playing", 6.895, 7.135),
+                    elem("all", 7.275, 7.495),
+                    elem("the", 7.495, 7.615),
+                    elem("time", 7.615, 7.775),
+                    elem("Do", 7.875, 8.095),
+                    elem("you", 8.095, 8.175),
+                    elem("like", 8.175, 8.375),
+                    elem("to", 8.375, 8.495),
+                    elem("play", 8.495, 8.695),
+                    elem("What", 10.405, 10.695),
+                    elem("do", 10.695, 10.815),
+                    elem("you", 10.815, 10.935),
+                ],
+            }],
+        };
+
+        let utts = process_raw_asr(&output, "eng");
+        let texts: Vec<String> = utts
+            .iter()
+            .map(|utt| {
+                utt.words
+                    .iter()
+                    .map(|word| word.text.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+
+        assert_eq!(utts.len(), 4);
+        assert_eq!(
+            texts,
+            vec![
+                "On television .",
+                "Have you ever been on television .",
+                "Well you know we bring some kids in here and we'd be playing all the time Do you like to play .",
+                "What do you .",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_process_raw_asr_preserves_same_speaker_monologue_boundaries() {
+        let output = AsrOutput {
+            monologues: vec![
+                AsrMonologue {
+                    speaker: SpeakerIndex(0),
+                    elements: vec![elem("on", 0.065, 0.285), elem("television", 0.285, 0.765)],
+                },
+                AsrMonologue {
+                    speaker: SpeakerIndex(0),
+                    elements: vec![
+                        elem("have", 1.595, 1.885),
+                        elem("you", 1.885, 1.965),
+                        elem("ever", 1.965, 2.085),
+                        elem("been", 2.085, 2.285),
+                        elem("on", 2.285, 2.445),
+                        elem("television", 2.445, 2.925),
+                    ],
+                },
+            ],
+        };
+
+        let utts = process_raw_asr(&output, "eng");
+        let texts: Vec<String> = utts
+            .iter()
+            .map(|utt| {
+                utt.words
+                    .iter()
+                    .map(|word| word.text.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+
+        assert_eq!(
+            texts,
+            vec!["on television .", "have you ever been on television ."]
+        );
+    }
+
+    #[test]
+    fn test_split_prepared_chunk_by_assignments_preserves_speaker_and_groups() {
+        let chunk = PreparedMonologueChunk {
+            speaker: SpeakerIndex(2),
+            words: vec![
+                AsrWord::new("on", Some(0), Some(100)),
+                AsrWord::new("television", Some(100), Some(200)),
+                AsrWord::new("have", Some(300), Some(400)),
+                AsrWord::new("you", Some(400), Some(500)),
+            ],
+        };
+
+        let split = split_prepared_chunk_by_assignments(&chunk, &[0, 0, 1, 1]);
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].speaker, SpeakerIndex(2));
+        assert_eq!(
+            split[0]
+                .words
+                .iter()
+                .map(|word| word.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["on", "television"]
+        );
+        assert_eq!(
+            split[1]
+                .words
+                .iter()
+                .map(|word| word.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["have", "you"]
+        );
     }
 
     /// Golden test: Cantonese normalization in pipeline.

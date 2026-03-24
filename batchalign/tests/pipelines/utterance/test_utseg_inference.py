@@ -82,7 +82,7 @@ class TestBatchInferUtseg:
         )
 
         assert calls == []
-        assert response.results[0].result == {"trees": []}
+        assert response.results[0].result == {"assignments": [0]}
         assert response.results[0].elapsed_s == 0.0
         assert response.results[1].error == "Invalid batch item"
 
@@ -209,6 +209,41 @@ class TestBatchInferUtseg:
 
         assert response.results[0].result == {"trees": []}
         assert response.results[0].elapsed_s == 0.0
+
+    def test_uses_boundary_model_assignments_when_available(self) -> None:
+        class _FakeBoundaryModel:
+            def predict_assignments(self, words: list[str]) -> list[int]:
+                assert words == ["On", "television", "Have", "you"]
+                return [0, 0, 1, 1]
+
+        response = batch_infer_utseg(
+            BatchInferRequest(
+                task="utseg",
+                lang="eng",
+                items=[{"words": ["On", "television", "Have", "you"]}],
+            ),
+            lambda langs: (_ for _ in ()).throw(AssertionError(f"unexpected Stanza load: {langs}")),
+            utterance_boundary_model=_FakeBoundaryModel(),
+        )
+
+        assert response.results[0].result == {"assignments": [0, 0, 1, 1]}
+
+    def test_boundary_model_short_circuits_single_word_items(self) -> None:
+        class _FakeBoundaryModel:
+            def predict_assignments(self, words: list[str]) -> list[int]:
+                raise AssertionError(f"single-word item should not reach model: {words}")
+
+        response = batch_infer_utseg(
+            BatchInferRequest(
+                task="utseg",
+                lang="eng",
+                items=[{"words": ["hello"]}],
+            ),
+            lambda langs: (_ for _ in ()).throw(AssertionError(f"unexpected Stanza load: {langs}")),
+            utterance_boundary_model=_FakeBoundaryModel(),
+        )
+
+        assert response.results[0].result == {"assignments": [0]}
 
 
 class TestUtsegTreeHelpers:

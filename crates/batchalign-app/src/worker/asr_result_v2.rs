@@ -9,6 +9,10 @@ use crate::transcribe::{AsrResponse, AsrToken};
 use crate::types::worker_v2::{
     AsrElementKindV2, ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2,
 };
+use batchalign_chat_ops::asr_postprocess::{
+    AsrElement, AsrElementKind, AsrMonologue, AsrOutput, AsrRawText, AsrTimestampSecs,
+    SpeakerIndex,
+};
 
 /// Parse one live V2 ASR execute response into the established Rust ASR
 /// domain.
@@ -50,6 +54,7 @@ pub fn parse_asr_response_v2(
                     })
                 })
                 .collect(),
+            source_monologues: None,
         }),
         TaskResultV2::MonologueAsrResult(result) => Ok(AsrResponse {
             lang: resolve_worker_lang(&result.lang, fallback_lang),
@@ -77,6 +82,45 @@ pub fn parse_asr_response_v2(
                     })
                 })
                 .collect(),
+            source_monologues: Some(
+                AsrOutput {
+                    monologues: result
+                        .monologues
+                        .iter()
+                        .map(|monologue| AsrMonologue {
+                            speaker: SpeakerIndex(
+                                monologue.speaker.parse::<usize>().unwrap_or_default(),
+                            ),
+                            elements: monologue
+                                .elements
+                                .iter()
+                                .filter_map(|element| {
+                                    let text = element.value.trim();
+                                    if text.is_empty() {
+                                        return None;
+                                    }
+                                    Some(AsrElement {
+                                        value: AsrRawText::new(text),
+                                        ts: AsrTimestampSecs(
+                                            element.start_s.map(|ts| ts.0).unwrap_or(0.0),
+                                        ),
+                                        end_ts: AsrTimestampSecs(
+                                            element.end_s.map(|ts| ts.0).unwrap_or(0.0),
+                                        ),
+                                        kind: match element.kind {
+                                            AsrElementKindV2::Text => AsrElementKind::Text,
+                                            AsrElementKindV2::Punctuation => {
+                                                AsrElementKind::Punctuation
+                                            }
+                                        },
+                                    })
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                }
+                .monologues,
+            ),
         }),
         TaskResultV2::WhisperTokenTimingResult(_) => {
             Err("worker protocol V2 ASR response returned forced-alignment token data".into())
