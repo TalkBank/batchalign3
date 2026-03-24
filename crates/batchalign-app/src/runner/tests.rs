@@ -8,7 +8,7 @@ use super::*;
     use tokio_util::sync::CancellationToken;
 
     use crate::api::{
-        FileName, JobId, JobStatus, LanguageCode3, LanguageSpec, NumSpeakers, ReleasedCommand,
+        DisplayPath, JobId, JobStatus, LanguageCode3, LanguageSpec, NumSpeakers, ReleasedCommand,
         UnixTimestamp,
     };
     use crate::db::JobDB;
@@ -33,7 +33,7 @@ use super::*;
         let mut file_statuses = HashMap::new();
         file_statuses.insert(
             filename.to_string(),
-            FileStatus::new(FileName::from(filename)),
+            FileStatus::new(DisplayPath::from(filename)),
         );
 
         Job {
@@ -58,7 +58,7 @@ use super::*;
                 source_dir: PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
-                filenames: vec![FileName::from(filename)],
+                filenames: vec![DisplayPath::from(filename)],
                 has_chat: vec![false],
                 staging_dir: PathBuf::new(),
                 paths_mode: true,
@@ -202,7 +202,7 @@ use super::*;
 
         let file_list = vec![PendingJobFile {
             file_index: 0,
-            filename: FileName::from("missing.wav"),
+            filename: DisplayPath::from("missing.wav"),
             has_chat: false,
         }];
         let failures = HashMap::from([(0usize, String::from("Media file not found"))]);

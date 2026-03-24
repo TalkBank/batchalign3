@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 use crate::options::{AsrEngineName, CommandOptions};
 use crate::revai::try_revai_language_hint;
 
-use super::domain::{ReleasedCommand, FileName, LanguageCode3, LanguageSpec, NumSpeakers};
+use super::domain::{ReleasedCommand, DisplayPath, LanguageCode3, LanguageSpec, NumSpeakers};
 
 // ---------------------------------------------------------------------------
 // Request models
@@ -18,7 +18,7 @@ use super::domain::{ReleasedCommand, FileName, LanguageCode3, LanguageSpec, NumS
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct FilePayload {
     /// Original filename (e.g. "01DM_18.cha").
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// Full CHAT file text.
     pub content: String,
 }

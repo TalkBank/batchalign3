@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use crate::api::{
-    ContentType, FileName, FileResult, FileStatusKind, JobId, JobInfo, JobResultResponse, JobStatus,
+    ContentType, DisplayPath, FileResult, FileStatusKind, JobId, JobInfo, JobResultResponse,
+    JobStatus,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -176,7 +177,7 @@ pub(crate) async fn get_single_result(
 
     if fs.status == FileStatusKind::Error {
         return Ok(Json(FileResult {
-            filename: FileName::from(filename),
+            filename: DisplayPath::from(filename.as_str()),
             content: String::new(),
             content_type: ContentType::Chat,
             error: fs.error.clone().or(Some("Unknown error".into())),

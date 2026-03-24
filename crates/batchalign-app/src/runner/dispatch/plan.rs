@@ -455,6 +455,7 @@ mod tests {
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(!plan.base_options.with_utseg);
         assert!(!plan.base_options.with_morphosyntax);
+        assert!(plan.base_options.write_wor);
         assert!(plan.should_merge_abbrev);
         assert!(plan.mwt.is_empty());
     }

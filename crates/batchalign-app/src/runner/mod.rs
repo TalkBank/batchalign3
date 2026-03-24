@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::api::{ContentType, EngineVersion, FileName, JobId, RevAiJobId, UnixTimestamp};
+use crate::api::{ContentType, EngineVersion, DisplayPath, JobId, RevAiJobId, UnixTimestamp};
 use crate::host_memory::{HostMemoryCoordinator, HostMemoryError};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
@@ -647,7 +647,7 @@ async fn dispatch_test_echo_files(
 
         lifecycle
             .complete_with_result(
-                FileName::from(result_filename),
+                DisplayPath::from(result_filename),
                 ContentType::Chat,
                 unix_now(),
             )

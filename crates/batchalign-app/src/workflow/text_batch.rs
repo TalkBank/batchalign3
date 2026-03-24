@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 
 use async_trait::async_trait;
 
-use crate::api::{ChatText, FileName, LanguageCode3};
+use crate::api::{ChatText, DisplayPath, LanguageCode3};
 use crate::error::ServerError;
 use super::{CrossFileBatchWorkflow, PerFileWorkflow};
 
@@ -92,7 +92,7 @@ impl From<&str> for TextWorkflowFileError {
 #[derive(Debug, Clone)]
 pub(crate) struct TextBatchFileResult {
     /// Stable file identity for this output or error.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// File-local workflow outcome.
     pub result: Result<OwnedChatText, TextWorkflowFileError>,
 }
@@ -102,7 +102,7 @@ pub(crate) type TextBatchFileResults = Vec<TextBatchFileResult>;
 
 impl TextBatchFileResult {
     /// Construct one successful named file result.
-    pub(crate) fn ok(filename: impl Into<FileName>, text: impl Into<OwnedChatText>) -> Self {
+    pub(crate) fn ok(filename: impl Into<DisplayPath>, text: impl Into<OwnedChatText>) -> Self {
         Self {
             filename: filename.into(),
             result: Ok(text.into()),
@@ -111,7 +111,7 @@ impl TextBatchFileResult {
 
     /// Construct one failed named file result.
     pub(crate) fn err(
-        filename: impl Into<FileName>,
+        filename: impl Into<DisplayPath>,
         error: impl Into<TextWorkflowFileError>,
     ) -> Self {
         Self {
@@ -125,7 +125,7 @@ impl TextBatchFileResult {
 #[derive(Debug, Clone)]
 pub(crate) struct TextBatchFileInput {
     /// Stable file identity for this input.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// Owned serialized CHAT document for this file.
     pub chat_text: OwnedChatText,
 }
@@ -133,7 +133,7 @@ pub(crate) struct TextBatchFileInput {
 impl TextBatchFileInput {
     /// Construct one named batch input from a filename and CHAT text.
     pub(crate) fn new(
-        filename: impl Into<FileName>,
+        filename: impl Into<DisplayPath>,
         chat_text: impl Into<OwnedChatText>,
     ) -> Self {
         Self {

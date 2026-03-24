@@ -1,6 +1,6 @@
 //! File-level job-state mutations on [`JobStore`].
 
-use crate::api::{FileName, FileStatusKind, JobId, UnixTimestamp};
+use crate::api::{DisplayPath, FileStatusKind, JobId, UnixTimestamp};
 use crate::scheduling::{AttemptOutcome, RetryDisposition, WorkUnitKind};
 
 use super::super::{
@@ -238,7 +238,7 @@ impl JobStore {
     }
 
     /// Return the filenames of files that have not yet reached a terminal state.
-    pub(crate) async fn unfinished_files(&self, job_id: &JobId) -> Vec<FileName> {
+    pub(crate) async fn unfinished_files(&self, job_id: &JobId) -> Vec<DisplayPath> {
         self.registry.unfinished_files(job_id).await
     }
 
@@ -275,7 +275,7 @@ mod tests {
                 "a.cha",
                 UnixTimestamp(10.0),
                 Some(CompletedFileOutput {
-                    filename: FileName::from("a.cha"),
+                    filename: DisplayPath::from("a.cha"),
                     content_type: ContentType::Chat,
                 }),
             )
@@ -313,7 +313,7 @@ mod tests {
         let file = detail
             .file_statuses
             .into_iter()
-            .find(|status| status.filename.as_ref() == "a.cha")
+            .find(|status| status.filename == "a.cha")
             .unwrap();
         assert_eq!(file.status, FileStatusKind::Processing);
         assert_eq!(file.next_eligible_at, Some(UnixTimestamp(20.0)));

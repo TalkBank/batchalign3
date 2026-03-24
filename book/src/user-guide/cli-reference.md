@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Current
-**Last updated:** 2026-03-19
+**Last updated:** 2026-03-24 16:17 EDT
 
 This page documents the current public `batchalign3` CLI surface. For anything
 you are scripting against, confirm with `batchalign3 <command> --help`.
@@ -314,6 +314,12 @@ batchalign3 coref corpus/ -o coref-output/
 
 Adds sparse `%xcoref` coreference annotation tiers.
 
+Key characteristics:
+
+- English-only analysis; non-English files pass through unchanged.
+- Document-level processing with cross-sentence context.
+- Best treated as a local-oriented workflow rather than an explicit remote-server command.
+
 Key options:
 
 | Option | Meaning |
@@ -356,7 +362,7 @@ Key options:
 | `--asr-engine-custom NAME` | Explicit custom ASR engine name |
 | `--lang CODE` | 3-letter ISO language code (default: `eng`) |
 | `-n`, `--num-speakers N` | Number of speakers (default: `2`) |
-| `--wor` / `--nowor` | Toggle `%wor` tier output |
+| `--wor` / `--nowor` | Include or suppress `%wor` in the benchmark hypothesis CHAT |
 | `--merge-abbrev` | Merge abbreviations in output |
 | `--bank NAME` | Server media bank name |
 | `--subdir PATH` | Subdirectory under the bank |
@@ -369,6 +375,10 @@ batchalign3 opensmile input_dir/ output_dir/
 
 Extracts acoustic features from audio files, producing `.opensmile.csv`
 output (not CHAT). Uses positional arguments for input/output directories.
+
+Migration note: BA3 preserves the same feature sets, but writes a row-oriented
+CSV (feature names as columns) rather than BA2's transposed feature-as-row
+export.
 
 Key options:
 
@@ -393,6 +403,8 @@ Key options:
 
 | Option | Meaning |
 | --- | --- |
+| `--lang CODE` | 3-letter ISO language code (default: `eng`) |
+| `-n`, `--num-speakers N` | Number of speakers (default: `2`) |
 | `--merge-abbrev` | Merge abbreviations in output |
 
 ### `avqi`
@@ -404,6 +416,9 @@ batchalign3 avqi input_dir/ output_dir/
 Calculates Acoustic Voice Quality Index from paired `.cs`/`.sv` audio
 files. Uses positional arguments for input/output directories. Produces
 `.avqi.txt` output.
+
+BA3 keeps the same AVQI metrics and text output format while moving the audio
+preprocessing behind the typed media-analysis worker boundary.
 
 Key options:
 

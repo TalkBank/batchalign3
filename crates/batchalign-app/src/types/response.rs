@@ -9,7 +9,7 @@ use crate::options::CommandOptions;
 use crate::scheduling::{FailureCategory, LeaseRecord};
 
 use super::domain::{
-    ReleasedCommand, ContentType, DurationSeconds, FileName, HealthStatus, JobId, LanguageSpec,
+    ReleasedCommand, ContentType, DisplayPath, DurationSeconds, HealthStatus, JobId, LanguageSpec,
     MemoryMb, NodeId, UnixTimestamp,
 };
 use super::request::default_lang;
@@ -22,8 +22,10 @@ use super::status::{FileProgressStage, FileStatusKind, JobStatus};
 /// Result for a single processed file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct FileResult {
-    /// Original filename from the submission (e.g. "01DM_18.cha").
-    pub filename: FileName,
+    /// Display path for this file: a bare basename (`"sample.cha"`) or a
+    /// relative forward-slash path (`"PWA/TYO_a1.cha"`) for directory input.
+    /// Backslashes are normalized to forward slashes on construction.
+    pub filename: DisplayPath,
     /// Processed file content (CHAT text or CSV).  Empty string when
     /// `error` is `Some`.
     #[serde(default)]
@@ -45,8 +47,10 @@ pub struct FileResult {
 /// results, and they are included in `JobInfo.file_statuses`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct FileStatusEntry {
-    /// Original filename from the submission (e.g. "01DM_18.cha").
-    pub filename: FileName,
+    /// Display path for this file: a bare basename (`"sample.cha"`) or a
+    /// relative forward-slash path (`"PWA/TYO_a1.cha"`) for directory input.
+    /// Backslashes are normalized to forward slashes on construction.
+    pub filename: DisplayPath,
     /// Current lifecycle state of this file.
     pub status: FileStatusKind,
     /// Human-readable error message.  Present only when `status` is `Error`.
@@ -382,4 +386,34 @@ pub struct HealthResponse {
 
 pub(crate) fn default_cache_backend() -> String {
     "sqlite".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the server returns relative paths like "PWA/TYO_a1.cha" as
+    /// display names in file_statuses. These must deserialize successfully.
+    /// Previously DisplayPath rejected path separators, causing "error decoding
+    /// response body" on any job with files in subdirectories.
+    #[test]
+    fn job_info_deserializes_relative_path_filenames() {
+        let json = r#"{
+            "job_id": "abc-123",
+            "status": "running",
+            "command": "morphotag",
+            "options": {"command": "morphotag", "retokenize": false, "skipmultilang": false, "merge_abbrev": false},
+            "total_files": 2,
+            "completed_files": 0,
+            "file_statuses": [
+                {"filename": "PWA/TYO_a1.cha", "status": "queued"},
+                {"filename": "Control/TYO_n1.cha", "status": "queued"}
+            ]
+        }"#;
+        let info: JobInfo = serde_json::from_str(json).expect(
+            "JobInfo must deserialize file_statuses with relative-path display names"
+        );
+        assert_eq!(info.file_statuses.len(), 2);
+        assert_eq!(&*info.file_statuses[0].filename, "PWA/TYO_a1.cha");
+    }
 }

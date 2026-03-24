@@ -592,12 +592,122 @@ impl schemars::JsonSchema for LanguageSpec {
     }
 }
 
-validated_string_id!(
-    /// Basename of a file being processed (e.g. `"sample.cha"`).
-    /// Rejects empty strings and path separators.
-    pub FileName
-    |s| !s.contains('/') && !s.contains('\\'), "must not contain path separators"
-);
+// ---------------------------------------------------------------------------
+// DisplayPath — display-oriented file path within a job
+// ---------------------------------------------------------------------------
+
+/// Display path for a file within a job: either a bare basename
+/// (`"sample.cha"`) for single-file input or a relative forward-slash path
+/// (`"PWA/TYO_a1.cha"`) for directory input with subdirectories.
+///
+/// Backslashes are normalized to forward slashes on construction so the value
+/// is platform-independent regardless of whether the CLI ran on Windows.
+///
+/// This type replaces the former `FileName` which incorrectly rejected path
+/// separators during deserialization even though the system routinely carries
+/// relative paths.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash,
+    serde::Serialize,
+    utoipa::ToSchema,
+    schemars::JsonSchema,
+)]
+#[serde(transparent)]
+pub struct DisplayPath(pub String);
+
+/// Error returned when a display path is empty.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("empty display path: \"{0}\"")]
+pub struct InvalidDisplayPath(pub String);
+
+impl DisplayPath {
+    /// Try to create a validated display path.
+    ///
+    /// Validation: non-empty after trimming. Backslashes are normalized to
+    /// forward slashes for cross-platform safety.
+    pub fn try_new(s: &str) -> Result<Self, InvalidDisplayPath> {
+        if s.is_empty() {
+            return Err(InvalidDisplayPath(s.to_owned()));
+        }
+        Ok(Self(normalize_backslashes(s)))
+    }
+}
+
+/// Normalize Windows-style backslashes to forward slashes.
+fn normalize_backslashes(s: &str) -> String {
+    if s.contains('\\') {
+        s.replace('\\', "/")
+    } else {
+        s.to_owned()
+    }
+}
+
+impl std::fmt::Display for DisplayPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for DisplayPath {
+    fn from(s: String) -> Self {
+        if s.contains('\\') {
+            Self(s.replace('\\', "/"))
+        } else {
+            Self(s)
+        }
+    }
+}
+
+impl From<&str> for DisplayPath {
+    fn from(s: &str) -> Self {
+        Self(normalize_backslashes(s))
+    }
+}
+
+impl From<DisplayPath> for String {
+    fn from(v: DisplayPath) -> String {
+        v.0
+    }
+}
+
+impl std::ops::Deref for DisplayPath {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for DisplayPath {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<&str> for DisplayPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl std::borrow::Borrow<str> for DisplayPath {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DisplayPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        if s.is_empty() {
+            return Err(serde::de::Error::custom("DisplayPath must not be empty"));
+        }
+        Ok(Self(normalize_backslashes(&s)))
+    }
+}
+
 
 string_id!(
     /// Identifier of a server/fleet node.
@@ -929,5 +1039,50 @@ mod tests {
             LanguageSpec::Resolved(LanguageCode3::eng()).to_worker_language(),
             WorkerLanguage::Resolved(LanguageCode3::eng())
         );
+    }
+
+    // ---- DisplayPath ----
+
+    #[test]
+    fn display_path_accepts_bare_basename() {
+        let p = DisplayPath::try_new("sample.cha").unwrap();
+        assert_eq!(&*p, "sample.cha");
+    }
+
+    #[test]
+    fn display_path_accepts_relative_path() {
+        let p = DisplayPath::try_new("PWA/TYO_a1.cha").unwrap();
+        assert_eq!(&*p, "PWA/TYO_a1.cha");
+    }
+
+    #[test]
+    fn display_path_rejects_empty() {
+        assert!(DisplayPath::try_new("").is_err());
+    }
+
+    #[test]
+    fn display_path_normalizes_backslash_in_from() {
+        let p = DisplayPath::from("PWA\\TYO.cha");
+        assert_eq!(&*p, "PWA/TYO.cha");
+    }
+
+    #[test]
+    fn display_path_serde_roundtrip() {
+        let p = DisplayPath::try_new("sub/dir/file.cha").unwrap();
+        let json = serde_json::to_string(&p).unwrap();
+        let back: DisplayPath = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn display_path_deserialize_rejects_empty() {
+        let result: Result<DisplayPath, _> = serde_json::from_str("\"\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn display_path_deserialize_normalizes_backslash() {
+        let p: DisplayPath = serde_json::from_str("\"PWA\\\\TYO.cha\"").unwrap();
+        assert_eq!(&*p, "PWA/TYO.cha");
     }
 }

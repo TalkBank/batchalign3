@@ -287,6 +287,13 @@ pub fn build_server_names(
             },
         };
 
+        // Normalize Windows backslashes to forward slashes so display names
+        // are platform-independent (server always runs on Unix).
+        let rel = if rel.contains('\\') {
+            rel.replace('\\', "/")
+        } else {
+            rel
+        };
         server_names.push(rel.clone());
         result_map.insert(rel, opath.clone());
     }

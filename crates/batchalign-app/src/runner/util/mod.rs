@@ -36,7 +36,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use crate::api::{FileName, JobId, LanguageCode3, NumSpeakers, NumWorkers, ReleasedCommand};
+    use crate::api::{DisplayPath, JobId, LanguageCode3, NumSpeakers, NumWorkers, ReleasedCommand};
     use crate::config::ServerConfig;
     use crate::options::{AlignOptions, CommandOptions, CommonOptions, UtrEngine};
     use crate::runtime;
@@ -337,7 +337,7 @@ mod tests {
             let path = tmp.path().to_string_lossy().to_string();
             let file_list = vec![PendingJobFile {
                 file_index: 0,
-                filename: FileName::from(format!("test.{ext}")),
+                filename: DisplayPath::from(format!("test.{ext}")),
                 has_chat: false,
             }];
             let source_paths = vec![std::path::PathBuf::from(&path)];
@@ -420,7 +420,7 @@ mod tests {
             cancel_token: CancellationToken::new(),
             pending_files: vec![PendingJobFile {
                 file_index: 0,
-                filename: FileName::from("sample.cha"),
+                filename: DisplayPath::from("sample.cha"),
                 has_chat: true,
             }],
         };

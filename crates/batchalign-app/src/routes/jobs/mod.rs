@@ -26,7 +26,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::api::{ReleasedCommand, CorrelationId, FileName, JobInfo, JobStatus, JobSubmission};
+use crate::api::{ReleasedCommand, CorrelationId, DisplayPath, JobInfo, JobStatus, JobSubmission};
 use axum::extract::State;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -108,7 +108,7 @@ fn supported_command_list(capabilities: &[String]) -> Vec<String> {
     set.into_iter().collect()
 }
 
-fn path_mode_filename_from_source(source_path: &str) -> Result<FileName, ServerError> {
+fn path_mode_filename_from_source(source_path: &str) -> Result<DisplayPath, ServerError> {
     let file_name = std::path::Path::new(source_path)
         .file_name()
         .filter(|name| !name.is_empty())
@@ -117,7 +117,7 @@ fn path_mode_filename_from_source(source_path: &str) -> Result<FileName, ServerE
                 "paths_mode source path has no filename component: {source_path}"
             ))
         })?;
-    Ok(FileName::from(file_name.to_string_lossy().to_string()))
+    Ok(DisplayPath::from(file_name.to_string_lossy().to_string()))
 }
 
 async fn ensure_dir(path: &std::path::Path, context: &str) -> Result<(), ServerError> {
@@ -181,11 +181,11 @@ pub(crate) async fn submit_job(
     let (filenames, has_chat, staging_dir, paths_mode, source_paths, output_paths) =
         if submission.paths_mode {
             // Paths mode: derive filenames from source_paths or display_names
-            let filenames: Vec<FileName> = if !submission.display_names.is_empty() {
+            let filenames: Vec<DisplayPath> = if !submission.display_names.is_empty() {
                 submission
                     .display_names
                     .iter()
-                    .map(|s| FileName::from(s.as_str()))
+                    .map(|s| DisplayPath::from(s.as_str()))
                     .collect()
             } else {
                 submission
@@ -236,7 +236,7 @@ pub(crate) async fn submit_job(
             )
             .await?;
 
-            let mut filenames: Vec<FileName> = Vec::new();
+            let mut filenames: Vec<DisplayPath> = Vec::new();
             let mut has_chat = Vec::new();
 
             for fp in &submission.files {
@@ -249,7 +249,7 @@ pub(crate) async fn submit_job(
                 write_staged_file(std::path::Path::new(&dest), &fp.content).await?;
             }
             for media_name in &submission.media_files {
-                filenames.push(FileName::from(media_name.as_str()));
+                filenames.push(DisplayPath::from(media_name.as_str()));
                 has_chat.push(false);
             }
 

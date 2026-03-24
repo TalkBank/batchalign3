@@ -31,7 +31,7 @@ pub struct JobTraces {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FileTraces {
     /// Original filename (e.g. "01DM_18.cha").
-    pub filename: crate::api::FileName,
+    pub filename: crate::api::DisplayPath,
     /// DP alignment traces (one per alignment call: FA, retokenize, WER).
     pub dp_alignments: Vec<DpAlignmentTrace>,
     /// ASR post-processing pipeline trace (transcribe jobs only).

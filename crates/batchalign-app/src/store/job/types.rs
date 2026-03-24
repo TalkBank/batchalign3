@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use crate::api::{
-    ReleasedCommand, ContentType, CorrelationId, FileName, FileProgressStage, JobId, JobStatus,
+    ReleasedCommand, ContentType, CorrelationId, DisplayPath, FileProgressStage, JobId, JobStatus,
     LanguageSpec, NodeId, NumSpeakers, UnixTimestamp,
 };
 use crate::options::CommandOptions;
@@ -85,7 +85,7 @@ pub struct JobSourceContext {
 #[derive(Debug, Clone)]
 pub struct JobFilesystemConfig {
     /// Ordered list of file basenames to process.
-    pub filenames: Vec<FileName>,
+    pub filenames: Vec<DisplayPath>,
     /// Parallel CHAT/media markers for [`Self::filenames`].
     pub has_chat: Vec<bool>,
     /// Server-local temporary directory for staged input/output content.
@@ -156,13 +156,13 @@ pub struct JobRuntimeControl {
 /// One file that still requires runner work.
 ///
 /// This is the stable runner-facing replacement for ad hoc
-/// `(usize, FileName, bool)` tuples.
+/// `(usize, DisplayPath, bool)` tuples.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingJobFile {
     /// Index into the job's parallel path vectors.
     pub file_index: usize,
     /// Logical filename of the work item.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// Whether the input is CHAT text rather than media.
     pub has_chat: bool,
 }
@@ -171,7 +171,7 @@ pub struct PendingJobFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompletedFileOutput {
     /// Logical result filename returned to clients.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// MIME-like content type stored with the result.
     pub content_type: ContentType,
 }

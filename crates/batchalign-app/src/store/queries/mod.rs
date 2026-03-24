@@ -147,7 +147,7 @@ mod tests {
 
     use super::*;
     use crate::options::{AsrEngineName, FaEngineName};
-    use crate::api::{FileName, UnixTimestamp};
+    use crate::api::{DisplayPath, UnixTimestamp};
     use crate::db::JobDB;
     use crate::store::job::{
         Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity, JobLeaseState,
@@ -180,7 +180,7 @@ mod tests {
         for f in &filenames {
             file_statuses.insert(
                 f.clone(),
-                FileStatus::new(crate::api::FileName::from(f.as_str())),
+                FileStatus::new(crate::api::DisplayPath::from(f.as_str())),
             );
         }
 
@@ -223,7 +223,7 @@ mod tests {
                 source_dir: PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
-                filenames: filenames.into_iter().map(FileName::from).collect(),
+                filenames: filenames.into_iter().map(DisplayPath::from).collect(),
                 has_chat,
                 staging_dir: PathBuf::new(),
                 paths_mode: false,

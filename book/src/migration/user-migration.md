@@ -1,7 +1,7 @@
 # User Workflow Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-21 15:48 EDT
+**Last updated:** 2026-03-24 16:17 EDT
 
 This page describes durable differences between:
 
@@ -53,7 +53,7 @@ that were not yet first-class there:
 | `transcribe` | `transcribe` | same top-level purpose; expanded engine/runtime routing |
 | `translate` | `translate` | same |
 | `morphotag` | `morphotag` | same command name, stronger token/validation contracts |
-| `coref` | `coref` | same |
+| `coref` | `coref` | same purpose; public in BA3, still English-only, and still local-oriented |
 | `utseg` | `utseg` | same |
 | `benchmark` | `benchmark` | same high-level goal |
 | `opensmile` | `opensmile` | same high-level goal |
@@ -329,7 +329,7 @@ For users, the practical current-state rule is:
 | `translate` | mostly lazy-load/runtime cleanup, not a major algorithm shift | Rust takes over CHAT extraction, cache, validation, and `%xtra` injection; Python becomes pure text inference |
 | `utseg` | same Python constituency + DP alignment algorithm, with cache/lazy-load cleanup | Python returns raw trees; Rust computes assignments and mutates CHAT directly |
 | `coref` | essentially same document-level Python+DP remap path | Python returns structured chains; Rust injects sparse `%xcoref` and enforces output policy |
-| `benchmark` | runtime/dispatch and benchmarking UX improve, but still Python-owned command flow | Rust now owns benchmark orchestration end to end; Python only contributes raw ASR inference when needed |
+| `benchmark` | runtime/dispatch and benchmarking UX improve, but still Python-owned command flow | Rust now owns benchmark orchestration end to end; Python only contributes raw ASR inference when needed, and current BA3 still honors `--wor` / `--nowor` |
 | `opensmile` | mostly lazy-load/runtime cleanup | still pure feature extraction, but now behind typed prepared-audio V2 contracts with explicit non-CHAT output handling |
 | `avqi` | mostly lazy-load/runtime cleanup | still pure AVQI computation, but now behind typed prepared-audio V2 contracts and explicit paired-audio inputs |
 
@@ -364,7 +364,30 @@ The shared implementation consequence is:
   architecture, enforced by allowlist tests.
 
 That pattern is why `transcribe`, `translate`, `utseg`, and `coref` now behave
-more predictably than the older Python-monolithic paths.
+more predictably than the older Python-monolithic paths. The same separation
+also explains why `benchmark` is easier to reason about in BA3: Rust owns the
+composed workflow boundary instead of hiding it inside Python dispatch glue.
+
+### Media-analysis commands (`opensmile`, `avqi`)
+
+These are lighter migration targets than the CHAT-processing commands above.
+For most users the command lines did not change:
+
+- `opensmile input_dir output_dir` is still the shape
+- `avqi input_dir output_dir` is still the shape
+- feature-set and language options are preserved
+
+The important durable differences are operational rather than algorithmic:
+
+- BA3 runs them behind typed prepared-audio V2 worker contracts
+- failures surface through job/log tooling instead of ad hoc `.error.txt`
+  hunting during server/daemon runs
+- `avqi` no longer needs on-disk temporary mono WAV files
+
+One user-visible migration note does matter for scripting:
+
+- `opensmile` CSV output is now row-oriented (feature names as columns) rather
+  than the transposed BA2 dataframe export shape (feature names as rows)
 
 ## 5) Migration checklist for existing users
 
@@ -376,8 +399,11 @@ more predictably than the older Python-monolithic paths.
    unstable remap behavior. Compare against current intended outputs, not Jan 9 BA2
    accidental ones.
 4. If you previously relied on out-of-tree custom logic, migrate it into either an
-   in-tree engine contribution or a `batchalign.pipeline_api` operation/provider path rather
-   than carrying local source patches.
-5. Adopt `jobs`/`logs`/`cache` operational commands for repeatability.
-6. For editor media workflows, use sidecar/timing-index aware tooling where
+    in-tree engine contribution or a `batchalign.pipeline_api` operation/provider path rather
+    than carrying local source patches.
+5. If you have automation around `opensmile` CSV post-processing, check whether
+   it assumed the old BA2 transposed CSV layout and update it for BA3's
+   row-oriented output.
+6. Adopt `jobs`/`logs`/`cache` operational commands for repeatability.
+7. For editor media workflows, use sidecar/timing-index aware tooling where
    available (instead of bullet-regex-only extraction).

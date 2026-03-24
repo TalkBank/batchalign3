@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{
-    ContentType, DurationSeconds, FileName, FileProgressStage, FileStatusEntry, FileStatusKind,
+    ContentType, DurationSeconds, DisplayPath, FileProgressStage, FileStatusEntry, FileStatusKind,
     JobId, JobInfo, JobListItem, JobStatus, NodeId, ReleasedCommand, UnixTimestamp,
 };
 use crate::scheduling::LeaseRecord;
@@ -194,7 +194,7 @@ impl Job {
         file_status.progress_total = None;
         file_status.progress_stage = None;
         self.execution.results.push(FileResultEntry {
-            filename: FileName::from(filename),
+            filename: DisplayPath::from(filename),
             content_type: ContentType::Chat,
             error: Some(failure.message.clone()),
         });
@@ -268,7 +268,7 @@ impl Job {
     }
 
     /// Return the filenames of files that have not yet reached a terminal state.
-    pub(crate) fn unfinished_files(&self) -> Vec<FileName> {
+    pub(crate) fn unfinished_files(&self) -> Vec<DisplayPath> {
         self.execution
             .file_statuses
             .values()
@@ -623,7 +623,7 @@ impl Job {
 #[derive(Debug)]
 pub struct ConflictEntry {
     /// Basename of the conflicting file.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// Job ID of the existing active job that owns this file.
     pub job_id: JobId,
     /// Command of the existing active job.
@@ -685,7 +685,7 @@ mod tests {
         let file_statuses = filenames
             .iter()
             .map(|filename| {
-                let name = FileName::from(*filename);
+                let name = DisplayPath::from(*filename);
                 (String::from(name.clone()), FileStatus::new(name))
             })
             .collect();
@@ -717,7 +717,7 @@ mod tests {
             filesystem: JobFilesystemConfig {
                 filenames: filenames
                     .iter()
-                    .map(|filename| FileName::from(*filename))
+                    .map(|filename| DisplayPath::from(*filename))
                     .collect(),
                 has_chat,
                 staging_dir: "/tmp/job".into(),
@@ -795,12 +795,12 @@ mod tests {
         retry_file.finished_at = Some(UnixTimestamp(12.0));
         retry_file.progress_stage = Some(FileProgressStage::Aligning);
         job.execution.results.push(FileResultEntry {
-            filename: FileName::from("a.cha"),
+            filename: DisplayPath::from("a.cha"),
             content_type: ContentType::Chat,
             error: None,
         });
         job.execution.results.push(FileResultEntry {
-            filename: FileName::from("b.cha"),
+            filename: DisplayPath::from("b.cha"),
             content_type: ContentType::Chat,
             error: Some("boom".into()),
         });
@@ -949,7 +949,7 @@ mod tests {
             "a.cha",
             UnixTimestamp(12.0),
             Some(CompletedFileOutput {
-                filename: FileName::from("a.cha"),
+                filename: DisplayPath::from("a.cha"),
                 content_type: ContentType::Chat,
             })
         ));

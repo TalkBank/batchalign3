@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::api::{ContentType, FileName, LanguageCode3};
+use crate::api::{ContentType, DisplayPath, LanguageCode3};
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::scheduling::FailureCategory;
@@ -146,7 +146,7 @@ pub(in crate::runner) async fn dispatch_compare(
 
                 lifecycle
                     .complete_with_result(
-                        FileName::from(filename),
+                        DisplayPath::from(filename),
                         ContentType::Chat,
                         finished_at,
                     )
@@ -193,7 +193,7 @@ mod tests {
         let mut file_statuses = HashMap::new();
         file_statuses.insert(
             filename.to_string(),
-            FileStatus::new(FileName::from(filename)),
+            FileStatus::new(DisplayPath::from(filename)),
         );
 
         Job {
@@ -218,7 +218,7 @@ mod tests {
                 source_dir: std::path::PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
-                filenames: vec![FileName::from(filename)],
+                filenames: vec![DisplayPath::from(filename)],
                 has_chat: vec![true],
                 staging_dir: std::path::PathBuf::from(staging_dir),
                 paths_mode: false,

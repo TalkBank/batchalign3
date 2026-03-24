@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use batchalign_app::ReleasedCommand;
-use batchalign_app::api::{FileName, FilePayload, FileStatusKind, JobInfo, JobStatus};
+use batchalign_app::api::{DisplayPath, FilePayload, FileStatusKind, JobInfo, JobStatus};
 
 use crate::client::{BatchalignClient, MAX_POLL_FAILURES, POLL_MAX, POLL_MIN, POLL_STEP};
 use crate::error::CliError;
@@ -20,14 +20,14 @@ use crate::progress::ProgressSink;
 #[derive(Debug, Clone)]
 pub(super) struct FileErrorDetail {
     /// File identity reported to the user.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// Human-readable failure explanation.
     pub message: String,
 }
 
 impl FileErrorDetail {
     /// Construct one failure detail from a file identity and message.
-    pub(super) fn new(filename: impl Into<FileName>, message: impl Into<String>) -> Self {
+    pub(super) fn new(filename: impl Into<DisplayPath>, message: impl Into<String>) -> Self {
         Self {
             filename: filename.into(),
             message: message.into(),
@@ -315,7 +315,7 @@ pub(super) fn classify_files(
         if ext == "cha" {
             let content = std::fs::read_to_string(path)?;
             payloads.push(FilePayload {
-                filename: batchalign_app::api::FileName::from(name.as_str()),
+                filename: batchalign_app::api::DisplayPath::from(name.as_str()),
                 content,
             });
         } else {

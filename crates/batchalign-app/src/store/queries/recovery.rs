@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::api::{
-    ContentType, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+    ContentType, DisplayPath, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
     UnixTimestamp,
 };
 use tokio_util::sync::CancellationToken;
@@ -158,7 +158,7 @@ impl JobStore {
                         file_statuses.insert(
                             fs_row.filename.clone(),
                             FileStatus {
-                                filename: FileName::from(fs_row.filename.clone()),
+                                filename: DisplayPath::from(fs_row.filename.clone()),
                                 status: fs_status,
                                 error: file_error.clone(),
                                 error_category,
@@ -177,7 +177,7 @@ impl JobStore {
 
                         if fs_status.is_terminal() {
                             results.push(FileResultEntry {
-                                filename: FileName::from(fs_row.filename.clone()),
+                                filename: DisplayPath::from(fs_row.filename.clone()),
                                 content_type: match fs_row.content_type.as_str() {
                                     "csv" => ContentType::Csv,
                                     "text" => ContentType::Text,
@@ -242,7 +242,7 @@ impl JobStore {
                             source_dir: row.source_dir.into(),
                         },
                         filesystem: JobFilesystemConfig {
-                            filenames: row.filenames.into_iter().map(FileName::from).collect(),
+                            filenames: row.filenames.into_iter().map(DisplayPath::from).collect(),
                             has_chat: row.has_chat,
                             staging_dir: row.staging_dir.into(),
                             paths_mode: row.paths_mode,
@@ -433,7 +433,7 @@ mod tests {
         let requeued_file = info
             .file_statuses
             .iter()
-            .find(|file| file.filename.as_ref() == "b.cha")
+            .find(|file| file.filename == "b.cha")
             .unwrap();
         assert_eq!(requeued_file.status, FileStatusKind::Queued);
         assert!(requeued_file.started_at.is_none());
@@ -563,7 +563,7 @@ mod tests {
         let file = info
             .file_statuses
             .iter()
-            .find(|file| file.filename.as_ref() == "bad.cha")
+            .find(|file| file.filename == "bad.cha")
             .expect("recovered file status");
         assert_eq!(file.status, FileStatusKind::Error);
         assert!(file.error_category.is_none());

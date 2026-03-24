@@ -16,7 +16,7 @@ use crate::api::JobId;
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ConflictDetail {
     /// The filename that overlaps between the new submission and an active job.
-    pub filename: crate::api::FileName,
+    pub filename: crate::api::DisplayPath,
     /// The `job_id` of the existing active job that owns this file.
     pub job_id: JobId,
     /// The command the conflicting job is running.
@@ -200,7 +200,7 @@ mod tests {
         let err = ServerError::JobConflict {
             message: "files overlap".into(),
             conflicts: vec![ConflictDetail {
-                filename: crate::api::FileName::from("a.cha"),
+                filename: crate::api::DisplayPath::from("a.cha"),
                 job_id: JobId::from("j1"),
                 command: crate::api::ReleasedCommand::Morphotag,
                 status: crate::api::JobStatus::Running,

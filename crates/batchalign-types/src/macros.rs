@@ -79,7 +79,7 @@ macro_rules! string_id {
 /// ```ignore
 /// validated_string_id!(
 ///     /// Basename of a file (no path separators).
-///     pub FileName
+///     pub DisplayPath
 ///     |s| !s.contains('/') && !s.contains('\\')
 ///     "must not contain path separators"
 /// );

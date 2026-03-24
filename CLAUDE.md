@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Batchalign is a Rust-primary language sample analysis (LSA) suite from the [TalkBank](https://talkbank.org/) project, with Python used exclusively as a stateless ML model server. It processes conversation audio files and transcripts in CHAT format, providing ASR, forced alignment, morphosyntactic analysis, translation, utterance segmentation, and audio feature extraction.
+Batchalign is a Rust-primary language sample analysis (LSA) suite from the [TalkBank](https://talkbank.org/) project, with Python used exclusively as a stateless ML model server. It processes conversation audio files and transcripts in [CHAT format](https://talkbank.org/0info/manuals/CHAT.html), providing ASR, forced alignment, morphosyntactic analysis, translation, utterance segmentation, and audio feature extraction.
 
 **Architecture:** Rust owns **all** logic — CHAT parsing, caching, validation, serialization, text normalization, DP alignment, WER computation, ASR post-processing, compound merging, number expansion, retokenization, and result injection. Python workers are stateless ML inference endpoints that load pre-trained neural models, receive structured data (words, audio paths), call ML libraries (Stanza, Whisper, etc.), and return raw model output. No CHAT text, no text processing, and no domain logic exists in Python.
 
@@ -596,7 +596,7 @@ For all Rust code in `crates/` and `pyo3/`.
 
 ### Newtypes Over Primitives
 - **No primitive obsession.** Use `string_id!`/`numeric_id!` macros from `crates/batchalign-types/src/macros.rs` for domain identifiers. Function signatures must be self-documenting through types, not parameter names.
-- **String newtypes:** `JobId`, `CommandName`, `LanguageCode3`, `FileName`, `NodeId`, `EngineVersion`, `CorrelationId`. All auto-deref to `&str`.
+- **String newtypes:** `JobId`, `CommandName`, `LanguageCode3`, `DisplayPath`, `NodeId`, `EngineVersion`, `CorrelationId`. All auto-deref to `&str`.
 - **Numeric newtypes:** `NumSpeakers(u32)`, `UnixTimestamp(f64)`, `DurationSeconds(f64)`, `DurationMs(u64)`, `MemoryMb(u64)`, `WorkerPid(u32)`.
 - **File paths:** Use `std::path::Path`/`PathBuf`, not `&str`/`String`. Convert to strings only at IPC/JSON boundaries via `to_string_lossy()`.
 - **Boundary conversion:** Parse raw strings into newtypes at entry points (HTTP handlers, CLI flags, JSON deserialization) using `TryFrom` or `try_new()`. Interior code never handles raw primitives for typed values. `Deref<Target=str>` enables zero-friction coercion where `&str` is needed.

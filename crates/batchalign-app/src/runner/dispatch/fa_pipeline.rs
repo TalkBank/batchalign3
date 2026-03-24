@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::api::{
-    ContentType, DurationMs, EngineVersion, FileName, LanguageCode3, NumWorkers, RevAiJobId,
+    ContentType, DurationMs, EngineVersion, DisplayPath, LanguageCode3, NumWorkers, RevAiJobId,
     UnixTimestamp,
 };
 use crate::cache::UtteranceCache;
@@ -494,7 +494,7 @@ async fn process_one_fa_file(
                 let output_text = if debug_traces {
                     let output_text = fa_result.chat_text.clone();
                     let file_traces = crate::types::traces::FileTraces {
-                        filename: FileName::from(filename),
+                        filename: DisplayPath::from(filename),
                         dp_alignments: Vec::new(),
                         asr_pipeline: None,
                         fa_timeline: Some(fa_result.into_timeline_trace()),
@@ -542,7 +542,7 @@ async fn process_one_fa_file(
                 }
 
                 lifecycle
-                    .complete_with_result(FileName::from(filename), ContentType::Chat, finished_at)
+                    .complete_with_result(DisplayPath::from(filename), ContentType::Chat, finished_at)
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }

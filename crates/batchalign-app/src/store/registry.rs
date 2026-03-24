@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::api::{
-    FileName, FileStatusEntry, JobId, JobInfo, JobListItem, JobStatus, NodeId, UnixTimestamp,
+    DisplayPath, FileStatusEntry, JobId, JobInfo, JobListItem, JobStatus, NodeId, UnixTimestamp,
 };
 use crate::error::ServerError;
 use crate::queue::QueuePoll;
@@ -561,7 +561,7 @@ impl JobRegistry {
     }
 
     /// Return the filenames that still need work for one job.
-    pub(crate) async fn unfinished_files(&self, job_id: &JobId) -> Vec<FileName> {
+    pub(crate) async fn unfinished_files(&self, job_id: &JobId) -> Vec<DisplayPath> {
         self.project_job(job_id.clone(), |job| job.unfinished_files())
             .await
             .unwrap_or_default()

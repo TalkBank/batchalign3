@@ -532,7 +532,7 @@ async fn golden_benchmark_eng() {
         merge_abbrev: false.into(),
     });
 
-    let (info, _outputs) = submit_paths_and_complete(
+    let (info, outputs) = submit_paths_and_complete(
         server.client(),
         server.base_url(),
         ReleasedCommand::Benchmark,
@@ -553,6 +553,12 @@ async fn golden_benchmark_eng() {
         info.status,
         JobStatus::Completed,
         "benchmark_eng: job should complete"
+    );
+    assert_eq!(outputs.len(), 2, "benchmark_eng: expected csv + chat outputs");
+    assert_eq!(
+        count_wor_tiers(&outputs[1]),
+        0,
+        "benchmark_eng: %wor tier should be absent when benchmark wor=Omit"
     );
 
     // TODO: AVQI test requires .cs/.sv fixture pair — defer until fixtures available.

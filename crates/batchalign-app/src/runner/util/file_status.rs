@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api::{ContentType, FileName, FileProgressStage, JobId, ReleasedCommand, UnixTimestamp};
+use crate::api::{ContentType, DisplayPath, FileProgressStage, JobId, ReleasedCommand, UnixTimestamp};
 use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
 use crate::store::{
     AttemptFinishRecord, CompletedFileOutput, FileFailureRecord, FileProgressRecord,
@@ -29,7 +29,7 @@ pub(in crate::runner) async fn mark_file_done(
     store: &JobStore,
     job_id: &JobId,
     filename: &str,
-    result_filename: FileName,
+    result_filename: DisplayPath,
     content_type: ContentType,
     finished_at: UnixTimestamp,
 ) {
@@ -413,7 +413,7 @@ impl<'a> FileRunTracker<'a> {
     /// attempt as successful.
     pub(crate) async fn complete_with_result(
         &self,
-        result_filename: FileName,
+        result_filename: DisplayPath,
         content_type: ContentType,
         finished_at: UnixTimestamp,
     ) {
@@ -467,7 +467,7 @@ pub(in crate::runner) struct SpawnedFileTask {
     /// Human-readable task role for diagnostics (`"align file"`, etc.).
     pub role: &'static str,
     /// Logical filename owned by this task.
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// Join handle for the spawned task.
     pub handle: JoinHandle<FileTaskOutcome>,
 }
@@ -478,7 +478,7 @@ pub(in crate::runner) struct SpawnedFileTask {
 /// responsible only for one invariant: once the task stops running, the runner
 /// must know whether the corresponding file already reached a terminal state.
 pub(in crate::runner) fn spawn_supervised_file_task<F>(
-    filename: FileName,
+    filename: DisplayPath,
     role: &'static str,
     future: F,
 ) -> SpawnedFileTask
@@ -624,7 +624,7 @@ pub(in crate::runner) async fn force_terminal_file_states(
     store: &JobStore,
     job_id: &JobId,
 ) -> usize {
-    let unfinished: Vec<FileName> = store.unfinished_files(job_id).await;
+    let unfinished: Vec<DisplayPath> = store.unfinished_files(job_id).await;
 
     if unfinished.is_empty() {
         return 0;
@@ -679,7 +679,7 @@ mod tests {
         let mut file_statuses = HashMap::new();
         file_statuses.insert(
             "a.cha".to_string(),
-            FileStatus::new(FileName::from("a.cha")),
+            FileStatus::new(DisplayPath::from("a.cha")),
         );
 
         Job {
@@ -706,7 +706,7 @@ mod tests {
                 source_dir: std::path::PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
-                filenames: vec![FileName::from("a.cha")],
+                filenames: vec![DisplayPath::from("a.cha")],
                 has_chat: vec![true],
                 staging_dir: std::path::PathBuf::new(),
                 paths_mode: false,
@@ -751,7 +751,7 @@ mod tests {
         mark_file_processing(&store, &job_id, "a.cha", unix_now()).await;
 
         let tasks = vec![spawn_supervised_file_task(
-            FileName::from("a.cha"),
+            DisplayPath::from("a.cha"),
             "test file task",
             async { FileTaskOutcome::MissingTerminalState },
         )];
@@ -764,7 +764,7 @@ mod tests {
         let file = detail
             .file_statuses
             .into_iter()
-            .find(|entry| entry.filename.as_ref() == "a.cha")
+            .find(|entry| entry.filename == "a.cha")
             .unwrap();
         assert_eq!(file.status, FileStatusKind::Error);
         assert!(
@@ -784,7 +784,7 @@ mod tests {
         mark_file_processing(&store, &job_id, "a.cha", unix_now()).await;
 
         let tasks = vec![spawn_supervised_file_task(
-            FileName::from("a.cha"),
+            DisplayPath::from("a.cha"),
             "panic file task",
             async {
                 panic!("boom");
@@ -799,7 +799,7 @@ mod tests {
         let file = detail
             .file_statuses
             .into_iter()
-            .find(|entry| entry.filename.as_ref() == "a.cha")
+            .find(|entry| entry.filename == "a.cha")
             .unwrap();
         assert_eq!(file.status, FileStatusKind::Error);
         assert!(
@@ -846,14 +846,14 @@ mod tests {
 
         let finished_at = unix_now();
         lifecycle
-            .complete_with_result(FileName::from("a.ana"), ContentType::Chat, finished_at)
+            .complete_with_result(DisplayPath::from("a.ana"), ContentType::Chat, finished_at)
             .await;
 
         let detail = store.get_job_detail(&job_id).await.expect("job detail");
         let file = detail
             .file_statuses
             .into_iter()
-            .find(|entry| entry.filename.as_ref() == "a.cha")
+            .find(|entry| entry.filename == "a.cha")
             .expect("tracked file");
         assert_eq!(file.status, FileStatusKind::Done);
         assert!(file.next_eligible_at.is_none());
@@ -895,7 +895,7 @@ mod tests {
         let file = detail
             .file_statuses
             .into_iter()
-            .find(|entry| entry.filename.as_ref() == "a.cha")
+            .find(|entry| entry.filename == "a.cha")
             .expect("tracked file");
         assert_eq!(file.status, FileStatusKind::Error);
         assert_eq!(file.error.as_deref(), Some("media preflight failed"));

@@ -1,7 +1,7 @@
 # batchalign-app — HTTP Server, Job Store, and NLP Orchestration
 
 **Status:** Current
-**Last modified:** 2026-03-21 15:30 EDT
+**Last modified:** 2026-03-24 18:22 EDT
 
 ## Overview
 
@@ -89,7 +89,7 @@ post-validation finds issues. This ensures output CHAT can be inspected for debu
 
 Domain newtypes are defined in `batchalign-types` using `string_id!` and `numeric_id!`:
 - **`../batchalign-types/src/macros.rs`** — macro definitions (generates Deref, serde transparent, From, Borrow, etc.)
-- **`../batchalign-types/src/domain/`** — `JobId`, `CommandName`, `ReleasedCommand`, `LanguageCode3`, `LanguageSpec`, `FileName`, `EngineVersion`, `CorrelationId`, `NumSpeakers`, `UnixTimestamp`, `DurationMs`, `MemoryMb`, etc.
+- **`../batchalign-types/src/domain/`** — `JobId`, `CommandName`, `ReleasedCommand`, `LanguageCode3`, `LanguageSpec`, `DisplayPath`, `EngineVersion`, `CorrelationId`, `NumSpeakers`, `UnixTimestamp`, `DurationMs`, `MemoryMb`, etc.
 - **`../batchalign-types/src/scheduling.rs`** — `AttemptId`, `WorkUnitId`
 - **`types/params.rs`** — `CachePolicy`, `WorTierPolicy` enums; `MorphosyntaxParams`, `FaParams`, `AudioContext` structs
 - **`pipeline/mod.rs`** — `PipelineServices` (shared infrastructure refs: pool, cache, engine_version)

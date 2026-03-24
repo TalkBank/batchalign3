@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::{
-    ContentType, FileName, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus, NodeId,
+    ContentType, DisplayPath, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus, NodeId,
     UnixTimestamp,
 };
 use crate::config::ServerConfig;
@@ -62,8 +62,10 @@ const AUTO_CONCURRENT_FALLBACK_SLOTS: usize = 4;
 /// persisted to SQLite) and are cleared on job restart.
 #[derive(Debug, Clone)]
 pub struct FileStatus {
-    /// Basename of the file (e.g. `"sample.cha"`), unique within the parent job.
-    pub filename: FileName,
+    /// Display path for this file, unique within the parent job. May be a
+    /// bare basename (`"sample.cha"`) or a relative path (`"PWA/TYO_a1.cha"`)
+    /// depending on whether the input had subdirectories.
+    pub filename: DisplayPath,
     /// Current lifecycle phase: Queued -> Processing -> Done | Error.
     /// `Interrupted` is only set during DB recovery for files that were in-flight
     /// when the server crashed.
@@ -111,7 +113,7 @@ pub struct FileStatus {
 
 impl FileStatus {
     /// Create a new `FileStatus` in the `Queued` state.
-    pub fn new(filename: FileName) -> Self {
+    pub fn new(filename: DisplayPath) -> Self {
         Self {
             filename,
             status: FileStatusKind::Queued,
@@ -196,8 +198,8 @@ pub struct OperationalCounters {
 /// error message so the client can report per-file failures.
 #[derive(Debug, Clone)]
 pub struct FileResultEntry {
-    /// Basename of the file (matches the corresponding `FileStatus::filename`).
-    pub filename: FileName,
+    /// Display path (matches the corresponding `FileStatus::filename`).
+    pub filename: DisplayPath,
     /// Content discriminator for the result file.
     pub content_type: ContentType,
     /// Error message if processing failed for this file; `None` on success.

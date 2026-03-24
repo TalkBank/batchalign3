@@ -1,7 +1,7 @@
 # Batchalign2 CLI Reference (Baseline)
 
 **Status:** Reference
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-24 16:17 EDT
 
 This document captures the complete CLI surface of Batchalign2 at the
 `84ad500b` baseline (2026-01-09) — the final optimization push before the
@@ -64,16 +64,17 @@ Create transcripts from audio files via ASR.
 | `--whisper` / `--rev` | exclusive pair | `--rev` | ASR engine (HF variant) | Hidden compat alias → `--asr-engine` |
 | `--whisperx` / `--rev` | exclusive pair | `--rev` | ASR engine (WhisperX variant) | Hidden compat alias → `--asr-engine` |
 | `--diarize` / `--nodiarize` | bool | `False` | Speaker diarization | Hidden compat alias → `--diarization` |
-| `--wor` / `--nowor` | bool | `False` | Write %wor tier | **Regression (R1):** parsed but not consumed |
+| `--wor` / `--nowor` | bool | `False` | Write %wor tier | Wired |
 | `--merge-abbrev` / `--no-merge-abbrev` | bool | `False` | Merge abbreviations | Wired |
 | `--lang` | str | `"eng"` | Language code | Wired |
 | `-n` / `--num_speakers` | int | `2` | Expected speaker count | Wired |
 
 **Pipeline task:** `"asr"` (without diarization) or `"asr"` + speaker pipeline (with diarization).
 
-**Note on `--wor`:** BA2 default was `False` (no %wor). ASR provides word-level
-timing, so %wor generation is technically possible. BA3 unconditionally generates
-%wor when timing exists — the `--wor`/`--nowor` toggle is silently ignored.
+**Note on `--wor`:** BA2 default was `False` (no `%wor`). Current BA3 preserves
+that policy and wires `--wor` / `--nowor` through the Rust transcribe path.
+Earlier migration-stage notes flagged this as a regression, but current code and
+tests now cover the `%wor` toggle explicitly.
 
 ### `morphotag`
 
@@ -131,7 +132,7 @@ ASR word error rate benchmarking against gold transcripts.
 | `--whisper_oai` / `--rev` | exclusive pair | `--rev` | ASR engine (OAI variant) | Hidden compat alias → `--asr-engine` |
 | `--lang` | str | `"eng"` | Language code | Wired |
 | `-n` / `--num_speakers` | int | `2` | Expected speaker count | Wired |
-| `--wor` / `--nowor` | bool | `False` | Write %wor tier | **Regression (R2):** parsed but not consumed |
+| `--wor` / `--nowor` | bool | `False` | Write %wor tier | Wired |
 | `--merge-abbrev` / `--no-merge-abbrev` | bool | `False` | Merge abbreviations | Wired |
 
 **Pipeline task:** `"asr"` (transcribe) + `"morphosyntax"` (compare).
@@ -142,14 +143,15 @@ Transcript comparison against gold-standard references.
 
 | Flag | Type | Default | Help | BA3 Status |
 |------|------|---------|------|------------|
-| `--lang` | str | `"eng"` | Language code | **Regression (R3):** missing from BA3 |
+| `--lang` | str | `"eng"` | Language code | Wired |
 | `--merge-abbrev` / `--no-merge-abbrev` | bool | `False` | Merge abbreviations | Wired |
 
 **Pipeline task:** `"morphosyntax"` (compare uses morphosyntax to tag both transcripts before WER computation).
 
-**Note on `--lang`:** BA2 passed `--lang` to the compare pipeline for
-morphosyntax. BA3 `CompareArgs` has no `--lang` field; `command_meta()`
-hardcodes `"eng"`. Non-English compare is broken.
+**Note on `--lang`:** BA2 passed `--lang` through the compare pipeline for
+morphosyntax. Current BA3 also exposes `--lang` on `CompareArgs` and carries it
+through compare dispatch. Earlier migration-stage notes flagged this as missing,
+but the current CLI surface and tests cover it.
 
 ### `opensmile`
 
@@ -285,8 +287,9 @@ entry points) has been completely removed. See
 
 ## Regression Summary
 
-| ID | Command | Flag | Severity | Description |
-|----|---------|------|----------|-------------|
-| R1 | `transcribe` | `--wor`/`--nowor` | Critical | Parsed but not consumed; %wor unconditionally generated |
-| R2 | `benchmark` | `--wor`/`--nowor` | Medium | Parsed but not consumed; same root cause as R1 |
-| R3 | `compare` | `--lang` | Medium | Missing from BA3; hardcoded to `"eng"` |
+No current CLI-surface regressions are recorded in this baseline table for
+`transcribe`, `benchmark`, or `compare`.
+
+Historical note: earlier BA3 migration notes temporarily flagged
+`transcribe --wor`, `benchmark --wor`, and `compare --lang` as regressions
+during the rewrite. Current code and tests now wire those surfaces.

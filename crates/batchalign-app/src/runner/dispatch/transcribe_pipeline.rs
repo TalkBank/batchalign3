@@ -317,7 +317,7 @@ mod tests {
     use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{
-        EngineVersion, FileName, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+        EngineVersion, DisplayPath, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
         UnixTimestamp,
     };
     use crate::cache::UtteranceCache;
@@ -337,7 +337,7 @@ mod tests {
         let mut file_statuses = HashMap::new();
         file_statuses.insert(
             filename.to_string(),
-            FileStatus::new(FileName::from(filename)),
+            FileStatus::new(DisplayPath::from(filename)),
         );
 
         Job {
@@ -366,7 +366,7 @@ mod tests {
                 source_dir: std::path::PathBuf::new(),
             },
             filesystem: JobFilesystemConfig {
-                filenames: vec![FileName::from(filename)],
+                filenames: vec![DisplayPath::from(filename)],
                 has_chat: vec![false],
                 staging_dir: std::path::PathBuf::new(),
                 paths_mode: true,
