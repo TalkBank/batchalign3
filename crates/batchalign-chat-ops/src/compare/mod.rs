@@ -1,11 +1,19 @@
 //! Transcript comparison: main vs gold-standard reference.
 //!
-//! Extracts words from both transcripts, normalizes them via
-//! [`wer_conform::conform_words`], runs DP alignment, and produces
-//! per-utterance comparison annotations with accuracy metrics.
+//! Provides two comparison paths:
 //!
-//! This is the Rust implementation of Python's `CompareEngine` +
-//! `CompareAnalysisEngine` from batchalign2.
+//! 1. **Main-annotated** ([`compare`]): Global DP alignment, results
+//!    distributed per main utterance, injected as `%xsrep` tiers on the main
+//!    transcript.
+//!
+//! 2. **Gold-projected** ([`gold_projection`]): Per-gold-utterance windowed
+//!    alignment (bag-of-words window search + DP), timing/morphology projection
+//!    from main to gold, per-POS metrics. This replicates the BA2
+//!    `CompareEngine` + `CompareAnalysisEngine` behavior.
+
+pub mod gold_projection;
+
+use std::collections::BTreeMap;
 
 use talkbank_model::Span;
 use talkbank_model::alignment::helpers::TierDomain;
@@ -31,6 +39,8 @@ pub enum CompareStatus {
 pub struct CompareToken {
     /// The word text.
     pub text: String,
+    /// Part-of-speech tag from morphosyntax. `"?"` when unavailable.
+    pub pos: String,
     /// Match status.
     pub status: CompareStatus,
 }
@@ -44,6 +54,19 @@ pub struct UtteranceComparison {
     pub speaker: String,
     /// Comparison tokens (matches, insertions, deletions).
     pub tokens: Vec<CompareToken>,
+}
+
+/// Per-POS error breakdown (matches, insertions, deletions).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PosMetrics {
+    /// Matches for this POS.
+    pub matches: usize,
+    /// Insertions (extra in main) for this POS.
+    pub insertions: usize,
+    /// Deletions (extra in gold) for this POS.
+    pub deletions: usize,
+    /// Total gold words for this POS (matches + deletions).
+    pub total: usize,
 }
 
 /// Aggregate comparison metrics.
@@ -63,6 +86,9 @@ pub struct CompareMetrics {
     pub total_gold_words: usize,
     /// Total words in the main transcript (matches + insertions).
     pub total_main_words: usize,
+    /// Per-POS breakdown, keyed by uppercased POS tag. Empty when POS info
+    /// is unavailable (e.g. the main-annotated path which sets pos="?").
+    pub per_pos: BTreeMap<String, PosMetrics>,
 }
 
 /// Full comparison bundle.
@@ -82,6 +108,70 @@ pub struct ComparisonBundle {
 /// Compatibility alias retained while the compare pipeline is refactored toward
 /// workflow bundles plus explicit materializers.
 pub type CompareResult = ComparisonBundle;
+
+/// Compute aggregate metrics from a flat list of comparison tokens.
+///
+/// Builds both the top-level counts (matches, insertions, deletions, WER) and
+/// per-POS breakdown. Tokens with `pos == "PUNCT"` are excluded from metrics
+/// (matching BA2 `CompareAnalysisEngine` behavior).
+pub fn compute_metrics(utterances: &[UtteranceComparison]) -> CompareMetrics {
+    let mut matches = 0usize;
+    let mut extra_main = 0usize;
+    let mut extra_gold = 0usize;
+    let mut per_pos: BTreeMap<String, PosMetrics> = BTreeMap::new();
+
+    for utt in utterances {
+        for tok in &utt.tokens {
+            if tok.pos == "PUNCT" {
+                continue;
+            }
+            let pm = per_pos.entry(tok.pos.clone()).or_insert(PosMetrics {
+                matches: 0,
+                insertions: 0,
+                deletions: 0,
+                total: 0,
+            });
+            match tok.status {
+                CompareStatus::Match => {
+                    matches += 1;
+                    pm.matches += 1;
+                }
+                CompareStatus::ExtraMain => {
+                    extra_main += 1;
+                    pm.insertions += 1;
+                }
+                CompareStatus::ExtraGold => {
+                    extra_gold += 1;
+                    pm.deletions += 1;
+                }
+            }
+        }
+    }
+
+    // Finalize per-POS totals
+    for pm in per_pos.values_mut() {
+        pm.total = pm.matches + pm.deletions;
+    }
+
+    let total_gold = matches + extra_gold;
+    let total_main = matches + extra_main;
+    let wer = if total_gold > 0 {
+        (extra_main + extra_gold) as f64 / total_gold as f64
+    } else {
+        0.0
+    };
+
+    CompareMetrics {
+        wer,
+        accuracy: (1.0 - wer).clamp(0.0, 1.0),
+        matches,
+        insertions: extra_main,
+        deletions: extra_gold,
+        total_gold_words: total_gold,
+        total_main_words: total_main,
+        per_pos,
+    }
+}
 
 /// Punctuation and fillers to exclude from comparison (matching BA2 behavior).
 fn is_punct_or_filler(word: &str) -> bool {
@@ -156,6 +246,7 @@ pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> Comp
                     word_position as f64,
                     CompareToken {
                         text: key.clone(),
+                        pos: "?".to_string(),
                         status: CompareStatus::Match,
                     },
                 ));
@@ -173,6 +264,7 @@ pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> Comp
                     word_position as f64,
                     CompareToken {
                         text: key.clone(),
+                        pos: "?".to_string(),
                         status: CompareStatus::ExtraMain,
                     },
                 ));
@@ -190,6 +282,7 @@ pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> Comp
                     pos,
                     CompareToken {
                         text: key.clone(),
+                        pos: "?".to_string(),
                         status: CompareStatus::ExtraGold,
                     },
                 ));
@@ -250,6 +343,7 @@ pub fn compare(main_file: &crate::ChatFile, gold_file: &crate::ChatFile) -> Comp
         deletions: extra_gold,
         total_gold_words: total_gold,
         total_main_words: total_main,
+        per_pos: BTreeMap::new(), // POS unavailable in main-annotated path
     };
 
     // Suppress unused variable warnings
@@ -306,8 +400,11 @@ pub fn format_xsrep(comparison: &UtteranceComparison) -> String {
 }
 
 /// Format comparison metrics as CSV rows with header.
+///
+/// Includes per-POS breakdown rows when available (keyed as
+/// `{POS}:matches`, `{POS}:insertions`, `{POS}:deletions`, `{POS}:total`).
 pub fn format_metrics_csv(metrics: &CompareMetrics) -> String {
-    format!(
+    let mut csv = format!(
         "metric,value\nwer,{:.4}\naccuracy,{:.4}\nmatches,{}\ninsertions,{}\ndeletions,{}\ntotal_gold_words,{}\ntotal_main_words,{}",
         metrics.wer,
         metrics.accuracy,
@@ -316,7 +413,14 @@ pub fn format_metrics_csv(metrics: &CompareMetrics) -> String {
         metrics.deletions,
         metrics.total_gold_words,
         metrics.total_main_words,
-    )
+    );
+    for (pos, pm) in &metrics.per_pos {
+        csv.push_str(&format!(
+            "\n{pos}:matches,{}\n{pos}:insertions,{}\n{pos}:deletions,{}\n{pos}:total,{}",
+            pm.matches, pm.insertions, pm.deletions, pm.total,
+        ));
+    }
+    csv
 }
 
 /// Inject comparison results into a CHAT file as `%xsrep` dependent tiers.
@@ -551,18 +655,22 @@ mod tests {
             tokens: vec![
                 CompareToken {
                     text: "hello".to_string(),
+                    pos: "?".to_string(),
                     status: CompareStatus::Match,
                 },
                 CompareToken {
                     text: "big".to_string(),
+                    pos: "?".to_string(),
                     status: CompareStatus::ExtraMain,
                 },
                 CompareToken {
                     text: "world".to_string(),
+                    pos: "?".to_string(),
                     status: CompareStatus::Match,
                 },
                 CompareToken {
                     text: "today".to_string(),
+                    pos: "?".to_string(),
                     status: CompareStatus::ExtraGold,
                 },
             ],
@@ -581,6 +689,7 @@ mod tests {
             deletions: 0,
             total_gold_words: 3,
             total_main_words: 4,
+            per_pos: BTreeMap::new(),
         };
         let csv = format_metrics_csv(&metrics);
         assert!(csv.contains("wer,0.2500"));
@@ -601,6 +710,7 @@ mod tests {
             deletions: 1,
             total_gold_words: 3, // matches + deletions
             total_main_words: 3, // matches + insertions
+            per_pos: BTreeMap::new(),
         };
         // WER = (ins + del) / total_gold = 2/3 ≈ 0.6667
         let expected_wer = 2.0 / 3.0;
@@ -716,6 +826,7 @@ mod tests {
             deletions: 0,
             total_gold_words: 3,
             total_main_words: 4,
+            per_pos: BTreeMap::new(),
         };
         let csv = format_metrics_csv(&metrics);
         assert!(csv.starts_with("metric,value\n"));

@@ -433,7 +433,7 @@ async fn start_daemon(
     } else {
         // Local profile default: optimize for low idle memory/cold startup.
         // Deployments with explicit server.yaml keep their configured policy.
-        cmd.args(["--warmup-policy", "off"]);
+        cmd.args(["--warmup", "off"]);
     }
     if force_cpu {
         cmd.arg("--force-cpu");
