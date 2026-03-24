@@ -1,7 +1,7 @@
 # CHAT Content Model
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-23 23:33 EDT
 
 This chapter explains how batchalign3 represents CHAT main-tier content as a typed AST, how the type hierarchy nests, and what each level contains. Understanding this hierarchy is essential for writing correct content traversals.
 
@@ -23,6 +23,7 @@ ChatFile
             │   │       └── Vec<BracketedItem>     ← Level 2
             │   ├── PhoGroup, SinGroup, Quotation
             │   │   └── (same BracketedContent)
+            │   ├── Retrace(Box<Retrace>)
             │   ├── Pause, Event, Separator, ...
             │   └── AnnotatedWord, AnnotatedGroup, ...
             ├── bullet: Option<Bullet>
@@ -58,7 +59,7 @@ Content inside groups (`<...>`, `‹...›`, `〔...〕`, `"..."`). Accessed via
 let items: &[BracketedItem] = &group.content.content.0;
 ```
 
-`BracketedItem` mirrors `UtteranceContent` closely — same word, event, pause, and marker types — plus `AnnotatedGroup` for nested `<...> [/]` retrace groups. Groups can nest arbitrarily deep.
+`BracketedItem` mirrors `UtteranceContent` closely — same word, event, pause, and marker types. Retrace content (`<word word> [/]`, `word [//]`, etc.) is a dedicated `Retrace` variant at both levels, not hidden inside `AnnotatedGroup`. Groups can nest arbitrarily deep.
 
 ### Level 3: WordContent (11 variants)
 
@@ -90,7 +91,7 @@ The `Annotated<T>` wrapper adds scoped annotations (`[/]`, `[* m]`, `[= explanat
 ```rust
 pub struct Annotated<T> {
     pub inner: T,                         // the wrapped item
-    pub scoped_annotations: Vec<ScopedAnnotation>,
+    pub annotations: Vec<ContentAnnotation>,
     pub span: Span,
 }
 ```

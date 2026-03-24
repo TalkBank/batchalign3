@@ -7,40 +7,7 @@ use talkbank_model::alignment::helpers::{TierDomain, counts_for_tier, is_tag_mar
 use talkbank_model::model::content::BracketedItems;
 use talkbank_model::model::{BracketedItem, Mor, UtteranceContent, Word};
 
-use talkbank_model::model::{Annotated, Group, ScopedAnnotation, Word as ModelWord};
-
 use crate::extract::ExtractedWord;
-
-/// Check if an annotated group carries a retrace annotation.
-///
-/// Retrace groups (`[/]`, `[//]`, `[///]`, `[/-]`) are excluded from MOR
-/// extraction. The retokenize rebuild must skip them entirely to keep
-/// `word_counter` synchronized with the MOR-domain word mapping.
-fn is_retrace_annotated_word(annotated: &Annotated<ModelWord>) -> bool {
-    annotated.scoped_annotations.iter().any(|ann| {
-        matches!(
-            ann,
-            ScopedAnnotation::PartialRetracing
-                | ScopedAnnotation::Retracing
-                | ScopedAnnotation::MultipleRetracing
-                | ScopedAnnotation::Reformulation
-                | ScopedAnnotation::UncertainRetracing
-        )
-    })
-}
-
-fn is_retrace_annotated_group(annotated: &Annotated<Group>) -> bool {
-    annotated.scoped_annotations.iter().any(|ann| {
-        matches!(
-            ann,
-            ScopedAnnotation::PartialRetracing
-                | ScopedAnnotation::Retracing
-                | ScopedAnnotation::MultipleRetracing
-                | ScopedAnnotation::Reformulation
-                | ScopedAnnotation::UncertainRetracing
-        )
-    })
-}
 
 use super::mapping::WordTokenMapping;
 use super::parse_helpers::{
@@ -54,6 +21,8 @@ use super::parse_helpers::{
 /// Bundles the read-only reference data and mutable counters/accumulators
 /// that every rebuild function needs, replacing the 11-parameter threading.
 pub(super) struct RetokenizeContext<'a> {
+    /// Tree-sitter parser for validating Stanza tokens as CHAT words.
+    pub parser: &'a talkbank_parser::TreeSitterParser,
     /// Maps original word index -> list of Stanza token indices.
     pub mapping: &'a WordTokenMapping,
     /// Stanza's tokenized output.
@@ -99,16 +68,11 @@ pub(super) fn rebuild_content(
                 }
             }
             UtteranceContent::AnnotatedWord(mut annotated) => {
-                // Retrace-annotated words are excluded from MOR extraction.
-                // Pass through unchanged to keep word_counter in sync.
-                if is_retrace_annotated_word(&annotated) {
-                    new_content.push(UtteranceContent::AnnotatedWord(annotated));
-                } else if should_retokenize(&annotated.inner) {
+                // Retrace content uses the dedicated Retrace variant (not AnnotatedWord).
+                if should_retokenize(&annotated.inner) {
                     handle_annotated_word_retokenize(&mut annotated.inner, ctx);
-                    new_content.push(UtteranceContent::AnnotatedWord(annotated));
-                } else {
-                    new_content.push(UtteranceContent::AnnotatedWord(annotated));
                 }
+                new_content.push(UtteranceContent::AnnotatedWord(annotated));
             }
             UtteranceContent::ReplacedWord(mut replaced) => {
                 if replaced.replacement.words.is_empty() {
@@ -136,20 +100,12 @@ pub(super) fn rebuild_content(
                 new_content.push(UtteranceContent::Group(group));
             }
             UtteranceContent::AnnotatedGroup(mut annotated) => {
-                // Retrace groups (PartialRetracing, Retracing, MultipleRetracing,
-                // Reformulation) are excluded from MOR extraction. Pass them
-                // through unchanged — do NOT recurse into their content, because
-                // word_counter would desynchronize with the mapping (which only
-                // covers MOR-domain words).
-                if is_retrace_annotated_group(&annotated) {
-                    new_content.push(UtteranceContent::AnnotatedGroup(annotated));
-                } else {
-                    let old_bracketed = std::mem::take(&mut annotated.inner.content.content.0);
-                    let mut new_bracketed = Vec::with_capacity(old_bracketed.len());
-                    rebuild_bracketed_content(old_bracketed, ctx, &mut new_bracketed);
-                    annotated.inner.content.content = BracketedItems(new_bracketed);
-                    new_content.push(UtteranceContent::AnnotatedGroup(annotated));
-                }
+                // Retrace content uses the dedicated Retrace variant (not AnnotatedGroup).
+                let old_bracketed = std::mem::take(&mut annotated.inner.content.content.0);
+                let mut new_bracketed = Vec::with_capacity(old_bracketed.len());
+                rebuild_bracketed_content(old_bracketed, ctx, &mut new_bracketed);
+                annotated.inner.content.content = BracketedItems(new_bracketed);
+                new_content.push(UtteranceContent::AnnotatedGroup(annotated));
             }
             UtteranceContent::PhoGroup(mut pho) => {
                 let old_bracketed = std::mem::take(&mut pho.content.content.0);
@@ -245,6 +201,7 @@ fn handle_word_retokenize(
         ctx.mor_cursor += 1;
         ctx.emitted_tokens.insert(ti);
         match try_parse_token_as_utterance_content(
+            ctx.parser,
             &token_text,
             ctx.expected_terminator,
             &mut ctx.diagnostics,
@@ -314,7 +271,7 @@ fn handle_annotated_word_retokenize(word: &mut Word, ctx: &mut RetokenizeContext
     {
         // Only replace if the Stanza token parses as valid CHAT.
         // If it doesn't, keep the original word -- it's already valid.
-        if let Some(parsed) = try_parse_token_as_word(&token_text, &mut ctx.diagnostics) {
+        if let Some(parsed) = try_parse_token_as_word(ctx.parser, &token_text, &mut ctx.diagnostics) {
             *word = parsed;
         }
     }
@@ -361,9 +318,8 @@ fn rebuild_bracketed_content(
                 new_items.push(BracketedItem::ReplacedWord(replaced));
             }
             BracketedItem::AnnotatedGroup(mut annotated) => {
-                if is_retrace_annotated_group(&annotated) {
-                    new_items.push(BracketedItem::AnnotatedGroup(annotated));
-                } else {
+                // Retrace content uses the dedicated Retrace variant (not AnnotatedGroup).
+                {
                     let old_bracketed = std::mem::replace(
                         &mut annotated.inner.content.content,
                         BracketedItems(Vec::new()),
@@ -458,6 +414,7 @@ fn handle_bracketed_word_retokenize(
         ctx.mor_cursor += 1;
         ctx.emitted_tokens.insert(ti);
         match try_parse_token_as_bracketed_item(
+            ctx.parser,
             &token_text,
             ctx.expected_terminator,
             &mut ctx.diagnostics,

@@ -124,7 +124,9 @@ pub(crate) async fn run_fa_impl(
     progress: Option<&ProgressSender>,
 ) -> Result<FaResult, ServerError> {
     // 1. Parse
-    let (mut chat_file, parse_errors) = parse_lenient(chat_text);
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (mut chat_file, parse_errors) = parse_lenient(&parser, chat_text);
     if !parse_errors.is_empty() {
         warn!(
             num_errors = parse_errors.len(),

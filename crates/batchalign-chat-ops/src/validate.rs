@@ -245,7 +245,12 @@ fn validate_align_output(file: &ChatFile, errors: &mut Vec<ValidationError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_parser::parse_chat_file;
+    use talkbank_parser::TreeSitterParser;
+
+    fn parse_chat_file(text: &str) -> Result<talkbank_model::ChatFile, talkbank_model::ParseErrors> {
+        let parser = TreeSitterParser::new().expect("grammar loads");
+        parser.parse_chat_file(text)
+    }
 
     #[test]
     fn test_valid_file_passes_all_levels() {

@@ -378,7 +378,9 @@ async fn process_one_fa_file(
     // UTR pre-pass: if untimed utterances exist and a UTR engine is configured,
     // run ASR to recover utterance-level timing before FA grouping.
     let (mut chat_text, mut had_unrecovered_untimed) = {
-        let (chat_file, _) = batchalign_chat_ops::parse::parse_lenient(&chat_text);
+        let fa_parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+            .expect("tree-sitter CHAT grammar must load");
+        let (chat_file, _) = batchalign_chat_ops::parse::parse_lenient(&fa_parser, &chat_text);
         let (_timed, untimed) = batchalign_chat_ops::fa::count_utterance_timing(&chat_file);
 
         if untimed == 0 {

@@ -275,8 +275,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description Batchalign command name (e.g. `"morphotag"`, `"align"`). */
-        CommandName: string;
         /**
          * @description Engine category that supports backend overrides.
          *
@@ -614,7 +612,7 @@ export interface components {
         JobInfo: {
             active_lease?: null | components["schemas"]["LeaseRecord"];
             /** @description Batchalign command that was submitted (e.g. "morphotag", "align"). */
-            command: components["schemas"]["CommandName"];
+            command: components["schemas"]["ReleasedCommand"];
             /** @description ISO 8601 timestamp of when the job reached a terminal state. */
             completed_at?: string | null;
             /**
@@ -692,7 +690,7 @@ export interface components {
         JobListItem: {
             active_lease?: null | components["schemas"]["LeaseRecord"];
             /** @description Batchalign command (e.g. "morphotag", "align"). */
-            command: components["schemas"]["CommandName"];
+            command: components["schemas"]["ReleasedCommand"];
             /** @description ISO 8601 timestamp of when the job reached a terminal state. */
             completed_at?: string | null;
             /**
@@ -763,7 +761,7 @@ export interface components {
              */
             before_paths?: string[];
             /** @description Batchalign command (align, morphotag, etc.). */
-            command: components["schemas"]["CommandName"];
+            command: components["schemas"]["ReleasedCommand"];
             /**
              * @description When true, the server collects detailed algorithm traces for
              *     visualization (DP alignment matrices, ASR pipeline stages, FA
@@ -851,6 +849,14 @@ export interface components {
          * @description Number of speakers in a recording.
          */
         NumSpeakers: number;
+        /**
+         * @description Closed released command vocabulary used at all Rust seams.
+         *
+         *     This is the single canonical command type. Unknown command strings are
+         *     rejected at deserialization boundaries (HTTP 422, DB recovery skip).
+         * @enum {string}
+         */
+        ReleasedCommand: "align" | "transcribe" | "transcribe_s" | "translate" | "morphotag" | "coref" | "utseg" | "benchmark" | "opensmile" | "compare" | "avqi";
         /**
          * @description Response body for mutating operations that return a status confirmation
          *     (e.g. cancel, delete, restart).

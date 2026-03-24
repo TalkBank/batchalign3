@@ -1,6 +1,5 @@
 //! Small helpers for parsing Stanza tokens into CHAT AST nodes.
 
-use talkbank_parser::TreeSitterParser;
 use talkbank_model::NullErrorSink;
 use talkbank_model::model::{BracketedItem, UtteranceContent, Word};
 
@@ -13,6 +12,7 @@ use crate::extract::ExtractedWord;
 /// Valid CHAT words become `UtteranceContent::Word`.
 /// Unparseable tokens return `None` -- the caller should keep the original word.
 pub(super) fn try_parse_token_as_utterance_content(
+    parser: &talkbank_parser::TreeSitterParser,
     text: &str,
     expected_terminator: Option<&str>,
     diagnostics: &mut Vec<String>,
@@ -34,7 +34,7 @@ pub(super) fn try_parse_token_as_utterance_content(
             if handle_ending_punct_skip(text, expected_terminator, diagnostics) {
                 None
             } else {
-                try_parse_token_as_word(text, diagnostics)
+                try_parse_token_as_word(parser, text, diagnostics)
                     .map(|w| UtteranceContent::Word(Box::new(w)))
             }
         }
@@ -48,6 +48,7 @@ pub(super) fn try_parse_token_as_utterance_content(
 /// Valid CHAT words become `BracketedItem::Word`.
 /// Unparseable tokens return `None` -- the caller should keep the original.
 pub(super) fn try_parse_token_as_bracketed_item(
+    parser: &talkbank_parser::TreeSitterParser,
     text: &str,
     expected_terminator: Option<&str>,
     diagnostics: &mut Vec<String>,
@@ -80,7 +81,7 @@ pub(super) fn try_parse_token_as_bracketed_item(
         return None;
     }
 
-    try_parse_token_as_word(text, diagnostics).map(|w| BracketedItem::Word(Box::new(w)))
+    try_parse_token_as_word(parser, text, diagnostics).map(|w| BracketedItem::Word(Box::new(w)))
 }
 
 /// Returns true if `text` is a tag-marker separator character.
@@ -129,10 +130,9 @@ pub(super) fn handle_ending_punct_skip(
 ///
 /// Emits `tracing::warn!` when a token fails to parse, making these events
 /// visible in `-vv` output for debugging retokenization issues.
-pub(super) fn try_parse_token_as_word(text: &str, diagnostics: &mut Vec<String>) -> Option<Word> {
-    let _parser = TreeSitterParser::new().expect("TreeSitterParser should always construct");
+pub(super) fn try_parse_token_as_word(parser: &talkbank_parser::TreeSitterParser, text: &str, diagnostics: &mut Vec<String>) -> Option<Word> {
     let errors = NullErrorSink;
-    match talkbank_parser::parse_word(text, 0, &errors).into_option() {
+    match parser.parse_word_fragment(text, 0, &errors).into_option() {
         Some(word) => Some(word),
         None => {
             tracing::warn!(

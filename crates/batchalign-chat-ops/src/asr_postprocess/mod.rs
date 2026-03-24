@@ -808,6 +808,7 @@ mod tests {
 
     #[test]
     fn test_process_raw_asr_handles_single_chunk_cantonese_whisper_output() {
+        let parser = talkbank_parser::TreeSitterParser::new().unwrap();
         let output = AsrOutput {
             monologues: vec![AsrMonologue {
                 speaker: SpeakerIndex(0),
@@ -854,7 +855,7 @@ mod tests {
         );
         let chat = crate::build_chat::build_chat(&desc).expect("build chat");
         let serialized = crate::serialize::to_chat_string(&chat);
-        let (_parsed, errors) = crate::parse::parse_lenient(&serialized);
+        let (_parsed, errors) = crate::parse::parse_lenient(&parser, &serialized);
         assert!(
             errors.is_empty(),
             "generated CHAT should reparse cleanly: {errors:?}"

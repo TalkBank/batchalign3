@@ -22,10 +22,9 @@ Appears in two enum locations:
 - `BracketedItem::OtherSpokenEvent(OtherSpokenEvent)` — inside groups
 
 **Parser (talkbank-tools):**
-`crates/talkbank-direct-parser/src/main_tier/words.rs`
+`crates/talkbank-parser/src/parser/tree_parsing/main_tier/content/`
 
-The parser accepts `&*` + speaker chars + `:` + non-whitespace chars. It is
-registered before `&=` events to ensure correct precedence.
+The tree-sitter grammar accepts `&*` + speaker chars + `:` + non-whitespace chars.
 
 **Serialization:** `&*SPK:text` — roundtrips cleanly via `WriteChat`.
 

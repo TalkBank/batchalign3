@@ -39,12 +39,13 @@ fn cache_key_retokenize_differs() {
 
 #[test]
 fn test_clear_morphosyntax() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
     use talkbank_model::model::Line;
 
+    let parser = TreeSitterParser::new().unwrap();
     // Minimal CHAT with %mor and %gra tiers
     let chat = include_str!("../../../../test-fixtures/eng_hello_world_with_mor_gra.cha");
-    let (mut chat_file, _errors) = parse_lenient(chat);
+    let (mut chat_file, _errors) = parse_lenient(&parser, chat);
 
     // Verify the utterance has %mor and %gra before clearing
     let utt = chat_file
@@ -96,12 +97,13 @@ fn test_clear_morphosyntax() {
 
 #[test]
 fn test_clear_morphosyntax_preserves_other_tiers() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
     use talkbank_model::model::Line;
 
+    let parser = TreeSitterParser::new().unwrap();
     // CHAT with %mor, %gra, and %act -- only %mor/%gra should be removed
     let chat = include_str!("../../../../test-fixtures/eng_hello_world_with_mor_gra_act.cha");
-    let (mut chat_file, _) = parse_lenient(chat);
+    let (mut chat_file, _) = parse_lenient(&parser, chat);
 
     clear_morphosyntax(&mut chat_file);
 
@@ -131,12 +133,13 @@ fn test_clear_morphosyntax_preserves_other_tiers() {
 
 #[test]
 fn test_clear_morphosyntax_no_tiers() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
     use talkbank_model::model::Line;
 
+    let parser = TreeSitterParser::new().unwrap();
     // CHAT without any dependent tiers -- clear should be a no-op
     let chat = include_str!("../../../../test-fixtures/eng_hello_male.cha");
-    let (mut chat_file, _) = parse_lenient(chat);
+    let (mut chat_file, _) = parse_lenient(&parser, chat);
 
     clear_morphosyntax(&mut chat_file);
 
@@ -153,11 +156,12 @@ fn test_clear_morphosyntax_no_tiers() {
 
 #[test]
 fn test_validate_mor_alignment_ok() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     // Correctly aligned: 2 main words + 2 %mor items
     let chat = include_str!("../../../../test-fixtures/eng_hello_world_with_mor_gra.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let warnings = validate_mor_alignment(&chat_file);
     assert!(
@@ -169,11 +173,12 @@ fn test_validate_mor_alignment_ok() {
 
 #[test]
 fn test_validate_mor_alignment_no_mor_tier() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     // No %mor -- validation should pass (nothing to check)
     let chat = include_str!("../../../../test-fixtures/eng_hello_male.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let warnings = validate_mor_alignment(&chat_file);
     assert!(warnings.is_empty());
@@ -256,10 +261,11 @@ fn snapshot_ud_response_from_python() {
 /// Verify collect_payloads produces the expected shape for a simple CHAT.
 #[test]
 fn snapshot_collected_payloads() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/eng_the_dog_runs.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let primary = talkbank_model::model::LanguageCode::new("eng");
     let langs = declared_languages(&chat_file, &primary);
@@ -287,10 +293,11 @@ fn snapshot_collected_payloads() {
 /// the batch item must carry lang="spa" from the file header.
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_spa() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/spa_hola_que_es_este.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     // Simulate the batch-level default: primary_lang = "eng"
     let primary = talkbank_model::model::LanguageCode::new("eng");
@@ -312,10 +319,11 @@ fn collect_payloads_uses_file_language_not_batch_default_spa() {
 /// Same regression for Russian: @Languages: rus with batch default "eng".
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_rus() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/rus_vot_istoriya.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let primary = talkbank_model::model::LanguageCode::new("eng");
     let langs = declared_languages(&chat_file, &primary);
@@ -334,10 +342,11 @@ fn collect_payloads_uses_file_language_not_batch_default_rus() {
 /// Same regression for Chinese: @Languages: zho with batch default "eng".
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_zho() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/zho_hao_qing_zhong.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let primary = talkbank_model::model::LanguageCode::new("eng");
     let langs = declared_languages(&chat_file, &primary);
@@ -356,10 +365,11 @@ fn collect_payloads_uses_file_language_not_batch_default_zho() {
 /// Same regression for French: @Languages: fra with batch default "eng".
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_fra() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/fra_lescargot_dort.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let primary = talkbank_model::model::LanguageCode::new("eng");
     let langs = declared_languages(&chat_file, &primary);
@@ -379,10 +389,11 @@ fn collect_payloads_uses_file_language_not_batch_default_fra() {
 /// (Control case: ensures fix doesn't regress the happy path.)
 #[test]
 fn collect_payloads_lang_correct_when_primary_matches_header() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/eng_hello_world_male.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let primary = talkbank_model::model::LanguageCode::new("eng");
     let langs = declared_languages(&chat_file, &primary);
@@ -398,11 +409,12 @@ fn collect_payloads_lang_correct_when_primary_matches_header() {
 /// should be used as the utterance default (not the batch primary_lang).
 #[test]
 fn collect_payloads_uses_first_declared_language_for_multilingual() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     // Bilingual file: primary declared language is "spa", secondary is "eng"
     let chat = include_str!("../../../../test-fixtures/spa_eng_bilingual_hola_mundo.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     // Batch default is "eng" but file says "spa" first
     let primary = talkbank_model::model::LanguageCode::new("eng");
@@ -425,10 +437,11 @@ fn collect_payloads_uses_first_declared_language_for_multilingual() {
 /// files would be incorrectly reused for Spanish.
 #[test]
 fn cache_key_uses_file_language_not_batch_default() {
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/spa_hola_mundo.cha");
-    let (chat_file, _) = parse_lenient(chat);
+    let (chat_file, _) = parse_lenient(&parser, chat);
 
     let primary = talkbank_model::model::LanguageCode::new("eng");
     let langs = declared_languages(&chat_file, &primary);
@@ -465,10 +478,11 @@ fn cache_key_uses_file_language_not_batch_default() {
 fn test_inject_results_retokenize_cantonese_retrace() {
     use crate::morphosyntax::inject::inject_results;
     use crate::nlp::{UdResponse, UdSentence, UdWord, UdId};
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
+    let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/retok_yue_retrace.cha");
-    let (mut chat_file, _errors) = parse_lenient(chat);
+    let (mut chat_file, _errors) = parse_lenient(&parser, chat);
 
     let primary_lang = talkbank_model::model::LanguageCode::new("yue");
     let langs = declared_languages(&chat_file, &primary_lang);
@@ -522,6 +536,7 @@ fn test_inject_results_retokenize_cantonese_retrace() {
 
     let empty_mwt = std::collections::BTreeMap::new();
     let result = inject_results(
+        &parser,
         &mut chat_file,
         batch_items,
         vec![ud_response],

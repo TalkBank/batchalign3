@@ -1,7 +1,7 @@
 # Cantonese Language Support
 
 **Status:** Current
-**Last updated:** 2026-03-23 12:50 EDT
+**Last updated:** 2026-03-23 19:50 EDT
 
 Cantonese (`yue`) has the most extensive language-specific processing in
 batchalign3. This page is the single reference for everything Cantonese:
@@ -18,7 +18,8 @@ morphosyntax, known limitations, and future work.
 | Character tokenization | Per-character splitting for timestamp alignment |
 | Word segmentation | PyCantonese `segment()` via `--retokenize` |
 | Utterance segmentation | PolyU BERT model (`PolyU-AngelChanLab/Cantonese-Utterance-Segmentation`) |
-| Morphosyntax | Stanza Chinese (`zh`) model, no Cantonese-specific workarounds |
+| Morphosyntax (POS) | PyCantonese POS override (~95% accuracy on core vocabulary) |
+| Morphosyntax (depparse) | Stanza Chinese (`zh`) model + trained Cantonese model (65% LAS) |
 | Forced alignment | Jyutping romanization (PyCantonese) → Wave2Vec MMS |
 
 ---
@@ -178,11 +179,23 @@ warn: Cantonese input appears to be per-character tokens (42/50 single-CJK words
       Consider --retokenize for word-level analysis.
 ```
 
-### When You Don't Need `--retokenize`
+### Validation Across All 9 TalkBank Cantonese Corpora
 
-Tencent ASR reportedly returns pre-segmented words. If your pipeline uses
-Tencent, word boundaries may already be correct. (This claim has not been
-verified with real Tencent Cantonese output — see "Open Questions" below.)
+Word segmentation was tested against all 9 Cantonese corpora in TalkBank
+(over 737,000 utterances). Results are consistent across corpora:
+
+| Corpus | Multi-char Preservation | Vocabulary Coverage |
+|--------|------------------------|-------------------|
+| MOST | 84% | 99% |
+| LeeWongLeung | 89% | 100% |
+| CHCC | 88% | 100% |
+| EACMC | 90% | 99% |
+| HKU (CHILDES) | 86% | 98% |
+| MAIN | 87% | 98% |
+| GlobalTales | 85% | 98% |
+| Aphasia HKU | 90% | 100% |
+
+Test: `tests/pipelines/morphosyntax/test_cantonese_all_corpora.py`
 
 For full details on CJK word segmentation (including Mandarin), see
 [Chinese/Cantonese Word Segmentation](../chinese-word-segmentation.md).
@@ -336,20 +349,46 @@ speech (per PolyU team observations).
 
 ---
 
+## Trained Cantonese Stanza Model
+
+A Cantonese-specific Stanza model was trained on UD_Cantonese-HK (1,004
+sentences, 13,918 tokens from City University of Hong Kong). Results on
+the held-out UD test set (1,484 tokens):
+
+| Metric | Before (Mandarin model) | After (Cantonese model) | + PyCantonese POS |
+|--------|------------------------|------------------------|-------------------|
+| POS | 63% | 93.5% | **95%** |
+| Dependency (LAS) | 24% | 65.2% | 65% |
+| Dependency (UAS) | 40% | 70.4% | 70% |
+
+The model is trained on bilbo but not yet deployed into batchalign3.
+
+### HKCanCor as Additional Training Data
+
+PyCantonese's built-in HKCanCor corpus has 153,656 tokens with POS annotations
+(95 Chinese-style tags, 99.6% map cleanly to UD via `hkcancor_to_ud()`). This
+could augment POS training by ~10x. However, HKCanCor has **zero dependency
+annotations**, so it cannot help with depparse training.
+
+See `docs/investigations/2026-03-23-hkcancor-pos-mapping.md` for the full
+mapping analysis.
+
 ## Open Questions
 
-1. **How does PyCantonese perform on child Cantonese vocabulary?**
-   The dictionary is based on adult corpora. Child speech may use word forms
-   not in the dictionary.
+1. **Deploy trained Cantonese model into batchalign3** — The model exists on
+   bilbo but is not yet integrated into the pipeline. Requires packaging the
+   model file and updating `_stanza_loading.py`.
 
-3. **Train Cantonese-specific Stanza model** — The
-   [UD_Cantonese-HK](https://github.com/UniversalDependencies/UD_Cantonese-HK)
-   treebank exists (1,004 sentences, 13,918 tokens). Training a
-   Cantonese-specific Stanza model would fix both POS and dependency parsing.
-   Could be a collaboration with PolyU team to supplement with child speech data.
+2. **Augment training with HKCanCor** — 153K tokens of spoken Cantonese with
+   POS. Would significantly improve POS coverage on spoken vocabulary. Need to
+   convert to CoNLL-U format with UD tags.
 
-4. **Is the per-character warning threshold (80%) correct?**
+3. **Is the per-character warning threshold (80%) correct?**
    Chosen without empirical basis. Should be validated against real corpus data.
+
+4. **Daemon warning visibility** — The `tracing::warn!` for per-character input
+   fires in the daemon process, not the CLI. Users may not see it. Need to
+   surface through SSE events or job results.
 
 ---
 

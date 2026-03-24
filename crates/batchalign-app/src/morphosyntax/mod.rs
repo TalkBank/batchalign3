@@ -165,8 +165,10 @@ pub(crate) async fn process_morphosyntax_incremental(
     use batchalign_chat_ops::diff::{DiffSummary, UtteranceDelta, copy_dependent_tiers, diff_chat};
 
     let primary_lang = LanguageCode::new(params.lang.as_ref());
-    let (before_file, _) = parse_lenient(before_text);
-    let (mut after_file, parse_errors) = parse_lenient(after_text);
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (before_file, _) = parse_lenient(&parser, before_text);
+    let (mut after_file, parse_errors) = parse_lenient(&parser, after_text);
 
     if !parse_errors.is_empty() {
         warn!(
@@ -347,6 +349,7 @@ pub(crate) async fn process_morphosyntax_incremental(
         match infer_batch(services.pool, &misses, params.lang, params.mwt, retokenize).await {
             Ok(responses) => {
                 match inject_results(
+                    &parser,
                     &mut after_file,
                     misses,
                     responses,
@@ -400,11 +403,13 @@ pub(crate) async fn process_morphosyntax_incremental(
 mod tests {
     use super::*;
     use batchalign_chat_ops::morphosyntax::MultilingualPolicy;
+    use batchalign_chat_ops::parse::TreeSitterParser;
 
     #[test]
     fn test_declared_languages_via_chat_ops() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../../test-fixtures/eng_hello_male.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         let primary = LanguageCode::new("eng");
         let langs = declared_languages(&chat_file, &primary);
         assert!(!langs.is_empty());
@@ -412,9 +417,10 @@ mod tests {
 
     #[test]
     fn test_collect_payloads_skip_non_primary_skips_non_primary() {
+        let parser = TreeSitterParser::new().unwrap();
         // File with @Languages: eng, spa and a [- spa] code-switched utterance
         let chat = include_str!("../../../../test-fixtures/eng_spa_bilingual_code_switch.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         let primary = LanguageCode::new("eng");
         let langs = declared_languages(&chat_file, &primary);
 
@@ -441,8 +447,9 @@ mod tests {
 
     #[test]
     fn test_collect_payloads_process_all_includes_all() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../../test-fixtures/eng_spa_bilingual_code_switch.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         let primary = LanguageCode::new("eng");
         let langs = declared_languages(&chat_file, &primary);
 
@@ -454,8 +461,9 @@ mod tests {
 
     #[test]
     fn test_dummy_file_skipped_by_is_dummy() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../../test-fixtures/eng_hello_world_dummy.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(is_dummy(&chat_file), "@Options: dummy should be detected");
 
         // Collect payloads should return items for non-dummy file
@@ -472,8 +480,9 @@ mod tests {
 
     #[test]
     fn test_non_dummy_file_not_detected() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../../test-fixtures/eng_hello_world.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(!is_dummy(&chat_file));
     }
 }

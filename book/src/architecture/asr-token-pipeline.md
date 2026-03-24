@@ -103,8 +103,10 @@ flowchart TD
     BW --> AG
 ```
 
-Single-word retraces produce `AnnotatedWord` with `[/]`.
-Multi-word retraces produce `AnnotatedGroup` with `<...> [/]`.
+Both single-word (`word [/]`) and multi-word (`<word word> [/]`) retraces
+produce `UtteranceContent::Retrace`. The `Retrace` type carries the retrace
+kind (`Partial`, `Full`, `Multiple`, `Reformulation`, `Uncertain`) and a
+flag for whether the original was a group.
 
 ## AsrElementKind Enum
 

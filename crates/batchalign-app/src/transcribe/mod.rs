@@ -783,7 +783,8 @@ mod tests {
         );
 
         // Must reparse cleanly
-        let (_parsed, errors) = batchalign_chat_ops::parse::parse_lenient(&chat);
+        let parser = batchalign_chat_ops::parse::TreeSitterParser::new().unwrap();
+        let (_parsed, errors) = batchalign_chat_ops::parse::parse_lenient(&parser, &chat);
         assert!(
             errors.is_empty(),
             "generated CHAT must reparse cleanly: {errors:?}"
@@ -828,7 +829,8 @@ mod tests {
         );
 
         // Must reparse cleanly
-        let (_parsed, errors) = batchalign_chat_ops::parse::parse_lenient(&chat);
+        let parser = batchalign_chat_ops::parse::TreeSitterParser::new().unwrap();
+        let (_parsed, errors) = batchalign_chat_ops::parse::parse_lenient(&parser, &chat);
         assert!(
             errors.is_empty(),
             "generated CHAT must reparse cleanly: {errors:?}"

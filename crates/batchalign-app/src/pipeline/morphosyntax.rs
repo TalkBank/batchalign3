@@ -189,7 +189,9 @@ fn always_enabled(_: &MorphosyntaxPipelineContext<'_>) -> bool {
 
 fn stage_parse<'a, 'ctx>(ctx: &'a mut MorphosyntaxPipelineContext<'ctx>) -> StageFuture<'a> {
     Box::pin(async move {
-        let (chat_file, parse_errors) = parse_lenient(ctx.chat_text);
+        let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+            .expect("tree-sitter CHAT grammar must load");
+        let (chat_file, parse_errors) = parse_lenient(&parser, ctx.chat_text);
         if !parse_errors.is_empty() {
             warn!(
                 num_errors = parse_errors.len(),
@@ -335,7 +337,10 @@ fn stage_apply_results<'a, 'ctx>(
             ServerError::Validation("Parsed chat missing before result injection".into())
         })?;
         let lang_code = LanguageCode::new(ctx.lang.as_ref());
+        let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+            .expect("tree-sitter CHAT grammar must load");
         let _retokenize_traces = inject_results(
+            &parser,
             chat_file,
             std::mem::take(&mut ctx.misses),
             std::mem::take(&mut ctx.ud_responses),

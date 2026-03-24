@@ -32,11 +32,12 @@ use batchalign_app::worker::InferTask;
 
 use batchalign_chat_ops::TierDomain;
 use batchalign_chat_ops::extract::extract_words;
-use batchalign_chat_ops::parse::parse_lenient;
+use batchalign_chat_ops::parse::{TreeSitterParser, parse_lenient};
 
 /// Parse CHAT text into a typed AST, asserting no parse errors.
 fn parse_chat(chat: &str, label: &str) -> batchalign_chat_ops::ChatFile {
-    let (file, errors) = parse_lenient(chat);
+    let parser = TreeSitterParser::new().unwrap();
+    let (file, errors) = parse_lenient(&parser, chat);
     assert!(
         errors.is_empty(),
         "{label}: CHAT parse produced errors: {errors:?}"
@@ -67,7 +68,8 @@ fn assert_all_utterances_timed(chat: &str, label: &str) {
 
 /// Count utterances that have a `%wor` dependent tier.
 fn count_wor_tiers(chat: &str) -> usize {
-    let (file, _) = parse_lenient(chat);
+    let parser = TreeSitterParser::new().unwrap();
+    let (file, _) = parse_lenient(&parser, chat);
     file.utterances()
         .filter(|utt| utt.wor_tier().is_some())
         .count()

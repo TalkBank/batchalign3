@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use batchalign_chat_ops::TierDomain;
 use batchalign_chat_ops::extract::extract_words;
-use batchalign_chat_ops::parse::parse_lenient;
+use batchalign_chat_ops::parse::{TreeSitterParser, parse_lenient};
 use walkdir::WalkDir;
 
 use crate::args::{ModelsPrepArgs, ModelsTrainArgs};
@@ -112,10 +112,12 @@ fn extract_utterances_from_files(
     files: &[PathBuf],
     min_word_count: usize,
 ) -> Result<Vec<String>, CliError> {
+    let parser = TreeSitterParser::new()
+        .map_err(|e| CliError::InvalidArgument(format!("parser init: {e}")))?;
     let mut utterances = Vec::new();
     for path in files {
         let text = std::fs::read_to_string(path)?;
-        let (chat_file, _warnings) = parse_lenient(&text);
+        let (chat_file, _warnings) = parse_lenient(&parser, &text);
         let extracted = extract_words(&chat_file, TierDomain::Wor);
         for utt in &extracted {
             let words: Vec<&str> = utt.words.iter().map(|w| w.text.as_str()).collect();

@@ -21,7 +21,7 @@ use batchalign_app::options::{
     TranslateOptions, UtsegOptions,
 };
 use batchalign_app::worker::InferTask;
-use batchalign_chat_ops::parse::parse_lenient;
+use batchalign_chat_ops::parse::{TreeSitterParser, parse_lenient};
 use batchalign_chat_ops::{ChatFile, DependentTier};
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,8 @@ use batchalign_chat_ops::{ChatFile, DependentTier};
 
 /// Parse CHAT output via the AST and assert it has no parse errors.
 fn parse_output(chat: &str, label: &str) -> ChatFile {
-    let (file, errors) = parse_lenient(chat);
+    let parser = TreeSitterParser::new().unwrap();
+    let (file, errors) = parse_lenient(&parser, chat);
     assert!(errors.is_empty(), "{label}: CHAT parse errors: {errors:?}");
     file
 }

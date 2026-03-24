@@ -103,7 +103,7 @@ The AST approach eliminates entire categories of bugs:
 
 | Bug Class | Python (Text) | Rust (AST) |
 |-----------|---------------|------------|
-| Retrace confusion | Regex to detect `<...> [/]` | `UtteranceContent::AnnotatedGroup` with retrace annotation — structurally distinct |
+| Retrace confusion | Regex to detect `<...> [/]` | `UtteranceContent::Retrace` — dedicated variant, structurally distinct |
 | Special form handling | String search for `@c`, `@s` | `Word.form_type` field — parsed once, always available |
 | Word boundary errors | Character-level offset tracking | Words are tree nodes; boundaries are implicit |
 | Tier count mismatch | Count words in string, count mor items in string, hope they match | Traverse same tree for extraction and injection — count is always consistent |
@@ -142,7 +142,7 @@ and annotation conventions that are never checked at compile time.
 
 ### The AST is shared infrastructure
 
-The `talkbank-model` and `talkbank-direct-parser` crates aren't just for morphotag.
+The `talkbank-model` and `talkbank-parser` crates aren't just for morphotag.
 They power the TalkBank LSP (Language Server Protocol) server, the CHAT validation
 tooling, and will be the foundation for migrating forced alignment and utterance
 segmentation to Rust. Every pipeline that currently uses `annotation_clean()` will

@@ -20,10 +20,10 @@ use std::path::Path;
 use serde::Deserialize;
 use talkbank_model::Span;
 use talkbank_model::model::{
-    Annotated, BracketedContent, BracketedItem, Bullet, ChatFile, DependentTier, Group, Header,
+    BracketedContent, BracketedItem, Bullet, ChatFile, DependentTier, Header,
     IDHeader, LanguageCode, LanguageCodes, Line, MediaHeader, MediaType, ParticipantEntries,
-    ParticipantEntry, ParticipantName, ParticipantRole, ScopedAnnotation, Separator, SpeakerCode,
-    Terminator, Utterance, UtteranceContent, Word,
+    ParticipantEntry, ParticipantName, ParticipantRole, Retrace, RetraceKind, Separator,
+    SpeakerCode, Terminator, Utterance, UtteranceContent, Word,
 };
 
 use crate::asr_postprocess;
@@ -137,6 +137,8 @@ pub fn build_chat_from_json(json: &str) -> Result<ChatFile, String> {
 
 /// Build a CHAT file from a typed transcript description.
 pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
+    let parser = talkbank_parser::TreeSitterParser::new()
+        .map_err(|e| format!("Failed to create parser: {e}"))?;
     let langs: Vec<String> = if desc.langs.is_empty() {
         vec!["eng".to_string()]
     } else {
@@ -209,6 +211,7 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
             // Text-level utterance: parse via tree-sitter
             if let Some(ref text) = utt_desc.text
                 && let Some(utt_line) = build_text_utterance(
+                    &parser,
                     &utt_desc.speaker,
                     text,
                     utt_desc.start_ms,
@@ -222,7 +225,7 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
         }
 
         // Word-level utterance
-        if let Some(mut utt_line) = build_word_utterance(&utt_desc.speaker, words, desc.write_wor)?
+        if let Some(mut utt_line) = build_word_utterance(&parser, &utt_desc.speaker, words, desc.write_wor)?
         {
             // Set [- lang] precode when utterance language differs from primary
             if let Some(ref utt_lang) = utt_desc.lang
@@ -367,6 +370,7 @@ pub fn tag_marker_separator(text: &str) -> Option<Separator> {
 /// preserves the JSON API contract for external callers who construct
 /// `TranscriptDescription` directly. The PyO3 bridge tests exercise this path.
 fn build_text_utterance(
+    parser: &talkbank_parser::TreeSitterParser,
     speaker: &str,
     text: &str,
     start_ms: Option<u64>,
@@ -393,7 +397,7 @@ fn build_text_utterance(
         bullet = bullet_str,
     );
 
-    let parsed = crate::parse::parse_strict(&mini_chat)
+    let parsed = crate::parse::parse_strict(parser, &mini_chat)
         .map_err(|e| format!("Failed to parse text utterance for speaker {speaker}: {e}"))?;
 
     for parsed_line in parsed.lines.into_iter() {
@@ -405,13 +409,10 @@ fn build_text_utterance(
     Ok(None)
 }
 
-/// Parse a single word through TreeSitterParser, falling back to unchecked for ASR tokens.
-fn parse_asr_word(text: &str) -> Word {
-    use talkbank_parser::TreeSitterParser;
-
-    let _parser = TreeSitterParser::new().expect("TreeSitterParser should construct");
+/// Parse a single word, falling back to unchecked for ASR tokens.
+fn parse_asr_word(parser: &talkbank_parser::TreeSitterParser, text: &str) -> Word {
     let errors = talkbank_model::NullErrorSink;
-    match talkbank_parser::parse_word(text, 0, &errors).into_option() {
+    match parser.parse_word_fragment(text, 0, &errors).into_option() {
         Some(parsed) => parsed,
         None => {
             tracing::warn!(
@@ -426,6 +427,7 @@ fn parse_asr_word(text: &str) -> Word {
 /// Parse a word and attach inline bullet timing, updating utterance-level
 /// timing bookkeeping. Returns the parsed `Word` and whether timing was present.
 fn parse_and_time_word(
+    parser: &talkbank_parser::TreeSitterParser,
     text: &str,
     start_ms: Option<u64>,
     end_ms: Option<u64>,
@@ -433,7 +435,7 @@ fn parse_and_time_word(
     utt_end_ms: &mut Option<u64>,
     has_timing: &mut bool,
 ) -> Word {
-    let mut word = parse_asr_word(text);
+    let mut word = parse_asr_word(parser, text);
     if let (Some(s), Some(e)) = (start_ms, end_ms) {
         word.inline_bullet = Some(Bullet::new(s, e));
         *has_timing = true;
@@ -456,6 +458,7 @@ fn parse_and_time_word(
 /// - Single-word retrace → `UtteranceContent::AnnotatedWord` with `[/]`
 /// - Multi-word retrace → `UtteranceContent::AnnotatedGroup` with `<...> [/]`
 fn build_word_utterance(
+    parser: &talkbank_parser::TreeSitterParser,
     speaker: &str,
     words: &[WordDesc],
     write_wor: bool,
@@ -517,6 +520,7 @@ fn build_word_utterance(
                     continue;
                 }
                 let word = parse_and_time_word(
+                    parser,
                     t,
                     rw.start_ms,
                     rw.end_ms,
@@ -533,25 +537,26 @@ fn build_word_utterance(
 
             if parsed.len() == 1 {
                 // Single-word retrace: word [/]
-                let annotated = Annotated::new(parsed.pop().unwrap())
-                    .with_scoped_annotation(ScopedAnnotation::PartialRetracing);
-                content.push(UtteranceContent::AnnotatedWord(Box::new(annotated)));
+                let word = parsed.pop().unwrap();
+                let bracketed = BracketedContent::new(vec![BracketedItem::Word(Box::new(word))]);
+                let retrace = Retrace::new(bracketed, RetraceKind::Partial);
+                content.push(UtteranceContent::Retrace(Box::new(retrace)));
             } else {
                 // Multi-word retrace: <word word> [/]
                 let items: Vec<BracketedItem> = parsed
                     .into_iter()
                     .map(|w| BracketedItem::Word(Box::new(w)))
                     .collect();
-                let group = Group::new(BracketedContent::new(items));
-                let annotated = Annotated::new(group)
-                    .with_scoped_annotation(ScopedAnnotation::PartialRetracing);
-                content.push(UtteranceContent::AnnotatedGroup(annotated));
+                let bracketed = BracketedContent::new(items);
+                let retrace = Retrace::new(bracketed, RetraceKind::Partial).as_group();
+                content.push(UtteranceContent::Retrace(Box::new(retrace)));
             }
             continue;
         }
 
         // Regular word
         let word = parse_and_time_word(
+            parser,
             text,
             w.start_ms,
             w.end_ms,
@@ -588,7 +593,7 @@ fn build_word_utterance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
     use crate::serialize::to_chat_string;
 
     /// Helper: create a WordDesc with default kind.
@@ -636,6 +641,7 @@ mod tests {
 
     #[test]
     fn test_build_chat_with_timing() {
+        let parser = TreeSitterParser::new().unwrap();
         let desc = TranscriptDescription {
             langs: vec!["eng".to_string()],
             participants: vec![ParticipantDesc {
@@ -665,7 +671,7 @@ mod tests {
         let output = to_chat_string(&chat_file);
         assert!(output.contains("@Media:\ttest, audio"), "got: {output}");
         assert!(output.contains("%wor:"));
-        let (_parsed, errors) = parse_lenient(&output);
+        let (_parsed, errors) = parse_lenient(&parser, &output);
         assert!(
             errors.is_empty(),
             "serialized CHAT should reparse cleanly: {errors:?}"
@@ -952,6 +958,7 @@ mod tests {
 
     #[test]
     fn retrace_output_reparses_cleanly() {
+        let parser = TreeSitterParser::new().unwrap();
         // Single-word retrace
         let output = build_single_utterance(vec![
             wd_retrace("I", None, None),
@@ -959,7 +966,7 @@ mod tests {
             wd("went", None, None),
             wd(".", None, None),
         ]);
-        let (_parsed, errors) = parse_lenient(&output);
+        let (_parsed, errors) = parse_lenient(&parser, &output);
         assert!(
             errors.is_empty(),
             "single-word retrace should reparse: {errors:?}\noutput: {output}"
@@ -974,7 +981,7 @@ mod tests {
             wd("cookie", None, None),
             wd(".", None, None),
         ]);
-        let (_parsed, errors) = parse_lenient(&output);
+        let (_parsed, errors) = parse_lenient(&parser, &output);
         assert!(
             errors.is_empty(),
             "multi-word retrace should reparse: {errors:?}\noutput: {output}"
@@ -983,6 +990,7 @@ mod tests {
 
     #[test]
     fn disfluency_and_retrace_end_to_end() {
+        let parser = TreeSitterParser::new().unwrap();
         // Full pipeline: raw ASR → process_raw_asr (includes disfluency + retrace)
         // → transcript_from_asr_utterances → build_chat.
         let output = asr_postprocess::AsrOutput {
@@ -1038,7 +1046,7 @@ mod tests {
             "expected retrace marker: {serialized}"
         );
 
-        let (_parsed, errors) = parse_lenient(&serialized);
+        let (_parsed, errors) = parse_lenient(&parser, &serialized);
         assert!(
             errors.is_empty(),
             "disfluency+retrace should reparse cleanly: {errors:?}\noutput: {serialized}"

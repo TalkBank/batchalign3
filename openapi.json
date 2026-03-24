@@ -1,10 +1,6 @@
 {
   "components": {
     "schemas": {
-      "CommandName": {
-        "description": "Batchalign command name (e.g. `\"morphotag\"`, `\"align\"`).",
-        "type": "string"
-      },
       "ContentType": {
         "description": "Engine category that supports backend overrides.\n\nCurrently only ASR and FA have multiple engine backends.\nOther inference tasks (morphosyntax, utseg, translate, coref)\nalways use their single built-in engine.\nMIME-like content discriminator for file results.",
         "enum": [
@@ -482,7 +478,7 @@
             ]
           },
           "command": {
-            "$ref": "#/components/schemas/CommandName",
+            "$ref": "#/components/schemas/ReleasedCommand",
             "description": "Batchalign command that was submitted (e.g. \"morphotag\", \"align\")."
           },
           "completed_at": {
@@ -619,7 +615,7 @@
             ]
           },
           "command": {
-            "$ref": "#/components/schemas/CommandName",
+            "$ref": "#/components/schemas/ReleasedCommand",
             "description": "Batchalign command (e.g. \"morphotag\", \"align\")."
           },
           "completed_at": {
@@ -769,7 +765,7 @@
             "type": "array"
           },
           "command": {
-            "$ref": "#/components/schemas/CommandName",
+            "$ref": "#/components/schemas/ReleasedCommand",
             "description": "Batchalign command (align, morphotag, etc.)."
           },
           "debug_traces": {
@@ -912,6 +908,23 @@
         "format": "int32",
         "minimum": 0,
         "type": "integer"
+      },
+      "ReleasedCommand": {
+        "description": "Closed released command vocabulary used at all Rust seams.\n\nThis is the single canonical command type. Unknown command strings are\nrejected at deserialization boundaries (HTTP 422, DB recovery skip).",
+        "enum": [
+          "align",
+          "transcribe",
+          "transcribe_s",
+          "translate",
+          "morphotag",
+          "coref",
+          "utseg",
+          "benchmark",
+          "opensmile",
+          "compare",
+          "avqi"
+        ],
+        "type": "string"
       },
       "StatusMessageResponse": {
         "description": "Response body for mutating operations that return a status confirmation\n(e.g. cancel, delete, restart).\n\nReturned with HTTP 200 on success. Clients can branch on `status` for\nprogrammatic handling and display `message` to users.",

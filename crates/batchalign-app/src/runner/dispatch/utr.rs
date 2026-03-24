@@ -130,7 +130,9 @@ pub(in crate::runner) async fn run_utr_pass(
 ) -> Result<(String, batchalign_chat_ops::fa::utr::UtrResult), String> {
     use batchalign_chat_ops::CacheTaskName;
 
-    let (mut chat_file, _) = batchalign_chat_ops::parse::parse_lenient(chat_text);
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (mut chat_file, _) = batchalign_chat_ops::parse::parse_lenient(&parser, chat_text);
     let (timed, untimed) = batchalign_chat_ops::fa::count_utterance_timing(&chat_file);
     let total_utts = timed + untimed;
 

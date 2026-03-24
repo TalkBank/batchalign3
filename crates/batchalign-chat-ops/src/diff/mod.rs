@@ -40,7 +40,7 @@ pub use types::{DiffSummary, UtteranceDelta};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
     /// Build a minimal valid CHAT file from utterance lines.
     fn make_chat(utterances: &[(&str, &str)]) -> String {
@@ -152,9 +152,10 @@ mod tests {
 
     #[test]
     fn identical_files_all_unchanged() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = make_chat(&[("CHI", "hello world ."), ("MOT", "good morning .")]);
-        let (before, _) = parse_lenient(&chat);
-        let (after, _) = parse_lenient(&chat);
+        let (before, _) = parse_lenient(&parser, &chat);
+        let (after, _) = parse_lenient(&parser, &chat);
 
         let deltas = diff_chat(&before, &after);
         assert_eq!(deltas.len(), 2);
@@ -171,9 +172,10 @@ mod tests {
 
     #[test]
     fn empty_files_produce_empty_deltas() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = make_chat(&[]);
-        let (before, _) = parse_lenient(&chat);
-        let (after, _) = parse_lenient(&chat);
+        let (before, _) = parse_lenient(&parser, &chat);
+        let (after, _) = parse_lenient(&parser, &chat);
 
         let deltas = diff_chat(&before, &after);
         assert!(deltas.is_empty());
@@ -185,10 +187,11 @@ mod tests {
 
     #[test]
     fn single_word_change_detected() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "hello world ."), ("MOT", "good morning .")]);
         let after_text = make_chat(&[("CHI", "hello earth ."), ("MOT", "good morning .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -200,10 +203,11 @@ mod tests {
 
     #[test]
     fn all_words_changed() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "hello world ."), ("MOT", "good morning .")]);
         let after_text = make_chat(&[("CHI", "bye earth ."), ("MOT", "bad evening .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -221,10 +225,11 @@ mod tests {
 
     #[test]
     fn utterance_inserted() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "hello ."), ("MOT", "goodbye .")]);
         let after_text = make_chat(&[("CHI", "hello ."), ("CHI", "world ."), ("MOT", "goodbye .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -235,11 +240,12 @@ mod tests {
 
     #[test]
     fn utterance_deleted() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text =
             make_chat(&[("CHI", "hello ."), ("CHI", "world ."), ("MOT", "goodbye .")]);
         let after_text = make_chat(&[("CHI", "hello ."), ("MOT", "goodbye .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -250,10 +256,11 @@ mod tests {
 
     #[test]
     fn all_utterances_inserted() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[]);
         let after_text = make_chat(&[("CHI", "hello ."), ("MOT", "world .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -264,10 +271,11 @@ mod tests {
 
     #[test]
     fn all_utterances_deleted() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "hello ."), ("MOT", "world .")]);
         let after_text = make_chat(&[]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -282,10 +290,11 @@ mod tests {
 
     #[test]
     fn speaker_change_detected() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "hello world ."), ("MOT", "good morning .")]);
         let after_text = make_chat(&[("MOT", "hello world ."), ("MOT", "good morning .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -300,6 +309,7 @@ mod tests {
 
     #[test]
     fn timing_change_detected() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat_with_bullets(&[
             ("CHI", "hello world .", Some((0, 1000))),
             ("MOT", "good morning .", Some((1000, 2000))),
@@ -308,8 +318,8 @@ mod tests {
             ("CHI", "hello world .", Some((0, 1500))),
             ("MOT", "good morning .", Some((1000, 2000))),
         ]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -320,10 +330,11 @@ mod tests {
 
     #[test]
     fn bullet_added_is_timing_change() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "hello world .")]);
         let after_text = make_chat_with_bullets(&[("CHI", "hello world .", Some((0, 1000)))]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -333,10 +344,11 @@ mod tests {
 
     #[test]
     fn bullet_removed_is_timing_change() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat_with_bullets(&[("CHI", "hello world .", Some((0, 1000)))]);
         let after_text = make_chat(&[("CHI", "hello world .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -350,10 +362,11 @@ mod tests {
 
     #[test]
     fn words_and_timing_both_changed() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat_with_bullets(&[("CHI", "hello world .", Some((0, 1000)))]);
         let after_text = make_chat_with_bullets(&[("CHI", "hello earth .", Some((0, 1500)))]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         assert_eq!(deltas.len(), 1);
@@ -371,6 +384,7 @@ mod tests {
 
     #[test]
     fn mixed_insert_delete_change() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[
             ("CHI", "first utterance ."),
             ("CHI", "second utterance ."),
@@ -382,8 +396,8 @@ mod tests {
             ("CHI", "brand new ."),       // inserted
             ("MOT", "third utterance ."), // unchanged
         ]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -400,6 +414,7 @@ mod tests {
 
     #[test]
     fn property_self_diff_all_unchanged() {
+        let parser = TreeSitterParser::new().unwrap();
         let scenarios = vec![
             make_chat(&[("CHI", "hello .")]),
             make_chat(&[("CHI", "a ."), ("MOT", "b ."), ("CHI", "c .")]),
@@ -411,7 +426,7 @@ mod tests {
         ];
 
         for chat_text in &scenarios {
-            let (file, _) = parse_lenient(chat_text);
+            let (file, _) = parse_lenient(&parser, chat_text);
             let deltas = diff_chat(&file, &file);
             for delta in &deltas {
                 assert!(
@@ -514,10 +529,11 @@ mod tests {
 
     #[test]
     fn reordered_utterances_detected_as_changes() {
+        let parser = TreeSitterParser::new().unwrap();
         let before_text = make_chat(&[("CHI", "alpha ."), ("MOT", "beta .")]);
         let after_text = make_chat(&[("MOT", "beta ."), ("CHI", "alpha .")]);
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);
@@ -545,8 +561,9 @@ mod tests {
         utterances[25] = ("CHI", "changed utterance .");
         let after_text = make_chat(&utterances);
 
-        let (before, _) = parse_lenient(&before_text);
-        let (after, _) = parse_lenient(&after_text);
+        let parser = TreeSitterParser::new().unwrap();
+        let (before, _) = parse_lenient(&parser, &before_text);
+        let (after, _) = parse_lenient(&parser, &after_text);
 
         let deltas = diff_chat(&before, &after);
         let summary = DiffSummary::from_deltas(&deltas);

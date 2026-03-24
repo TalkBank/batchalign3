@@ -145,11 +145,12 @@ pub fn reassign_speakers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse_strict;
+    use crate::parse::{parse_strict, TreeSitterParser};
     use crate::serialize::to_chat_string;
 
     #[test]
     fn reassign_speakers_rewrites_utterances_and_headers() {
+        let parser = TreeSitterParser::new().unwrap();
         let input = "\
 @UTF8
 @Begin
@@ -160,7 +161,7 @@ mod tests {
 *PAR:\tworld . \u{0015}1000_2000\u{0015}
 @End
 ";
-        let mut chat_file = parse_strict(input).expect("chat should parse");
+        let mut chat_file = parse_strict(&parser, input).expect("chat should parse");
         let segments = vec![
             SpeakerSegment {
                 start_ms: 0,
@@ -198,6 +199,7 @@ mod tests {
 
     #[test]
     fn reassign_speakers_is_noop_for_empty_segments() {
+        let parser = TreeSitterParser::new().unwrap();
         let input = "\
 @UTF8
 @Begin
@@ -207,7 +209,7 @@ mod tests {
 *PAR:\thello . \u{0015}100_500\u{0015}
 @End
 ";
-        let mut chat_file = parse_strict(input).expect("chat should parse");
+        let mut chat_file = parse_strict(&parser, input).expect("chat should parse");
         let before = to_chat_string(&chat_file);
 
         reassign_speakers(&mut chat_file, &[], "eng", &["PAR".to_string()]);

@@ -72,7 +72,7 @@ migration. Both the PyO3 bridge (`pyo3/`) and the Rust server
 |------|-------|---------|
 | `extract.rs` | ~200 | Word extraction from AST |
 | `dp_align.rs` | ~790 | Hirschberg alignment |
-| `mor_parser.rs` | 66 | %mor/%gra string parsing (delegates to `talkbank_direct_parser::mor_tier`) |
+| `mor_parser.rs` | 66 | %mor/%gra string parsing (delegates to `talkbank_parser` tree-sitter tier parsing) |
 | `inject.rs` | 164 | Morphosyntax injection into AST |
 | `retokenize/` | ~1,410 | AST retokenization (5 files: mod, rebuild, mapping, parse_helpers, tests) |
 | `nlp/mapping.rs` | ~2,850 | UD-to-CHAT mapping (MOR + GRA generation), `clean_lemma()` |
@@ -404,7 +404,7 @@ Rust-only Hirschberg implementation (Python `utils/dp.py` no longer exists):
 
 ### `mor_parser.rs` — %mor/%gra Parsing
 
-Delegates to `talkbank_direct_parser::mor_tier` for parsing %mor strings into typed
+Delegates to `talkbank_parser` for parsing %mor strings into typed
 `Mor` and `GrammaticalRelation` structures.  `embed_gra_on_mors()` attaches GRA relations
 to Mor items by 1-indexed chunk position.
 

@@ -172,7 +172,9 @@ where
         )
         .await?;
 
-        let (main_file, main_errors) = parse_lenient(&morphotagged);
+        let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+            .expect("tree-sitter CHAT grammar must load");
+        let (main_file, main_errors) = parse_lenient(&parser, &morphotagged);
         if !main_errors.is_empty() {
             warn!(
                 num_errors = main_errors.len(),
@@ -180,7 +182,7 @@ where
             );
         }
 
-        let (gold_file, gold_errors) = parse_lenient(request.gold_text.as_ref());
+        let (gold_file, gold_errors) = parse_lenient(&parser, request.gold_text.as_ref());
         if !gold_errors.is_empty() {
             warn!(
                 num_errors = gold_errors.len(),

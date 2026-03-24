@@ -42,6 +42,8 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
 ) -> TextBatchFileResults {
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
     let primary_lang = LanguageCode::new(params.lang.as_ref());
     let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
@@ -51,7 +53,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     let mut validation_errors: Vec<Option<String>> = Vec::with_capacity(files.len());
     for file in files {
         let filename = file.filename.as_ref();
-        let (mut chat_file, parse_errors) = parse_lenient(file.chat_text.as_ref());
+        let (mut chat_file, parse_errors) = parse_lenient(&parser, file.chat_text.as_ref());
         if !parse_errors.is_empty() {
             warn!(
                 filename = %filename,
@@ -255,6 +257,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             let miss_line_indices: Vec<usize> = file_items.iter().map(|(idx, ..)| *idx).collect();
 
             match inject_results(
+                &parser,
                 chat_file,
                 file_items,
                 file_responses,

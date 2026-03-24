@@ -35,10 +35,9 @@ flowchart TD
     subgraph talkbank["talkbank-tools (cross-repo path deps)"]
         model["talkbank-model\n(typed AST, validation)"]
         parser["talkbank-parser\n(tree-sitter parser)"]
-        dp["talkbank-direct-parser\n(chumsky parser)"]
     end
 
-    chatops -->|"path dep"| model & parser & dp
+    chatops -->|"path dep"| model & parser
     pyo3 -.->|"path dep\n(editable only)"| model
 ```
 

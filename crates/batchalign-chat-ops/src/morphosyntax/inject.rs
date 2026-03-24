@@ -33,6 +33,7 @@ pub struct RetokenizationInfo {
 /// Returns `Err` if a `line_idx` no longer points to an utterance, or if
 /// retokenization or morphosyntax injection fails for any utterance.
 pub fn inject_results(
+    parser: &talkbank_parser::TreeSitterParser,
     chat_file: &mut talkbank_model::model::ChatFile,
     batch_items: Vec<BatchItemWithPosition>,
     responses: Vec<crate::nlp::UdResponse>,
@@ -192,6 +193,7 @@ pub fn inject_results(
                 }
 
                 crate::retokenize::retokenize_utterance(
+                    &parser,
                     utt,
                     &words,
                     &tokens,

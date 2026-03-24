@@ -388,7 +388,7 @@ pub fn clear_comparison(chat_file: &mut crate::ChatFile) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
 
     /// Build a minimal CHAT file with given utterance lines.
     fn make_chat(utterances: &[(&str, &str)]) -> String {
@@ -409,9 +409,10 @@ mod tests {
 
     #[test]
     fn identical_transcripts() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = make_chat(&[("CHI", "hello world ."), ("MOT", "good morning .")]);
-        let (main_file, _) = parse_lenient(&chat);
-        let (gold_file, _) = parse_lenient(&chat);
+        let (main_file, _) = parse_lenient(&parser, &chat);
+        let (gold_file, _) = parse_lenient(&parser, &chat);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.wer, 0.0);
@@ -425,10 +426,11 @@ mod tests {
 
     #[test]
     fn single_substitution() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello earth .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         // "earth" in main, "world" in gold => 1 insertion + 1 deletion
@@ -440,10 +442,11 @@ mod tests {
 
     #[test]
     fn extra_word_in_main() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello big world .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.matches, 2); // "hello", "world"
@@ -455,10 +458,11 @@ mod tests {
 
     #[test]
     fn missing_word_in_main() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.matches, 1); // "hello"
@@ -470,11 +474,12 @@ mod tests {
 
     #[test]
     fn empty_main() {
+        let parser = TreeSitterParser::new().unwrap();
         // Main has an utterance but no content words (just terminator)
         let main = make_chat(&[("CHI", ".")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.matches, 0);
@@ -484,10 +489,11 @@ mod tests {
 
     #[test]
     fn empty_gold() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello world .")]);
         let gold = make_chat(&[("CHI", ".")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.matches, 0);
@@ -498,10 +504,11 @@ mod tests {
 
     #[test]
     fn case_insensitive_matching() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "Hello World .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.wer, 0.0);
@@ -510,11 +517,12 @@ mod tests {
 
     #[test]
     fn conform_normalizes_contractions() {
+        let parser = TreeSitterParser::new().unwrap();
         // "he's" should be expanded to "he is" by conform_words
         let main = make_chat(&[("CHI", "he's going .")]);
         let gold = make_chat(&[("CHI", "he is going .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         // After conform: main = ["he", "is", "going"], gold = ["he", "is", "going"]
@@ -523,10 +531,11 @@ mod tests {
 
     #[test]
     fn multiple_utterances() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello ."), ("MOT", "goodbye .")]);
         let gold = make_chat(&[("CHI", "hello ."), ("MOT", "goodbye .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         assert_eq!(result.metrics.wer, 0.0);
@@ -598,10 +607,11 @@ mod tests {
         let _ = metrics;
 
         // Test via actual compare
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello big world .")]);
         let gold = make_chat(&[("CHI", "hello world today .")]);
-        let (main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         // main: hello, big, world
@@ -636,10 +646,11 @@ mod tests {
 
     #[test]
     fn inject_comparison_adds_xsrep_tiers() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello big world .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (mut main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (mut main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         inject_comparison(&mut main_file, &result);
@@ -658,10 +669,11 @@ mod tests {
 
     #[test]
     fn clear_comparison_removes_xsrep() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello world .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (mut main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (mut main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         inject_comparison(&mut main_file, &result);
@@ -678,10 +690,11 @@ mod tests {
 
     #[test]
     fn inject_comparison_idempotent() {
+        let parser = TreeSitterParser::new().unwrap();
         let main = make_chat(&[("CHI", "hello big world .")]);
         let gold = make_chat(&[("CHI", "hello world .")]);
-        let (mut main_file, _) = parse_lenient(&main);
-        let (gold_file, _) = parse_lenient(&gold);
+        let (mut main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
 
         let result = compare(&main_file, &gold_file);
         inject_comparison(&mut main_file, &result);

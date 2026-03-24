@@ -98,7 +98,7 @@ utterance content tree, applying domain-specific rules:
 - **ReplacedWords**: Mor/Wor align to replacement words; Pho/Sin align to
   the original (what was spoken)
 - **Separators**: only tag markers (`,` `„` `‡`) count, and only for Mor
-- **Groups**: AnnotatedGroups with retrace annotations skip for Mor only
+- **Retrace**: dedicated `Retrace` variant — skipped entirely for Mor, recursed for other domains
 - **PhoGroup/SinGroup**: atomic units in their own domain, recurse in others
 
 Both `UtteranceContent` (24 variants) and `BracketedItem` (22 variants) are
@@ -120,7 +120,7 @@ walk_words(&utterance.content, Some(TierDomain::Mor), |leaf| {
 ```
 
 Domain-aware gating is built into the walker:
-- `Some(Mor)` → skip AnnotatedGroups with retrace annotations
+- `Some(Mor)` → skip `Retrace` variants (not morphologically analyzed)
 - `Some(Pho)` → skip PhoGroup (atomic), `Some(Sin)` → skip SinGroup (atomic)
 - `None` → recurse all groups unconditionally
 

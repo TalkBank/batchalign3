@@ -35,6 +35,7 @@ use rebuild::{RetokenizeContext, rebuild_content};
 /// 2. Walks the AST, replacing/splicing Word nodes to match the new tokenization
 /// 3. Injects %mor/%gra tiers from the parsed morphosyntax
 pub fn retokenize_utterance(
+    parser: &talkbank_parser::TreeSitterParser,
     utterance: &mut Utterance,
     original_words: &[ExtractedWord],
     stanza_tokens: &[String],
@@ -52,6 +53,7 @@ pub fn retokenize_utterance(
 
     // Step 2: Walk AST and rebuild content with new tokenization
     let mut ctx = RetokenizeContext {
+        parser,
         mapping: &mapping,
         stanza_tokens,
         original_words,

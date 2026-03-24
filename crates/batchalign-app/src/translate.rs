@@ -188,6 +188,8 @@ async fn run_translate_batch_impl(
     engine_version: &EngineVersion,
     cache_policy: CachePolicy,
 ) -> TextBatchFileResults {
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
     let tgt_lang = DEFAULT_TGT_LANG;
     let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
@@ -196,7 +198,7 @@ async fn run_translate_batch_impl(
     let mut parse_error_counts: Vec<usize> = Vec::with_capacity(files.len());
     for file in files {
         let filename = file.filename.as_ref();
-        let (chat_file, parse_errors) = parse_lenient(file.chat_text.as_ref());
+        let (chat_file, parse_errors) = parse_lenient(&parser, file.chat_text.as_ref());
         if !parse_errors.is_empty() {
             warn!(
                 filename = %filename,

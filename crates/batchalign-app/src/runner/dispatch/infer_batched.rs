@@ -18,7 +18,9 @@ use super::compare_pipeline::dispatch_compare;
 
 /// Parse CHAT text, apply merge_abbreviations transform, re-serialize.
 pub(in crate::runner) fn apply_merge_abbrev(chat_text: &str) -> String {
-    let (mut file, _) = batchalign_chat_ops::parse::parse_lenient(chat_text);
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (mut file, _) = batchalign_chat_ops::parse::parse_lenient(&parser, chat_text);
     batchalign_chat_ops::merge_abbrev::merge_abbreviations(&mut file);
     batchalign_chat_ops::serialize::to_chat_string(&file)
 }

@@ -50,8 +50,10 @@ pub(crate) async fn process_fa_incremental(
 ) -> Result<FaResult, ServerError> {
     use batchalign_chat_ops::diff::{DiffSummary, diff_chat};
 
-    let (before_file, _) = parse_lenient(before_text);
-    let (after_file, _) = parse_lenient(after_text);
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (before_file, _) = parse_lenient(&parser, before_text);
+    let (after_file, _) = parse_lenient(&parser, after_text);
 
     let deltas = diff_chat(&before_file, &after_file);
     let summary = DiffSummary::from_deltas(&deltas);
@@ -80,7 +82,7 @@ pub(crate) async fn process_fa_incremental(
     }
 
     // Group the "after" file's utterances
-    let (mut chat_file, parse_errors) = parse_lenient(after_text);
+    let (mut chat_file, parse_errors) = parse_lenient(&parser, after_text);
 
     if is_dummy(&chat_file) || is_no_align(&chat_file) {
         return Ok(FaResult {
@@ -449,7 +451,8 @@ mod tests {
     use batchalign_chat_ops::diff::diff_chat;
 
     fn parse_chat(text: &str) -> ChatFile {
-        batchalign_chat_ops::parse::parse_lenient(text).0
+        let parser = batchalign_chat_ops::parse::TreeSitterParser::new().unwrap();
+        batchalign_chat_ops::parse::parse_lenient(&parser, text).0
     }
 
     fn chat_with_wor(words0: &str, words1: &str) -> String {

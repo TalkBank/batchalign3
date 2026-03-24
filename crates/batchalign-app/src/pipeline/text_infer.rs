@@ -75,7 +75,9 @@ pub(crate) async fn run_cached_text_pipeline<Item, State, Response>(
     cache_policy: CachePolicy,
     hooks: CachedTextPipelineHooks<Item, State, Response>,
 ) -> Result<String, ServerError> {
-    let (mut chat_file, parse_errors) = parse_lenient(chat_text);
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (mut chat_file, parse_errors) = parse_lenient(&parser, chat_text);
     if !parse_errors.is_empty() {
         warn!(
             command = hooks.command,

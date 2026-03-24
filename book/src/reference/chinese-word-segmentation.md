@@ -1,7 +1,7 @@
 # Chinese/Cantonese Word Segmentation
 
 **Status:** Current
-**Last updated:** 2026-03-23 10:54 EDT
+**Last updated:** 2026-03-23 19:50 EDT
 
 ## Problem
 
@@ -16,8 +16,8 @@ becomes a separate word on the main tier:
 This makes word-level analysis (word count, POS tagging, MLU) unreliable —
 every character gets tagged as an independent word.
 
-Tencent ASR is the exception: it returns pre-segmented words with proper
-boundaries. If you use Tencent ASR, word segmentation is already handled.
+All four Cantonese ASR engines (Whisper, Tencent, Aliyun, FunASR) produce
+per-character tokens. `--retokenize` is needed regardless of which engine is used.
 
 ## Solution: `--retokenize` on `morphotag`
 
@@ -93,6 +93,7 @@ per-character tokenization but should not be treated as ground truth.
 PyCantonese uses a dictionary-based segmenter. Words not in its dictionary
 will not be grouped. Common Cantonese words like `佢哋` (they), `鍾意` (like),
 and `故事` (story) are handled correctly.
+
 
 ## Pipeline Flow
 

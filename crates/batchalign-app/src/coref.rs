@@ -117,8 +117,10 @@ async fn run_coref_impl(
     lang: &LanguageCode3,
     pool: &WorkerPool,
 ) -> Result<String, ServerError> {
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
     // 1. Parse
-    let (mut chat_file, parse_errors) = parse_lenient(chat_text);
+    let (mut chat_file, parse_errors) = parse_lenient(&parser, chat_text);
     if !parse_errors.is_empty() {
         warn!(
             num_errors = parse_errors.len(),
@@ -223,6 +225,8 @@ async fn run_coref_batch_impl(
     lang: &LanguageCode3,
     pool: &WorkerPool,
 ) -> TextBatchFileResults {
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
     let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
     // 1. Parse all files
@@ -230,7 +234,7 @@ async fn run_coref_batch_impl(
     let mut parse_error_counts: Vec<usize> = Vec::with_capacity(files.len());
     for file in files {
         let filename = file.filename.as_ref();
-        let (chat_file, parse_errors) = parse_lenient(file.chat_text.as_ref());
+        let (chat_file, parse_errors) = parse_lenient(&parser, file.chat_text.as_ref());
         if !parse_errors.is_empty() {
             warn!(
                 filename = %filename,
@@ -441,45 +445,51 @@ fn coref_response_from_v2_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use batchalign_chat_ops::parse::TreeSitterParser;
 
     #[test]
     fn test_file_has_english_with_eng_languages() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(file_has_english(&chat_file, &LanguageCode3::eng()));
     }
 
     #[test]
     fn test_file_has_english_with_spa_languages() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/spa_chi_hola_mundo.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(!file_has_english(&chat_file, &LanguageCode3::spa()));
     }
 
     #[test]
     fn test_file_has_english_spa_file_with_eng_job_lang() {
+        let parser = TreeSitterParser::new().unwrap();
         // File declares @Languages: spa, but job-level lang is "eng".
         // The per-file check should see "spa" and return false.
         let chat = include_str!("../../../test-fixtures/spa_chi_hola_mundo.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         // Even with fallback_lang="eng", the file declares spa — not English
         assert!(!file_has_english(&chat_file, &LanguageCode3::eng()));
     }
 
     #[test]
     fn test_file_has_english_eng_file_with_spa_job_lang() {
+        let parser = TreeSitterParser::new().unwrap();
         // File declares @Languages: eng, but job-level lang is "spa".
         // The per-file check should see "eng" and return true.
         let chat = include_str!("../../../test-fixtures/eng_hello_world.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(file_has_english(&chat_file, &LanguageCode3::spa()));
     }
 
     #[test]
     fn test_file_has_english_no_languages_header_uses_fallback() {
+        let parser = TreeSitterParser::new().unwrap();
         // File without @Languages header — falls back to job-level lang
         let chat = include_str!("../../../test-fixtures/eng_hello_world_no_languages.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         // Fallback is "eng" — should be English
         assert!(file_has_english(&chat_file, &LanguageCode3::eng()));
         // Fallback is "spa" — should NOT be English
@@ -488,9 +498,10 @@ mod tests {
 
     #[test]
     fn test_file_has_english_multilingual_with_eng() {
+        let parser = TreeSitterParser::new().unwrap();
         // File declares both eng and spa — should be considered English
         let chat = include_str!("../../../test-fixtures/eng_spa_bilingual_hello_world.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(file_has_english(&chat_file, &LanguageCode3::eng()));
     }
 }

@@ -131,12 +131,13 @@ fn single_letter_word(item: &UtteranceContent) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse_lenient;
+    use crate::parse::{parse_lenient, TreeSitterParser};
     use crate::serialize::to_chat_string;
 
     /// Helper: parse CHAT, apply merge, serialize, return output.
     fn merge_and_serialize(chat: &str) -> String {
-        let (mut file, _) = parse_lenient(chat);
+        let parser = TreeSitterParser::new().unwrap();
+        let (mut file, _) = parse_lenient(&parser, chat);
         merge_abbreviations(&mut file);
         to_chat_string(&file)
     }

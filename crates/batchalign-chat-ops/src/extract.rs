@@ -109,7 +109,7 @@ pub fn collect_utterance_content(
 
 fn collect_alignable_word(
     word: &Word,
-    annotations: &[talkbank_model::model::ScopedAnnotation],
+    annotations: &[talkbank_model::model::ContentAnnotation],
     domain: TierDomain,
     out: &mut Vec<ExtractedWord>,
 ) {

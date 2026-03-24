@@ -1,22 +1,25 @@
 //! CHAT parsing wrappers.
 //!
 //! Thin wrappers around `talkbank-parser` for lenient and strict parsing.
+//! Callers provide a `&TreeSitterParser` handle — create one per entry point
+//! and share it across all parsing calls. Do not create throwaway handles.
 
+pub use talkbank_parser::TreeSitterParser;
 use talkbank_model::model::ChatFile;
 
 /// Parse CHAT text leniently (tree-sitter with error recovery).
 ///
 /// Always returns a `ChatFile` (best-effort), plus any parse warnings/errors.
-pub fn parse_lenient(chat_text: &str) -> (ChatFile, Vec<talkbank_model::ParseError>) {
+pub fn parse_lenient(parser: &TreeSitterParser, chat_text: &str) -> (ChatFile, Vec<talkbank_model::ParseError>) {
     let errors = talkbank_model::ErrorCollector::new();
-    let chat_file = talkbank_parser::parse_chat_file_streaming(chat_text, &errors);
+    let chat_file = parser.parse_chat_file_streaming(chat_text, &errors);
     let error_vec = errors.into_vec();
     (chat_file, error_vec)
 }
 
 /// Parse CHAT text strictly (tree-sitter, no error recovery).
-pub fn parse_strict(chat_text: &str) -> Result<ChatFile, talkbank_model::ParseErrors> {
-    talkbank_parser::parse_chat_file(chat_text)
+pub fn parse_strict(parser: &TreeSitterParser, chat_text: &str) -> Result<ChatFile, talkbank_model::ParseErrors> {
+    parser.parse_chat_file(chat_text)
 }
 
 /// Check whether a parsed CHAT file has `@Options: dummy`.
@@ -50,43 +53,49 @@ mod tests {
 
     #[test]
     fn test_is_dummy_with_dummy_option() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world_dummy.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(is_dummy(&chat_file));
     }
 
     #[test]
     fn test_is_dummy_without_options() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(!is_dummy(&chat_file));
     }
 
     #[test]
     fn test_is_dummy_with_other_options() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world_bullets_option.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(!is_dummy(&chat_file));
     }
 
     #[test]
     fn test_is_no_align_with_noalign_option() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world_noalign_option.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(is_no_align(&chat_file));
     }
 
     #[test]
     fn test_is_no_align_without_options() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(!is_no_align(&chat_file));
     }
 
     #[test]
     fn test_is_no_align_with_dummy_option() {
+        let parser = TreeSitterParser::new().unwrap();
         let chat = include_str!("../../../test-fixtures/eng_hello_world_dummy.cha");
-        let (chat_file, _) = parse_lenient(chat);
+        let (chat_file, _) = parse_lenient(&parser, chat);
         assert!(!is_no_align(&chat_file));
     }
 }
