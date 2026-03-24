@@ -1,0 +1,29 @@
+{
+  "lspServers": {
+    "rust": {
+      "command": "rust-analyzer",
+      "args": [],
+      "fileExtensions": {
+        ".rs": "rust"
+      }
+    },
+    "python": {
+      "command": "pyright-langserver",
+      "args": [
+        "--stdio"
+      ],
+      "fileExtensions": {
+        ".py": "python"
+      }
+    },
+    "shell": {
+      "command": "bash-language-server",
+      "args": [
+        "start"
+      ],
+      "fileExtensions": {
+        ".sh": "shellscript"
+      }
+    }
+  }
+}
