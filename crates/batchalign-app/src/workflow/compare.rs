@@ -24,6 +24,24 @@ use batchalign_chat_ops::serialize::to_chat_string;
 
 use super::{Materializer, ReferenceProjectionWorkflow};
 
+/// Try to run morphosyntax on the main transcript. Returns the enriched CHAT
+/// text on success, or an error if the worker is unavailable.
+async fn try_morphosyntax(request: &CompareWorkflowRequest<'_>) -> Result<String, ServerError> {
+    let mor_params = MorphosyntaxParams {
+        lang: request.lang,
+        tokenization_mode: TokenizationMode::Preserve,
+        cache_policy: request.cache_policy,
+        multilingual_policy: MultilingualPolicy::ProcessAll,
+        mwt: request.mwt,
+    };
+    crate::morphosyntax::process_morphosyntax(
+        request.main_text.as_ref(),
+        request.services,
+        &mor_params,
+    )
+    .await
+}
+
 /// Current released compare outputs.
 pub(crate) struct CompareMaterializedOutputs {
     /// CHAT text for the main transcript annotated with `%xsrep`.
@@ -183,19 +201,15 @@ where
         &self,
         request: Self::Request<'_>,
     ) -> Result<Self::ArtifactBundle, ServerError> {
-        let mor_params = MorphosyntaxParams {
-            lang: request.lang,
-            tokenization_mode: TokenizationMode::Preserve,
-            cache_policy: request.cache_policy,
-            multilingual_policy: MultilingualPolicy::ProcessAll,
-            mwt: request.mwt,
+        // Morphosyntax is optional for compare — it enriches POS tags but the
+        // core alignment works without it. Try morphosyntax; fall back to raw.
+        let main_text = match try_morphosyntax(&request).await {
+            Ok(tagged) => tagged,
+            Err(e) => {
+                warn!(error = %e, "Morphosyntax unavailable, comparing raw transcripts");
+                request.main_text.as_ref().to_string()
+            }
         };
-        let morphotagged = crate::morphosyntax::process_morphosyntax(
-            request.main_text.as_ref(),
-            request.services,
-            &mor_params,
-        )
-        .await?;
 
         let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
             .expect("tree-sitter CHAT grammar must load");
@@ -203,7 +217,7 @@ where
         if !main_errors.is_empty() {
             warn!(
                 num_errors = main_errors.len(),
-                "Parse errors in morphotagged main (continuing)"
+                "Parse errors in main (continuing)"
             );
         }
 
@@ -249,26 +263,19 @@ impl ReferenceProjectionWorkflow for GoldProjectedCompareWorkflow {
         &self,
         request: Self::Request<'_>,
     ) -> Result<Self::ArtifactBundle, ServerError> {
-        // Morphosyntax pass on the main transcript (same as main-annotated path)
-        let mor_params = MorphosyntaxParams {
-            lang: request.lang,
-            tokenization_mode: TokenizationMode::Preserve,
-            cache_policy: request.cache_policy,
-            multilingual_policy: MultilingualPolicy::ProcessAll,
-            mwt: request.mwt,
+        let main_text = match try_morphosyntax(&request).await {
+            Ok(tagged) => tagged,
+            Err(e) => {
+                warn!(error = %e, "Morphosyntax unavailable, comparing raw transcripts");
+                request.main_text.as_ref().to_string()
+            }
         };
-        let morphotagged = crate::morphosyntax::process_morphosyntax(
-            request.main_text.as_ref(),
-            request.services,
-            &mor_params,
-        )
-        .await?;
 
-        let (main_file, main_errors) = parse_lenient(&morphotagged);
+        let (main_file, main_errors) = parse_lenient(&main_text);
         if !main_errors.is_empty() {
             warn!(
                 num_errors = main_errors.len(),
-                "Parse errors in morphotagged main (continuing)"
+                "Parse errors in main (continuing)"
             );
         }
 

@@ -243,9 +243,9 @@ mod tests {
                 "translate".to_string(),
                 "coref".to_string(),
                 "align".to_string(),
-                "compare".to_string(),
                 "opensmile".to_string(),
                 "avqi".to_string(),
+                "compare".to_string(),
             ]
         );
     }

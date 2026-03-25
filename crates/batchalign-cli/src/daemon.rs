@@ -445,6 +445,18 @@ async fn start_daemon(
         cmd.args(["--timeout", &t.to_string()]);
     }
 
+    // Forward memory-guard env vars so the daemon inherits CLI overrides.
+    // std::process::Command inherits the parent env by default, but daemon
+    // processes may be re-exec'd or detached on some platforms — be explicit.
+    for key in [
+        "BATCHALIGN_SPAWN_MIN_MEMORY_MB",
+        "BATCHALIGN_MAX_CONCURRENT_SPAWNS",
+    ] {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
+        }
+    }
+
     let log_path = profile.log_file(dir);
     let log_file = std::fs::File::create(&log_path)?;
     cmd.stdout(std::process::Stdio::null());

@@ -538,6 +538,36 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             )
             .await;
         }
+    } else if command == "compare" && all_chat {
+        // Compare runs pure-Rust alignment — morphosyntax is optional.
+        // Route through the batched infer path (dispatch_compare handles the
+        // optional morphosyntax internally).
+        let engine_version = EngineVersion::from(
+            engine_versions
+                .get("morphosyntax")
+                .map(|s| s.as_str())
+                .unwrap_or("none"),
+        );
+        info!(
+            job_id = %job_id,
+            correlation_id = %correlation_id,
+            command = %command,
+            "Using compare path (morphosyntax optional)"
+        );
+        let plan = BatchedInferDispatchPlan::from_job(&job);
+        let debug_dir = job.dispatch.options.common().debug_dir
+            .as_deref()
+            .map(std::path::PathBuf::from);
+        let dumper = crate::runner::debug_dumper::DebugDumper::new(
+            debug_dir.as_deref(),
+        );
+        dispatch_batched_infer(
+            &job,
+            store,
+            PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
+            plan,
+        )
+        .await;
     } else {
         let err_msg = format!(
             "No released dispatch path remains for command '{}' (all_chat={}, infer_task={:?}, infer_supported={}). Legacy process-path fallback is retired.",

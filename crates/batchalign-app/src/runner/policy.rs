@@ -18,7 +18,13 @@ pub(crate) fn infer_task_for_command(command: ReleasedCommand) -> Option<InferTa
 
 /// Return `true` when the released command must use a Rust-owned infer-backed
 /// dispatch path instead of a pure content relay.
+///
+/// Compare is excluded: its core algorithm is pure Rust and morphosyntax
+/// enrichment is optional (the workflow falls back to raw transcripts).
 pub(crate) fn command_requires_infer(command: ReleasedCommand) -> bool {
+    if command == ReleasedCommand::Compare {
+        return false;
+    }
     matches!(
         command_runner_dispatch_kind(command),
         Some(

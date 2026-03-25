@@ -403,15 +403,17 @@ pub async fn serve_with_runtime(
     let host = config.host.clone();
     let port = config.port;
 
-    let (router, state) =
-        create_app_with_runtime(config, pool_config, layout.clone(), None, None, build_hash)
-            .await?;
-
+    // Bind the port FIRST so the daemon health-checker can connect
+    // immediately. Worker probing and warmup happen after the port is live.
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(error::ServerError::Io)?;
     info!(addr = %addr, "Server listening");
+
+    let (router, state) =
+        create_app_with_runtime(config, pool_config, layout.clone(), None, None, build_hash)
+            .await?;
 
     // Write PID file so daemon.rs can discover this foreground server.
     // Best-effort: if the write fails (e.g. read-only filesystem), log

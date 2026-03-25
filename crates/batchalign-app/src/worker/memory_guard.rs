@@ -50,13 +50,18 @@ use crate::host_memory::{HostMemoryCoordinator, HostMemoryLease};
 
 use super::handle::WorkerConfig;
 
-/// Minimum available memory (MB) to allow a worker spawn.
-/// Default: 4 GB. Override via `BATCHALIGN_SPAWN_MIN_MEMORY_MB` env var.
-fn min_spawn_memory_mb() -> u64 {
+/// User override for the spawn memory threshold (MB).
+///
+/// When set, this **replaces** the per-profile startup reservation instead of
+/// being `max()`-ed with it. This lets users on small machines (e.g. 16 GB)
+/// lower the Stanza reservation (12 GB) to something reachable. Setting `0`
+/// disables the memory check entirely.
+///
+/// When unset, the per-profile reservation is used (with a 4 GB floor).
+fn spawn_memory_override_mb() -> Option<u64> {
     std::env::var("BATCHALIGN_SPAWN_MIN_MEMORY_MB")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(4096)
 }
 
 /// Maximum concurrent worker spawns. Serializing spawns prevents the TOCTOU
@@ -145,16 +150,19 @@ pub async fn acquire_spawn_permit(config: &WorkerConfig) -> Result<SpawnPermit, 
         .await
         .map_err(|_| MemoryGuardError::SemaphoreClosed)?;
 
-    let required_mb = config
-        .profile
-        .startup_reservation_mb()
-        .0
-        .max(min_spawn_memory_mb());
+    // When the env var is set, it replaces the profile reservation entirely
+    // (so users on small machines can lower the Stanza 12 GB threshold).
+    // When unset, the profile reservation applies with a 4 GB floor.
+    let (required_mb, guard_disabled) = match spawn_memory_override_mb() {
+        Some(0) => (0, true),
+        Some(explicit) => (explicit, false),
+        None => (config.profile.startup_reservation_mb().0.max(4096), false),
+    };
     let available = available_memory_mb();
     let total = total_memory_mb();
     let threshold = required_mb;
 
-    if available < threshold {
+    if !guard_disabled && available < threshold {
         // Drop the permit before returning the error so other spawns can proceed.
         drop(permit);
         warn!(
@@ -210,7 +218,11 @@ pub async fn acquire_spawn_permit(config: &WorkerConfig) -> Result<SpawnPermit, 
 pub fn skip_if_insufficient_memory(required_mb: u64) {
     let available = available_memory_mb();
     let total = total_memory_mb();
-    let threshold = required_mb.max(min_spawn_memory_mb());
+    let threshold = match spawn_memory_override_mb() {
+        Some(0) => return, // guard disabled, never skip
+        Some(explicit) => required_mb.max(explicit),
+        None => required_mb.max(4096),
+    };
 
     if available < threshold {
         eprintln!(

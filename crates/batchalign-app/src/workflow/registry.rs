@@ -129,7 +129,7 @@ const RELEASED_COMMAND_WORKFLOWS: &[CommandWorkflowDescriptor] = &[
         command: ReleasedCommand::Compare,
         family: WorkflowFamily::ReferenceProjection,
         infer_task: InferTask::Morphosyntax,
-        capability_kind: CommandCapabilityKind::DirectInfer,
+        capability_kind: CommandCapabilityKind::ServerComposed,
         uses_local_audio: false,
         output_path_kind: CommandOutputPathKind::PreserveInputName,
         runner_dispatch_kind: RunnerDispatchKind::BatchedTextInfer,
