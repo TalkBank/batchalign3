@@ -1,7 +1,7 @@
 # Rust CLI and Server
 
 **Status:** Current
-**Last modified:** 2026-03-21 15:30 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 This page covers the Rust control plane that powers `batchalign3`: the CLI
 client, the HTTP server, and how to extend them.
@@ -129,10 +129,11 @@ wire format between CLI and server.
 `crates/batchalign-app/src/runner/policy.rs`.
 
 The server's capability gate (`validate_infer_capability_gate()` in
-`crates/batchalign-app/src/state.rs`) cross-checks the probe worker's
+`crates/batchalign-app/src/state.rs`) cross-checks the worker's
 advertised `infer_tasks` against the workflow registry — commands whose
 workflow descriptor requires an infer task must have a matching worker
-capability.
+capability. Capabilities are detected lazily from the first real worker
+spawn rather than from a dedicated probe worker at startup.
 
 On the Python side, you must also add the `InferTask` to `_INFER_TASK_PROBES` in
 `batchalign/worker/_handlers.py`. See

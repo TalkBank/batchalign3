@@ -91,10 +91,18 @@ impl WorkerProfile {
     /// processes could otherwise overcommit host RAM before the OS snapshot
     /// catches up.
     pub fn startup_reservation_mb(&self) -> MemoryMb {
+        let tier = runtime::MemoryTier::detect();
+        self.startup_reservation_mb_for_tier(&tier)
+    }
+
+    /// Startup reservation for a specific memory tier.
+    ///
+    /// Use this variant in tests and when the tier is already known.
+    pub fn startup_reservation_mb_for_tier(&self, tier: &runtime::MemoryTier) -> MemoryMb {
         match self {
-            Self::Gpu => runtime::gpu_worker_startup_mb(),
-            Self::Stanza => runtime::stanza_worker_startup_mb(),
-            Self::Io => runtime::io_worker_startup_mb(),
+            Self::Gpu => tier.gpu_startup_mb,
+            Self::Stanza => tier.stanza_startup_mb,
+            Self::Io => tier.io_startup_mb,
         }
     }
 
@@ -171,6 +179,7 @@ pub(crate) fn task_name(task: InferTask) -> &'static str {
 mod tests {
     use super::{InferTask, WorkerProfile, WorkerTarget};
     use crate::api::ReleasedCommand;
+    use crate::types::runtime;
 
     #[test]
     fn command_target_maps_transcribe_to_asr() {
@@ -263,16 +272,25 @@ mod tests {
     }
 
     #[test]
-    fn startup_reservations_match_runtime_constants() {
-        let gpu = WorkerProfile::Gpu.startup_reservation_mb();
-        let stanza = WorkerProfile::Stanza.startup_reservation_mb();
-        let io = WorkerProfile::Io.startup_reservation_mb();
+    fn startup_reservations_for_large_tier_match_toml_constants() {
+        let tier = runtime::MemoryTier::from_total_mb(64_000);
+        let gpu = WorkerProfile::Gpu.startup_reservation_mb_for_tier(&tier);
+        let stanza = WorkerProfile::Stanza.startup_reservation_mb_for_tier(&tier);
+        let io = WorkerProfile::Io.startup_reservation_mb_for_tier(&tier);
 
-        assert_eq!(gpu.0, 16_000, "GPU startup reservation should match runtime constants");
-        assert_eq!(
-            stanza.0, 12_000,
-            "Stanza startup reservation should match runtime constants"
-        );
-        assert_eq!(io.0, 4_000, "IO startup reservation should match runtime constants");
+        assert_eq!(gpu.0, 16_000, "GPU Large tier should match TOML constant");
+        assert_eq!(stanza.0, 12_000, "Stanza Large tier should match TOML constant");
+        assert_eq!(io.0, 4_000, "IO Large tier should match TOML constant");
+    }
+
+    #[test]
+    fn startup_reservations_for_small_tier_are_reduced() {
+        let tier = runtime::MemoryTier::from_total_mb(16_000);
+        let gpu = WorkerProfile::Gpu.startup_reservation_mb_for_tier(&tier);
+        let stanza = WorkerProfile::Stanza.startup_reservation_mb_for_tier(&tier);
+
+        assert!(gpu.0 < 16_000, "GPU Small tier must be less than Large");
+        assert!(stanza.0 < 12_000, "Stanza Small tier must be less than Large");
+        assert!(gpu.0 > stanza.0, "GPU must still exceed Stanza");
     }
 }

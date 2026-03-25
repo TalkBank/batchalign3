@@ -116,14 +116,24 @@ available memory for up to 60 seconds before giving up.
 3. Idle workers holding loaded models — reduce `worker_idle_timeout_s` to
    release them sooner, or restart the server
 
-**Disable the gate entirely** (not recommended for production):
+**Quick fixes in `~/.batchalign3/server.yaml`:**
 
 ```yaml
-memory_gate_mb: 0
+# Force the server to use small-machine memory budgets
+memory_tier: small
+
+# Or override individual values
+memory_gate_mb: 2000            # Reduce headroom reserve
+stanza_startup_mb: 3000         # Stanza actually uses ~2-3 GB
+worker_idle_timeout_s: 60       # Free memory faster
+
+# Disable the gate entirely (not recommended for production)
+# memory_gate_mb: 0
 ```
 
-See [Worker Tuning](worker-tuning.md) for detailed memory budgets and tuning
-guidance.
+The server auto-detects a memory tier from total RAM (Small &lt;24 GB,
+Medium 24-48 GB, Large 48-128 GB, Fleet &gt;128 GB). Use `memory_tier`
+to override. See [Worker Tuning](worker-tuning.md) for details.
 
 ## "Cannot find audio file" or "Media conversion failed"
 

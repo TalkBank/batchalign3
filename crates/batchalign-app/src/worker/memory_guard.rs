@@ -258,19 +258,27 @@ mod tests {
     }
 
     #[test]
-    fn profile_startup_reservation_exceeds_old_flat_floor() {
-        let gpu_budget = WorkerProfile::Gpu.startup_reservation_mb();
-        assert!(
-            gpu_budget.0 > 4096,
-            "GPU startup reservation ({} MB) must exceed the old flat 4096 MB floor",
-            gpu_budget.0
-        );
-        let stanza_budget = WorkerProfile::Stanza.startup_reservation_mb();
-        assert!(
-            stanza_budget.0 > 4096,
-            "Stanza startup reservation ({} MB) must exceed the old flat 4096 MB floor",
-            stanza_budget.0
-        );
+    fn large_tier_startup_reservations_exceed_old_flat_floor() {
+        // On Large/Fleet tiers, reservations should exceed the old 4 GB flat
+        // floor that existed before tier-adaptive budgets.
+        use crate::types::runtime::MemoryTier;
+        let tier = MemoryTier::from_total_mb(64_000);
+        let gpu = WorkerProfile::Gpu.startup_reservation_mb_for_tier(&tier);
+        let stanza = WorkerProfile::Stanza.startup_reservation_mb_for_tier(&tier);
+        assert!(gpu.0 > 4096, "GPU Large tier ({} MB) must exceed old floor", gpu.0);
+        assert!(stanza.0 > 4096, "Stanza Large tier ({} MB) must exceed old floor", stanza.0);
+    }
+
+    #[test]
+    fn small_tier_startup_reservations_are_positive() {
+        use crate::types::runtime::MemoryTier;
+        let tier = MemoryTier::from_total_mb(16_000);
+        let gpu = WorkerProfile::Gpu.startup_reservation_mb_for_tier(&tier);
+        let stanza = WorkerProfile::Stanza.startup_reservation_mb_for_tier(&tier);
+        let io = WorkerProfile::Io.startup_reservation_mb_for_tier(&tier);
+        assert!(gpu.0 > 0);
+        assert!(stanza.0 > 0);
+        assert!(io.0 > 0);
     }
 }
 

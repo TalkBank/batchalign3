@@ -157,9 +157,13 @@ pub async fn prepare_workers_background(
     Ok(prepared)
 }
 
-/// Probe worker capabilities and compute the warmup command list, but do not
-/// start warmup yet.  Shared implementation for both synchronous and
-/// background warmup entry points.
+/// Build the worker pool with optimistic capabilities (no Python probe).
+///
+/// Capabilities are detected lazily on the first real worker spawn, not at
+/// server startup. This eliminates the 10-30 second startup delay and 2-3 GB
+/// peak memory spike from the probe worker on small machines.
+///
+/// For test-echo mode, capabilities are synthesized from `cmd2task()`.
 async fn probe_workers(
     config: &ServerConfig,
     pool_config: PoolConfig,
@@ -169,43 +173,55 @@ async fn probe_workers(
     pool.start_background_tasks();
 
     // Discover pre-started TCP workers from the registry file.
-    // This happens before capability probing and warmup so discovered
-    // workers are available immediately — no spawn delay.
     let discovered = pool.discover_from_registry().await;
     if discovered > 0 {
         info!(discovered, "Pre-started TCP workers integrated into pool");
     }
 
-    let worker_caps = pool
-        .detect_capabilities()
-        .await
-        .map_err(error::ServerError::Worker)?;
-    let infer_tasks = worker_caps.infer_tasks;
-    let engine_versions = worker_caps.engine_versions;
-    let capabilities =
-        validate_infer_capability_gate(&infer_tasks, &engine_versions, test_echo_mode)?;
+    // Optimistic capabilities: accept all released commands.
+    // Real capabilities are detected lazily on first worker spawn.
+    let (capabilities, infer_tasks, engine_versions) = if test_echo_mode {
+        let all_tasks: Vec<InferTask> = crate::workflow::released_command_workflows()
+            .iter()
+            .map(|d| d.infer_task)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let caps = validate_infer_capability_gate(&all_tasks, &BTreeMap::new(), true)?;
+        (caps, all_tasks, BTreeMap::new())
+    } else {
+        let caps = optimistic_capabilities();
+        info!(
+            capabilities = ?caps,
+            "Using optimistic capabilities (lazy detection on first worker spawn)"
+        );
+        (caps, Vec::new(), BTreeMap::new())
+    };
 
-    if !infer_tasks.is_empty() {
-        info!(infer_tasks = ?infer_tasks, engine_versions = ?engine_versions, "Worker infer capabilities");
-    }
-
+    // No warmup targets — workers spawn on demand.
     let warmup_cmds = config.resolved_warmup_commands();
-    let default_lang = crate::api::WorkerLanguage::from(config.default_lang.clone());
-    let targets: Vec<WarmupTarget> = warmup_cmds
-        .iter()
-        .filter(|cmd| capabilities.contains(cmd))
-        .filter_map(|cmd| {
-            crate::api::ReleasedCommand::try_from(cmd.as_str())
-                .ok()
-                .map(|command| WarmupTarget {
-                    command,
-                    lang: default_lang.clone(),
-                })
-        })
-        .collect();
+    let targets = if warmup_cmds.is_empty() || !test_echo_mode {
+        // Skip warmup in production — workers spawn lazily.
+        // Test-echo mode can still warmup if configured.
+        Vec::new()
+    } else {
+        let default_lang = crate::api::WorkerLanguage::from(config.default_lang.clone());
+        warmup_cmds
+            .iter()
+            .filter(|cmd| capabilities.contains(cmd))
+            .filter_map(|cmd| {
+                crate::api::ReleasedCommand::try_from(cmd.as_str())
+                    .ok()
+                    .map(|command| WarmupTarget {
+                        command,
+                        lang: default_lang.clone(),
+                    })
+            })
+            .collect()
+    };
 
     if targets.is_empty() {
-        info!("Worker warmup disabled or no warmable capabilities");
+        info!("Worker warmup disabled (lazy start)");
     } else {
         info!(commands = ?targets, "Warmup commands resolved");
     }
@@ -220,6 +236,17 @@ async fn probe_workers(
         },
         targets,
     ))
+}
+
+/// All released commands — used as the optimistic capability set before
+/// the first real worker spawn confirms what's actually installed.
+fn optimistic_capabilities() -> Vec<String> {
+    crate::workflow::released_command_workflows()
+        .iter()
+        .map(|d| d.command.to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Create the application with an already-prepared worker subsystem.

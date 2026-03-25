@@ -1,7 +1,7 @@
 # Worker Interface
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 ## Architecture
 
@@ -124,8 +124,9 @@ Each module is a pure inference function — no CHAT parsing, no text processing
 
 ## Capability Detection
 
-At server startup, the Rust server spawns a **probe worker** — a temporary
-Python worker whose sole job is to report infer capability facts:
+Capabilities are detected **lazily** from the first real worker spawn — there
+is no dedicated probe worker at startup. When the first worker for any profile
+starts up, the Rust server queries it for capability facts:
 
 1. **Infer tasks** — which inference backends are available (e.g., "can I
    `import torch, torchaudio`?" → FA is available). This uses import probes in
@@ -140,13 +141,14 @@ surface from infer-task support. Server-owned commands such as `transcribe`,
 `transcribe_s`, and `benchmark` are synthesized there from ASR availability.
 
 ```
-Startup:
-  Rust server spawns probe worker (command=morphotag, lang=eng)
+First worker spawn (lazy, on first job):
+  Rust server spawns worker for requested command
   → Python: _capabilities()        → infer_tasks=[morphosyntax, utseg, fa, ...]
   → Python: _capabilities()        → engine_versions={morphosyntax: stanza, ...}
   → Rust: validate_infer_capability_gate(infer_tasks, engine_versions)
   → Rust synthesizes [transcribe, transcribe_s, benchmark] from ASR support
-  → Final capabilities advertised via /health endpoint
+  → Worker stays in pool for actual job work
+  → Capabilities advertised via /health endpoint
 ```
 
 ### Infer Task Probes
@@ -173,10 +175,10 @@ as Whisper or the Rust-owned Rev.AI path with a configured legacy key.
 
 > **Design note:** Infer tasks use **import probes** (can the dependency be
 > imported?), not loaded model state (is a model warmed up?). This is critical
-> because the probe worker only loads models for one command (`morphotag`), but
-> Rust still needs enough information to derive the released command surface.
-> The actual model loading happens when a real worker is spawned for a specific
-> command.
+> because the worker that reports capabilities may only load models for one
+> command, but Rust still needs enough information to derive the released
+> command surface. Capability detection piggybacks on the first real worker
+> spawn — that worker stays in the pool for actual job work afterward.
 >
 > All dependencies in the table above are part of the base `batchalign3`
 > package — a standard `uv tool install batchalign3` gives you every built-in

@@ -1,7 +1,7 @@
 # Worker Tuning
 
 **Status:** Current
-**Last modified:** 2026-03-21 13:17 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 This page explains how the server decides how many workers to run, how memory
 budgets work, and how to configure warmup and tuning for your hardware.
@@ -164,12 +164,25 @@ max_concurrent_jobs: 0          # 0 = CPU-based runner slot cap
 gpu_thread_pool_size: 4         # In-process GPU request concurrency
 max_concurrent_worker_startups: 1
 
+# Memory tier override — force a specific tier instead of auto-detecting
+# from total RAM. Values: small, medium, large, fleet. Omit to auto-detect.
+# memory_tier: small
+
 # Host-memory reserve/headroom (MB) preserved after reservations
-# 0 = disable explicit reserve. Default: 8192
-memory_gate_mb: 8192
+# 0 = disable explicit reserve. Default: tier-dependent (2000-8000 MB based on total RAM)
+memory_gate_mb: 4000
+
+# Per-profile startup reservation overrides (MB). 0 = use tier default.
+# These control how much memory the coordinator reserves while a worker
+# loads its models. Reduce on small machines if the tier defaults are
+# too conservative for your actual model sizes.
+# gpu_startup_mb: 6000
+# stanza_startup_mb: 3000
+# io_startup_mb: 2000
 
 # Worker lifecycle
-worker_idle_timeout_s: 600      # Shut down idle workers after 10 minutes
+# Default: tier-dependent (60s Small, 300s Medium, 600s Large/Fleet)
+worker_idle_timeout_s: 300      # Shut down idle workers after 5 minutes
 worker_health_interval_s: 30    # Health check frequency
 
 # Warmup — list of commands to pre-load at startup
@@ -186,13 +199,17 @@ warmup_commands:
 ### 16 GB laptop / shared developer machine
 
 ```yaml
+# The Small tier (<24 GB) auto-detects these defaults, so this config
+# is only needed if you want to further customize on a small machine.
+memory_tier: small              # Force small tier (auto-detected on <24 GB)
 max_workers_per_job: 1
-memory_gate_mb: 8192
+memory_gate_mb: 2000            # Small tier default
+stanza_startup_mb: 3000         # Actual Stanza RSS is ~2-3 GB
+gpu_startup_mb: 6000            # Whisper float32 is ~4-5 GB
 max_concurrent_worker_startups: 1
 gpu_thread_pool_size: 1
-warmup_commands:
-  - morphotag
-worker_idle_timeout_s: 300      # Free memory faster
+warmup_commands: []             # No warmup — workers spawn on demand
+worker_idle_timeout_s: 60       # Small tier default: free memory quickly
 ```
 
 Worker profiles are especially helpful here: the GPU profile loads ASR, FA, and
@@ -219,12 +236,12 @@ pressure changes.
 max_workers_per_job: 0          # Coordinator-backed auto planning
 max_concurrent_jobs: 8
 max_concurrent_worker_startups: 1
-memory_gate_mb: 8192
+memory_gate_mb: 8000            # Tier-dependent default for Fleet (≥128 GB): 8000
 warmup_commands:
   - morphotag
   - align
   - transcribe
-worker_idle_timeout_s: 1800     # Keep workers loaded longer
+worker_idle_timeout_s: 1800     # Keep workers loaded longer (default Fleet: 600s)
 ```
 
 With this much RAM, worker profiles let the server run multiple concurrent jobs

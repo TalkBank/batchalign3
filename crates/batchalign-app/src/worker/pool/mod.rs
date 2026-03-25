@@ -318,6 +318,8 @@ pub struct WorkerPool {
     cancel: CancellationToken,
     /// Background warmup lifecycle state.
     warmup_status: AtomicU8,
+    /// Lazily detected worker capabilities (populated on first worker spawn).
+    lazy_capabilities: std::sync::OnceLock<WorkerCapabilities>,
 }
 
 impl WorkerPool {
@@ -347,6 +349,7 @@ impl WorkerPool {
             gpu_tcp_workers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             cancel: CancellationToken::new(),
             warmup_status: AtomicU8::new(WarmupStatus::NotStarted.as_u8()),
+            lazy_capabilities: std::sync::OnceLock::new(),
         }
     }
 
@@ -732,56 +735,32 @@ impl WorkerPool {
         Ok(shared)
     }
 
-    /// Detect capabilities by spawning a probe worker.
+    /// Query capabilities from an already-spawned worker and cache the result.
     ///
-    /// Spawns a temporary worker with a representative infer profile, queries
-    /// capabilities, and returns the full `WorkerCapabilities` struct (commands,
-    /// free-threaded flag, infer tasks).
-    pub async fn detect_capabilities(&self) -> Result<WorkerCapabilities, WorkerError> {
-        let config = WorkerConfig {
-            python_path: self.config.python_path.clone(),
-            profile: WorkerProfile::Stanza,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-            num_speakers: NumSpeakers(1),
-            engine_overrides: self.config.engine_overrides.clone(),
-            test_echo: self.config.test_echo,
-            ready_timeout_s: self.config.ready_timeout_s,
-            verbose: self.config.verbose,
-            runtime: self.config.runtime.clone(),
-            audio_task_timeout_s: self.config.audio_task_timeout_s,
-            analysis_task_timeout_s: self.config.analysis_task_timeout_s,
-            test_delay_ms: 0,
-        };
-
-        let mut handle = match WorkerHandle::spawn(config).await {
-            Ok(h) => h,
-            Err(e) => {
-                warn!(error = %e, "Failed to spawn probe worker for capabilities detection");
-                return Err(e);
-            }
-        };
-
-        let caps = match handle.capabilities().await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(error = %e, "Failed to query worker capabilities");
-                if let Err(shutdown_err) = handle.shutdown().await {
-                    warn!(error = %shutdown_err, "Failed to shut down probe worker");
-                }
-                return Err(e);
-            }
-        };
-
-        if let Err(e) = handle.shutdown().await {
-            warn!(error = %e, "Failed to shut down probe worker");
+    /// Called once after the first worker spawn. The `OnceLock` ensures this
+    /// only runs once even under concurrent job dispatch.
+    pub(crate) async fn detect_capabilities_from_worker(
+        &self,
+        handle: &mut WorkerHandle,
+    ) -> Result<(), WorkerError> {
+        if self.lazy_capabilities.get().is_some() {
+            return Ok(()); // Already detected
         }
 
+        let caps = handle.capabilities().await?;
         info!(
-            capabilities = ?caps.commands,
             infer_tasks = ?caps.infer_tasks,
-            "Detected worker capabilities"
+            engine_versions = ?caps.engine_versions,
+            "Lazily detected worker capabilities from first spawn"
         );
-        Ok(caps)
+        let _ = self.lazy_capabilities.set(caps);
+        Ok(())
+    }
+
+    /// Return lazily detected capabilities, or `None` if no worker has
+    /// spawned yet.
+    pub fn detected_capabilities(&self) -> Option<&WorkerCapabilities> {
+        self.lazy_capabilities.get()
     }
 
     /// Pre-start workers for the given commands (warmup).

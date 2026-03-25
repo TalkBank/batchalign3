@@ -249,6 +249,26 @@ pub struct ServerConfig {
     /// workers. Empty string (default) uses `~/.batchalign3/workers.json`.
     #[serde(default)]
     pub worker_registry_path: String,
+
+    /// Override the auto-detected memory tier. When absent, the tier is
+    /// detected from total system RAM. Valid values: `"small"`, `"medium"`,
+    /// `"large"`, `"fleet"`. This overrides all tier-derived defaults
+    /// (headroom, startup reservations, idle timeout, max workers) unless
+    /// those fields are also explicitly set.
+    #[serde(default)]
+    pub memory_tier: Option<String>,
+
+    /// Override GPU worker startup reservation (MB). 0 = use tier default.
+    #[serde(default)]
+    pub gpu_startup_mb: u64,
+
+    /// Override Stanza worker startup reservation (MB). 0 = use tier default.
+    #[serde(default)]
+    pub stanza_startup_mb: u64,
+
+    /// Override IO worker startup reservation (MB). 0 = use tier default.
+    #[serde(default)]
+    pub io_startup_mb: u64,
 }
 
 fn default_lang() -> LanguageCode3 {
@@ -279,11 +299,11 @@ fn default_job_ttl_days() -> i32 {
 }
 
 fn default_memory_gate_mb() -> MemoryMb {
-    MemoryMb(8192)
+    crate::types::runtime::MemoryTier::detect().headroom_mb
 }
 
 fn default_worker_idle_timeout_s() -> u64 {
-    600
+    crate::types::runtime::MemoryTier::detect().idle_timeout_s
 }
 
 fn default_worker_health_interval_s() -> u64 {
@@ -352,11 +372,54 @@ impl Default for ServerConfig {
             audio_task_timeout_s: 0,
             analysis_task_timeout_s: 0,
             worker_registry_path: String::new(),
+            memory_tier: None,
+            gpu_startup_mb: 0,
+            stanza_startup_mb: 0,
+            io_startup_mb: 0,
         }
     }
 }
 
 impl ServerConfig {
+    /// Resolve the effective memory tier, applying config overrides.
+    ///
+    /// Priority: explicit `memory_tier` field in config → auto-detect from RAM.
+    /// Individual startup reservation overrides (`gpu_startup_mb`, etc.) are
+    /// applied on top of the resolved tier.
+    pub fn resolved_memory_tier(&self) -> crate::types::runtime::MemoryTier {
+        use crate::api::MemoryMb;
+        use crate::types::runtime::{MemoryTier, MemoryTierKind};
+
+        let mut tier = match self.memory_tier.as_deref() {
+            Some("small") => MemoryTier::from_total_mb(16_000),
+            Some("medium") => MemoryTier::from_total_mb(32_000),
+            Some("large") => MemoryTier::from_total_mb(64_000),
+            Some("fleet") => MemoryTier::from_total_mb(256_000),
+            _ => MemoryTier::detect(),
+        };
+        // Apply individual overrides (0 = use tier default).
+        if self.gpu_startup_mb > 0 {
+            tier.gpu_startup_mb = MemoryMb(self.gpu_startup_mb);
+        }
+        if self.stanza_startup_mb > 0 {
+            tier.stanza_startup_mb = MemoryMb(self.stanza_startup_mb);
+        }
+        if self.io_startup_mb > 0 {
+            tier.io_startup_mb = MemoryMb(self.io_startup_mb);
+        }
+        // If memory_tier was explicitly set, also override kind for logging.
+        if let Some(ref name) = self.memory_tier {
+            tier.kind = match name.as_str() {
+                "small" => MemoryTierKind::Small,
+                "medium" => MemoryTierKind::Medium,
+                "large" => MemoryTierKind::Large,
+                "fleet" => MemoryTierKind::Fleet,
+                _ => tier.kind,
+            };
+        }
+        tier
+    }
+
     /// Resolve warmup commands before server-side capability filtering.
     ///
     /// Returns `warmup_commands` directly — the CLI `--warmup` flag and
@@ -488,7 +551,9 @@ mod tests {
         assert!(cfg.auto_daemon);
         assert_eq!(cfg.worker_idle_timeout_s, 600);
         assert_eq!(cfg.worker_health_interval_s, 30);
-        assert_eq!(cfg.memory_gate_mb, MemoryMb(8192));
+        // memory_gate_mb is now tier-dependent (detect() reads system RAM)
+        let tier = crate::types::runtime::MemoryTier::detect();
+        assert_eq!(cfg.memory_gate_mb, tier.headroom_mb);
         assert_eq!(cfg.max_concurrent_worker_startups, 1);
         assert_eq!(cfg.max_workers_per_key, 0);
         assert_eq!(cfg.worker_ready_timeout_s, 300);
@@ -662,5 +727,56 @@ warmup: false
         let json = serde_json::to_string(&cfg).unwrap();
         let back: ServerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
+    }
+
+    // ---- Memory tier overrides ----
+
+    #[test]
+    fn resolved_tier_defaults_to_detect() {
+        let cfg = ServerConfig::default();
+        let tier = cfg.resolved_memory_tier();
+        let detected = crate::types::runtime::MemoryTier::detect();
+        assert_eq!(tier.kind, detected.kind);
+    }
+
+    #[test]
+    fn resolved_tier_override_small() {
+        let cfg = ServerConfig {
+            memory_tier: Some("small".to_string()),
+            ..Default::default()
+        };
+        let tier = cfg.resolved_memory_tier();
+        assert_eq!(tier.kind, crate::types::runtime::MemoryTierKind::Small);
+        assert_eq!(tier.headroom_mb.0, 2_000);
+        assert_eq!(tier.stanza_startup_mb.0, 3_000);
+    }
+
+    #[test]
+    fn resolved_tier_individual_startup_overrides() {
+        let cfg = ServerConfig {
+            stanza_startup_mb: 5_000,
+            gpu_startup_mb: 8_000,
+            ..Default::default()
+        };
+        let tier = cfg.resolved_memory_tier();
+        assert_eq!(tier.stanza_startup_mb.0, 5_000);
+        assert_eq!(tier.gpu_startup_mb.0, 8_000);
+        // IO should be unchanged (0 = use tier default)
+        assert!(tier.io_startup_mb.0 > 0);
+    }
+
+    #[test]
+    fn resolved_tier_yaml_with_overrides() {
+        let yaml = r#"
+memory_tier: small
+stanza_startup_mb: 4000
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
+        let tier = cfg.resolved_memory_tier();
+        assert_eq!(tier.kind, crate::types::runtime::MemoryTierKind::Small);
+        // Stanza overridden from small default (3000) to 4000
+        assert_eq!(tier.stanza_startup_mb.0, 4_000);
+        // GPU stays at small default
+        assert_eq!(tier.gpu_startup_mb.0, 6_000);
     }
 }

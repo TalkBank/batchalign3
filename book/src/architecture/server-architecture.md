@@ -1,7 +1,7 @@
 # Server Dispatch Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-21 15:30
+**Last updated:** 2026-03-24 21:21 EDT
 
 This page describes the implemented `batchalign3` runtime:
 
@@ -427,10 +427,12 @@ UTR.
 
 ### Capability detection
 
-At startup, the server spawns a **probe worker** to discover which infer tasks
-the Python environment supports. The probe uses `importlib` to check whether
-each task's dependencies are installed and returns a non-empty engine version
-for every advertised task — it does not load full models. Rust then derives the
+Capabilities are detected lazily from the first real worker spawn rather than
+from a dedicated probe worker at startup. When the first worker for any profile
+starts, it reports which infer tasks the Python environment supports via import
+probes (`importlib` checks whether each task's dependencies are installed) and
+returns a non-empty engine version for every advertised task — it does not load
+full models beyond what the spawned command requires. Rust then derives the
 released command surface from that infer-task set and gates job submission on
 the derived commands only.
 

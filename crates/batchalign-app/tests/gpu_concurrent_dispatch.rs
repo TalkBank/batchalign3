@@ -327,11 +327,10 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
             .expect("dispatch failed");
     }
 
-    // Health check should still work via the control channel.
+    // Capabilities should have been lazily detected from the first worker spawn.
     let caps = pool
-        .detect_capabilities()
-        .await
-        .expect("capabilities probe failed after concurrent GPU dispatch");
+        .detected_capabilities()
+        .expect("capabilities should have been detected from worker spawns");
     assert!(
         caps.commands.contains(&"test-echo".to_string()),
         "expected test-echo in capabilities after concurrent dispatch"

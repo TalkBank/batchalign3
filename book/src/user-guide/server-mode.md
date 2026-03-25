@@ -1,6 +1,6 @@
 # Server Mode
 
-**Last modified:** 2026-03-21 08:20 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 Batchalign includes a built-in HTTP server managed by `batchalign3 serve ...`.
 The CLI is always a client: it either talks to an explicit remote server
@@ -83,7 +83,10 @@ Important keys:
 - `warmup_commands` — list of commands to pre-warm (see [Worker Tuning](worker-tuning.md))
 - `media_roots` — directories searched for media
 - `media_mappings` — named client-path to server-path mappings
-- `worker_idle_timeout_s` — shut down idle workers after this many seconds (default: 600)
+- `memory_tier` — override auto-detected tier: `small`, `medium`, `large`, `fleet`
+- `memory_gate_mb` — host headroom reserve (default: tier-dependent, 2000-8000 MB)
+- `gpu_startup_mb` / `stanza_startup_mb` / `io_startup_mb` — per-profile startup reservation overrides (0 = tier default)
+- `worker_idle_timeout_s` — shut down idle workers after this many seconds (default: tier-dependent — 60s Small, 300s Medium, 600s Large/Fleet)
 - `worker_health_interval_s` — health check frequency in seconds (default: 30)
 - `job_ttl_days` — auto-delete completed jobs after this many days (default: 7)
 

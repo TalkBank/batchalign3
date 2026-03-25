@@ -1,7 +1,7 @@
 # Adding Inference Providers
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 Batchalign3 no longer has a public entry-point plugin system. New engines are
 added in-tree as built-in worker capabilities.
@@ -95,14 +95,15 @@ _INFER_TASK_PROBES: dict[InferTask, tuple[tuple[str, ...], str]] = {
 }
 ```
 
-The probe worker spawns with `command="morphotag"` and only loads Stanza models.
-It does **not** load models for other commands. This means capability
-advertisement must be based on import availability, never on loaded model state.
-If you gate on `_state.my_model is not None`, your task will not be advertised
-and the server will silently exclude the command.
+Capabilities are detected lazily from the first real worker spawn — there is no
+dedicated probe worker at startup. The capability check uses import probes, not
+loaded model state. This means capability advertisement must be based on import
+availability, never on `_state.my_model is not None`. If you gate on loaded
+model state, your task will not be advertised and the server will silently
+exclude the command.
 
-The Rust server then cross-checks: commands whose required `InferTask` is not in
-the probe worker's `infer_tasks` list are excluded from the server's advertised
+The Rust server cross-checks: commands whose required `InferTask` is not in the
+worker's `infer_tasks` list are excluded from the server's advertised
 capabilities. See [Capability Detection](../architecture/engine-interface.md#capability-detection)
 for the full flow.
 
@@ -136,7 +137,7 @@ In addition to those Rust-side changes, update these Python-side surfaces:
    tuple of Python modules that must be importable for the command to appear in
    `detect_capabilities()`.
 3. **`batchalign/worker/_handlers.py`** — Add the `InferTask` to
-   `_INFER_TASK_PROBES` so the probe worker advertises it. This must match the
+   `_INFER_TASK_PROBES` so the worker advertises it. This must match the
    same dependencies used in `COMMAND_PROBES`. See
    [step 4 above](#4-wire-dispatch-and-capability-advertisement) for details.
 4. **`batchalign/worker/_model_loading/`** — Register the dynamic

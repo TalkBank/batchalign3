@@ -1,7 +1,7 @@
 # Command Lifecycles
 
 **Status:** Current
-**Last modified:** 2026-03-24 15:37 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 End-to-end sequence diagrams showing how jobs flow through the system,
 from CLI invocation to output files. Every batchalign command now fits one
@@ -445,17 +445,18 @@ sequenceDiagram
 
 ---
 
-## Scenario 4: Server Startup & Capability Detection
+## Scenario 4: Server Startup & Lazy Capability Detection
 
-At startup the server must discover which NLP tasks are available before
-accepting jobs. A **probe worker** is spawned to introspect the Python
-environment.
+At startup the server recovers persisted state and begins accepting jobs.
+Capability detection is **lazy** — there is no probe worker at startup.
+Instead, capabilities are detected from the first real worker spawn for each
+profile.
 
 ```mermaid
 sequenceDiagram
     participant Server
     participant Pool as WorkerPool
-    participant Probe as Probe Worker
+    participant W as First Worker
     participant DB as SQLite
 
     Server->>DB: Mark queued/running jobs interrupted
@@ -463,29 +464,27 @@ sequenceDiagram
     Server->>DB: Load jobs and reconcile runtime state
     Note over Server,DB: Requeue resumable work; promote all-terminal jobs to final state; persist canonical status and cleared leases
 
-    Server->>Pool: spawn probe worker
-    Pool->>Probe: python -m batchalign.worker --task morphosyntax
-    Probe-->>Pool: {"ready": true, "pid": N}
+    Server->>DB: Load persisted jobs, init utterance cache
+    Note over Server: Server ready — accepting requests<br/>(capabilities not yet known)
 
-    Server->>Probe: capabilities()
+    Note over Server: First job arrives (e.g., morphotag)
 
-    Note over Probe: Import-probe each InferTask:<br/>stanza → Morphosyntax, Utseg, Coref ✓<br/>googletrans → Translate ✓<br/>torch+torchaudio → FA ✓<br/>whisper or Rev key → ASR ✓<br/>parselmouth+torchaudio → AVQI ✓<br/>(no opensmile) → OpenSMILE ✗
+    Server->>Pool: checkout worker (morphotag, eng)
+    Pool->>W: python -m batchalign.worker --task morphosyntax --lang eng
+    W-->>Pool: {"ready": true, "pid": N}
 
-    Probe-->>Server: CapabilitiesResponse {infer_tasks, engine_versions, commands=[]}
+    Server->>W: capabilities()
+    Note over W: Import-probe each InferTask:<br/>stanza → Morphosyntax, Utseg, Coref ✓<br/>googletrans → Translate ✓<br/>torch+torchaudio → FA ✓<br/>whisper or Rev key → ASR ✓<br/>parselmouth+torchaudio → AVQI ✓<br/>(no opensmile) → OpenSMILE ✗
 
-    Server->>Probe: shutdown()
-    Note over Probe: Probe worker terminated
+    W-->>Server: CapabilitiesResponse {infer_tasks, engine_versions, commands=[]}
 
     Server->>Server: validate_infer_capability_gate()
     Note over Server: Rust derives commands from infer tasks:<br/>morphotag needs Morphosyntax ✓<br/>utseg needs Utseg ✓<br/>translate needs Translate ✓<br/>coref needs Coref ✓<br/>align needs FA ✓<br/>opensmile needs OpenSMILE ✗ → excluded
 
     Server->>Server: Build final capabilities list
-    Server->>Pool: warmup workers (based on policy)
+    Note over Server: /health now advertises:<br/>commands: [morphotag, utseg, translate, coref, align, transcribe, ...]<br/>infer_tasks: [Morphosyntax, Utseg, Translate, Coref, FA, ASR, ...]
 
-    Note over Server: Server ready — /health advertises:<br/>commands: [morphotag, utseg, translate, coref, align, transcribe, ...]<br/>infer_tasks: [Morphosyntax, Utseg, Translate, Coref, FA, ASR, ...]
-
-    Server->>DB: Load persisted jobs, init utterance cache
-    Note over Server: Accept incoming requests
+    Note over Server: Worker stays in pool for actual job work
 ```
 
 ### Walkthrough
@@ -498,22 +497,23 @@ sequenceDiagram
    resumable files are re-queued, while all-terminal jobs are promoted to
    `Completed` or `Failed`. The reconciled status and cleared lease metadata are
    written back to SQLite so memory and persistence agree.
-3. A **probe worker** is spawned with a dummy command (`morphotag`). It loads
-   minimal models and reports readiness.
-4. The server calls `capabilities()` which **import-probes** each `InferTask`:
-   for each task, the worker tries to import the required Python packages
-   (e.g., `stanza` for Morphosyntax, `torch`+`torchaudio` for FA). If imports
-   succeed, the task is reported as available along with its engine version.
-5. The probe worker is shut down immediately — it exists only for introspection.
+3. The server begins accepting requests immediately. Capabilities are not yet
+   known — they are populated lazily.
+4. When the **first job** arrives, the server spawns a real worker for the
+   requested command. During this first worker's startup, the server calls
+   `capabilities()` which **import-probes** each `InferTask`: for each task,
+   the worker tries to import the required Python packages (e.g., `stanza` for
+   Morphosyntax, `torch`+`torchaudio` for FA). If imports succeed, the task is
+   reported as available along with its engine version.
+5. The worker **stays in the pool** for actual job work — it is not shut down
+   after capability detection.
 6. **`validate_infer_capability_gate()`** derives the released command surface
    from those infer tasks. For every server-orchestrated command, the
    corresponding `InferTask` must be available with a non-empty engine version.
    Commands that fail the check are excluded with a warning.
-7. **Warmup workers** are spawned based on configuration policy (e.g., pre-spawn
-   one worker for the most common command).
-8. The `/health` endpoint advertises the final, validated capability set. The
-   CLI checks this before submitting jobs — if a required command is missing,
-   it errors immediately rather than queueing a job that will fail.
+7. The `/health` endpoint advertises the validated capability set once it is
+   known. The CLI checks this before submitting jobs — if a required command is
+   missing, it errors immediately rather than queueing a job that will fail.
 
 ---
 

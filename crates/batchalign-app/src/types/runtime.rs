@@ -184,6 +184,106 @@ pub fn process_commands_free_threaded() -> &'static [String] {
     &CONSTANTS.process_commands.free_threaded
 }
 
+// ---------------------------------------------------------------------------
+// MemoryTier — adaptive memory budgets based on total system RAM
+// ---------------------------------------------------------------------------
+
+/// RAM-tier classification for adaptive memory budgets.
+///
+/// Detected once at server startup from total system RAM. All memory guard
+/// parameters (startup reservations, host headroom, max workers) are derived
+/// from the tier rather than from fixed constants. This allows batchalign3
+/// to run on 16 GB laptops through 256 GB servers without manual tuning.
+///
+/// The Large and Fleet tiers reproduce the existing fixed constants from
+/// `runtime_constants.toml` exactly, so fleet machines see zero behavior
+/// change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryTierKind {
+    /// < 24 GB total RAM (laptops, CI runners)
+    Small,
+    /// 24–48 GB (workstations, Frodo)
+    Medium,
+    /// 48–128 GB (development servers)
+    Large,
+    /// > 128 GB (fleet servers like net)
+    Fleet,
+}
+
+/// Concrete memory budget parameters for a detected tier.
+///
+/// Constructed via [`MemoryTier::from_total_mb`] (pure, testable) or
+/// [`MemoryTier::detect`] (reads system RAM via sysinfo).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryTier {
+    /// Which tier was selected.
+    pub kind: MemoryTierKind,
+    /// Total system RAM in MB (as detected).
+    pub total_mb: u64,
+    /// Host headroom reserve — the coordinator refuses reservations that
+    /// would leave available RAM below this threshold.
+    pub headroom_mb: MemoryMb,
+    /// Startup reservation for a GPU worker (Whisper, Wave2Vec, speaker).
+    pub gpu_startup_mb: MemoryMb,
+    /// Startup reservation for a Stanza worker (morphosyntax, utseg, coref).
+    pub stanza_startup_mb: MemoryMb,
+    /// Startup reservation for an IO worker (translate, opensmile, avqi).
+    pub io_startup_mb: MemoryMb,
+    /// Suggested maximum concurrent workers across all profiles.
+    pub max_suggested_workers: usize,
+    /// Worker idle timeout in seconds. Shorter on small machines to reclaim
+    /// memory faster (a Stanza worker holds ~2-3 GB while idle).
+    pub idle_timeout_s: u64,
+}
+
+impl MemoryTier {
+    /// Select a tier from total system RAM (in MB). Pure function — no
+    /// sysinfo dependency, fully testable with arbitrary values.
+    pub fn from_total_mb(total_mb: u64) -> Self {
+        //                  (kind, headroom, gpu, stanza, io, max_workers, idle_timeout_s)
+        let (kind, headroom, gpu, stanza, io, max_workers, idle_s) = if total_mb < 24_000 {
+            (MemoryTierKind::Small, 2_000, 6_000, 3_000, 2_000, 1, 60)
+        } else if total_mb < 48_000 {
+            (MemoryTierKind::Medium, 4_000, 10_000, 6_000, 3_000, 2, 300)
+        } else if total_mb < 128_000 {
+            // Large — matches existing TOML constants exactly
+            (MemoryTierKind::Large, 8_000, 16_000, 12_000, 4_000, 4, 600)
+        } else {
+            // Fleet — same budgets as Large, more workers
+            (MemoryTierKind::Fleet, 8_000, 16_000, 12_000, 4_000, 8, 600)
+        };
+        Self {
+            kind,
+            total_mb,
+            headroom_mb: MemoryMb(headroom),
+            gpu_startup_mb: MemoryMb(gpu),
+            stanza_startup_mb: MemoryMb(stanza),
+            io_startup_mb: MemoryMb(io),
+            max_suggested_workers: max_workers,
+            idle_timeout_s: idle_s,
+        }
+    }
+
+    /// Detect the tier from actual system RAM via sysinfo.
+    pub fn detect() -> Self {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        let total_mb = sys.total_memory() / (1024 * 1024);
+        Self::from_total_mb(total_mb)
+    }
+}
+
+impl std::fmt::Display for MemoryTierKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Small => write!(f, "Small (<24 GB)"),
+            Self::Medium => write!(f, "Medium (24-48 GB)"),
+            Self::Large => write!(f, "Large (48-128 GB)"),
+            Self::Fleet => write!(f, "Fleet (>128 GB)"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +340,128 @@ mod tests {
         proc_keys.sort();
         thread_keys.sort();
         assert_eq!(proc_keys, thread_keys);
+    }
+
+    // ---- MemoryTier ----
+
+    #[test]
+    fn tier_16gb_laptop() {
+        let tier = MemoryTier::from_total_mb(16_000);
+        assert_eq!(tier.kind, MemoryTierKind::Small);
+        assert_eq!(tier.headroom_mb.0, 2_000);
+        assert_eq!(tier.stanza_startup_mb.0, 3_000);
+        assert_eq!(tier.gpu_startup_mb.0, 6_000);
+        assert_eq!(tier.io_startup_mb.0, 2_000);
+        assert_eq!(tier.max_suggested_workers, 1);
+    }
+
+    #[test]
+    fn tier_32gb_workstation() {
+        let tier = MemoryTier::from_total_mb(32_000);
+        assert_eq!(tier.kind, MemoryTierKind::Medium);
+        assert_eq!(tier.headroom_mb.0, 4_000);
+        assert_eq!(tier.stanza_startup_mb.0, 6_000);
+        assert_eq!(tier.gpu_startup_mb.0, 10_000);
+        assert_eq!(tier.max_suggested_workers, 2);
+    }
+
+    #[test]
+    fn tier_64gb_fleet() {
+        let tier = MemoryTier::from_total_mb(64_000);
+        assert_eq!(tier.kind, MemoryTierKind::Large);
+        assert_eq!(tier.headroom_mb.0, 8_000);
+        assert_eq!(tier.stanza_startup_mb.0, 12_000);
+        assert_eq!(tier.gpu_startup_mb.0, 16_000);
+        assert_eq!(tier.max_suggested_workers, 4);
+    }
+
+    #[test]
+    fn tier_256gb_server() {
+        let tier = MemoryTier::from_total_mb(256_000);
+        assert_eq!(tier.kind, MemoryTierKind::Fleet);
+        assert_eq!(tier.headroom_mb.0, 8_000);
+        assert_eq!(tier.stanza_startup_mb.0, 12_000);
+        assert_eq!(tier.max_suggested_workers, 8);
+    }
+
+    #[test]
+    fn large_tier_matches_toml_constants() {
+        let tier = MemoryTier::from_total_mb(64_000);
+        assert_eq!(tier.gpu_startup_mb, gpu_worker_startup_mb());
+        assert_eq!(tier.stanza_startup_mb, stanza_worker_startup_mb());
+        assert_eq!(tier.io_startup_mb, io_worker_startup_mb());
+    }
+
+    #[test]
+    fn small_machine_stanza_probe_passes_gate() {
+        // Simulate: 16 GB total, macOS reports ~9 GB available
+        let tier = MemoryTier::from_total_mb(16_000);
+        let available = 9_000u64;
+        let requested = tier.stanza_startup_mb.0;
+        let reserve = tier.headroom_mb.0;
+        // Gate formula: available - pending - requested >= reserve
+        assert!(
+            available.saturating_sub(requested) >= reserve,
+            "Stanza probe must pass on 16 GB: {available} - {requested} = {} >= {reserve}",
+            available - requested
+        );
+    }
+
+    #[test]
+    fn small_machine_gpu_and_stanza_concurrent_blocked() {
+        // Two heavy workers at once should NOT fit on 16 GB
+        let tier = MemoryTier::from_total_mb(16_000);
+        let available = 9_000u64;
+        let remaining_after_gpu = available.saturating_sub(tier.gpu_startup_mb.0);
+        // After GPU reserved, Stanza should not fit within headroom
+        assert!(
+            remaining_after_gpu.saturating_sub(tier.stanza_startup_mb.0) < tier.headroom_mb.0,
+            "Concurrent GPU+Stanza must NOT fit on 16 GB"
+        );
+    }
+
+    #[test]
+    fn tier_detect_returns_valid_tier() {
+        let tier = MemoryTier::detect();
+        assert!(tier.total_mb > 0);
+        assert!(tier.headroom_mb.0 > 0);
+        assert!(tier.gpu_startup_mb.0 > tier.stanza_startup_mb.0);
+        assert!(tier.stanza_startup_mb.0 > tier.io_startup_mb.0);
+    }
+
+    #[test]
+    fn tier_boundary_24gb_is_medium() {
+        assert_eq!(MemoryTier::from_total_mb(24_000).kind, MemoryTierKind::Medium);
+        assert_eq!(MemoryTier::from_total_mb(23_999).kind, MemoryTierKind::Small);
+    }
+
+    #[test]
+    fn tier_boundary_48gb_is_large() {
+        assert_eq!(MemoryTier::from_total_mb(48_000).kind, MemoryTierKind::Large);
+        assert_eq!(MemoryTier::from_total_mb(47_999).kind, MemoryTierKind::Medium);
+    }
+
+    #[test]
+    fn tier_boundary_128gb_is_fleet() {
+        assert_eq!(MemoryTier::from_total_mb(128_000).kind, MemoryTierKind::Fleet);
+        assert_eq!(MemoryTier::from_total_mb(127_999).kind, MemoryTierKind::Large);
+    }
+
+    #[test]
+    fn small_tier_idle_timeout_is_short() {
+        let tier = MemoryTier::from_total_mb(16_000);
+        assert_eq!(tier.idle_timeout_s, 60);
+    }
+
+    #[test]
+    fn large_tier_idle_timeout_unchanged() {
+        let tier = MemoryTier::from_total_mb(64_000);
+        assert_eq!(tier.idle_timeout_s, 600);
+    }
+
+    #[test]
+    fn medium_tier_idle_timeout_is_intermediate() {
+        let tier = MemoryTier::from_total_mb(32_000);
+        assert_eq!(tier.idle_timeout_s, 300);
     }
 }

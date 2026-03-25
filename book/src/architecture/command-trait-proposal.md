@@ -1,7 +1,7 @@
 # ADR: Command Trait for Full-Lifecycle Command Definition
 
 **Status:** Draft — awaiting validation from Houjun's compare implementation
-**Last updated:** 2026-03-21 17:04 EDT
+**Last updated:** 2026-03-24 21:21 EDT
 
 ## Problem
 
@@ -104,7 +104,7 @@ pub trait Command: Send + Sync + 'static {
 /// A discovered input file with metadata.
 pub struct InputFile {
     pub path: PathBuf,
-    pub filename: FileName,
+    pub filename: DisplayPath,
     /// For compare: the paired gold file, if found.
     pub companion: Option<PathBuf>,
 }

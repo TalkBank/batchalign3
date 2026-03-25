@@ -1,7 +1,7 @@
 # Type-Driven Design
 
 **Status:** Current
-**Last modified:** 2026-03-21 15:30 EDT
+**Last modified:** 2026-03-24 21:21 EDT
 
 Batchalign uses Rust's type system to encode domain invariants at compile time. This document catalogs the patterns in use, explains when to reach for each one, and records the serde techniques that keep the wire format stable while the internal types evolve.
 
@@ -42,7 +42,7 @@ All generated types use `#[serde(transparent)]` — the wire format stays as bar
 | `ReleasedCommand` | enum | `batchalign-types/src/domain/command.rs` | Closed released command vocabulary |
 | `LanguageCode3` | `String` | `batchalign-types/src/domain/` | Validated ISO 639-3 code (3 ASCII alpha, lowercased) |
 | `LanguageSpec` | enum | `batchalign-types/src/domain/` | `Auto` or `Resolved(LanguageCode3)` — language at job boundary |
-| `FileName` | `String` | `batchalign-types/src/domain/` | File basename (`"sample.cha"`) |
+| `DisplayPath` | `String` | `batchalign-types/src/domain.rs` | Display-oriented file path within a job (`"sample.cha"`, `"subdir/sample.cha"`) |
 | `NodeId` | `String` | `batchalign-types/src/domain/` | Server/fleet node identity |
 | `EngineVersion` | `String` | `batchalign-types/src/domain/` | ML engine version for cache keying |
 | `CorrelationId` | `String` | `batchalign-types/src/domain/` | Cross-service tracing ID |

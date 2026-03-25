@@ -1,11 +1,98 @@
 # Worker Memory Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-21 13:17 EDT
+**Last updated:** 2026-03-24 21:14 EDT
 
 Developer reference for the host-memory coordinator, worker pool, and warmup
 internals. For user-facing configuration, see
 [Worker Tuning](../user-guide/worker-tuning.md).
+
+## RAM-tier adaptive budgets
+
+All memory budgets are scaled automatically based on total system RAM. The
+server detects the tier once at startup and logs it. No user configuration
+is needed — it just works on machines from 16 GB laptops to 256 GB servers.
+
+```mermaid
+flowchart LR
+    detect["sysinfo::total_memory()"]
+    tier{"MemoryTier::from_total_mb()"}
+    small["Small &lt; 24 GB\nheadroom: 2 GB\nstanza: 3 GB\ngpu: 6 GB\nworkers: 1"]
+    medium["Medium 24-48 GB\nheadroom: 4 GB\nstanza: 6 GB\ngpu: 10 GB\nworkers: 2"]
+    large["Large 48-128 GB\nheadroom: 8 GB\nstanza: 12 GB\ngpu: 16 GB\nworkers: 4"]
+    fleet["Fleet &gt; 128 GB\nheadroom: 8 GB\nstanza: 12 GB\ngpu: 16 GB\nworkers: 8"]
+
+    detect --> tier
+    tier -->|"&lt; 24 GB"| small
+    tier -->|"24-48 GB"| medium
+    tier -->|"48-128 GB"| large
+    tier -->|"&gt; 128 GB"| fleet
+```
+
+The Large and Fleet tiers reproduce the original fixed constants from
+`runtime_constants.toml` exactly — fleet machines see zero behavior change.
+The TOML constants remain as the Large/Fleet baseline; the tier system
+scales them down for smaller machines.
+
+**Source:** `types/runtime.rs` — `MemoryTier::from_total_mb()` (pure, testable)
+and `MemoryTier::detect()` (reads sysinfo).
+
+### Why small machines need smaller budgets
+
+The original constants were tuned for 64-256 GB fleet machines where multiple
+concurrent workers are the norm. On a 16 GB laptop:
+
+- **Stanza startup 12 GB** exceeds available memory (~9 GB on macOS) → daemon
+  can never start
+- **Host headroom 8 GB** leaves no room for any worker at all
+- **GPU startup 16 GB** exceeds total system RAM
+
+The Small tier reduces these to match actual model sizes: Stanza uses ~2-3 GB
+RSS, Whisper float32 ~4-5 GB. The reduced headroom (2 GB) still prevents
+OOM while allowing the single-worker model to function.
+
+## Memory check flow: server startup to job execution
+
+This diagram shows every point where memory is checked or reserved, from
+daemon spawn through job completion. Each gate that can block is marked.
+
+```mermaid
+flowchart TD
+    start["CLI: batchalign3 morphotag corpus/ output/"]
+    daemon["ensure_daemon()\n(daemon.rs)"]
+    spawn_server["spawn batchalign3 serve start\n--foreground --warmup-policy off"]
+    tier_detect["MemoryTier::detect()\n(runtime.rs)"]
+    bind["Bind TCP port immediately\n/health available\nno Python running yet"]
+    health_poll["CLI polls /health\n(passes instantly)"]
+    job_submit["POST /jobs\n(accepted optimistically)"]
+    job_plan{{"Memory guard #1\nwait_for_job_execution_plan()\n(execution budget × workers)"}}
+    worker_spawn{{"Memory guard #2\ncheckout() → spawn worker\n(startup reservation)"}}
+    caps_detect["Query capabilities from\nfirst worker (OnceLock)"]
+    inference["Python worker runs\nML inference"]
+    result["Return results\nrelease all leases"]
+
+    start --> daemon
+    daemon --> spawn_server
+    spawn_server --> tier_detect
+    tier_detect --> bind
+    bind --> health_poll
+    health_poll --> job_submit
+    job_submit --> job_plan
+    job_plan -->|"passes"| worker_spawn
+    job_plan -->|"denied: reduces\nworker count or\nretries"| job_plan
+    worker_spawn -->|"passes"| caps_detect
+    worker_spawn -->|"denied: retries\nup to 300s"| worker_spawn
+    caps_detect --> inference
+    inference --> result
+
+    style job_plan fill:#ff9,stroke:#333
+    style worker_spawn fill:#ff9,stroke:#333
+```
+
+**Key improvement:** No Python process runs until the first job arrives. The
+daemon starts in &lt;1 second and uses zero memory at idle. Memory guards only
+fire when actual work is requested, using tier-scaled budgets (Small tier:
+3 GB Stanza, 2 GB headroom → `9000 − 3000 = 6000 ≥ 2000` passes on 16 GB).
 
 ## Job worker planning
 
@@ -38,16 +125,19 @@ local batchalign3 processes on the same host.
 
 ### Startup reservations
 
-Worker startup reservations are explicit profile-level constants from
-`runtime_constants.toml`:
+Worker startup reservations are derived from the detected `MemoryTier`
+(see [RAM-tier adaptive budgets](#ram-tier-adaptive-budgets)):
 
-- GPU: 16000 MB
-- Stanza: 12000 MB
-- IO: 4000 MB
+| Profile | Small | Medium | Large/Fleet |
+|---------|-------|--------|-------------|
+| GPU | 6 GB | 10 GB | 16 GB |
+| Stanza | 3 GB | 6 GB | 12 GB |
+| IO | 2 GB | 3 GB | 4 GB |
 
 These are intentionally larger than the steady-state per-command execution
 budgets because the model-loading spike is what repeatedly crashed shared
-machines.
+machines. On small machines, the budgets are reduced to match actual model
+sizes (Stanza ~2-3 GB, Whisper float32 ~4-5 GB).
 
 ### Job execution planning
 
@@ -274,12 +364,36 @@ each heavy spawn must first acquire a host-wide startup lease. Each task:
 5. Spawns `WorkerHandle::spawn()` with the appropriate config
 6. Pushes the handle to the idle queue and releases a semaphore permit
 
-### Probe worker
+### Lazy capability detection (no startup probe)
 
-`detect_capabilities()` spawns a temporary "probe" worker to discover what
-commands the Python environment supports. It queries `capabilities()` via the
-worker protocol, then shuts down the probe. This runs before warmup so the
-server knows which warmup commands to skip.
+The server starts with **no Python process at all**. Capabilities are detected
+lazily when the first worker spawns for a real job. The `OnceLock` on the pool
+ensures detection runs only once, even under concurrent dispatch.
+
+```mermaid
+sequenceDiagram
+    participant CLI as Rust CLI
+    participant Server as Rust Server
+    participant Pool as WorkerPool
+    participant Py as Python Worker
+
+    CLI->>Server: POST /jobs (morphotag)
+    Server->>Server: Accept (optimistic capabilities)
+    Server->>Pool: checkout(Stanza, eng)
+    Pool->>Py: spawn worker (first ever)
+    Py-->>Pool: {"ready": true}
+    Pool->>Py: {"op": "capabilities"}
+    Py-->>Pool: {infer_tasks, engine_versions}
+    Note over Pool: OnceLock caches result
+    Pool->>Py: batch_infer(morphosyntax, ...)
+    Py-->>Pool: results
+    Pool-->>Server: done
+```
+
+Previously, a dedicated probe worker was spawned at startup, queried once,
+then either killed (wasting 2-3 GB) or donated to the pool. The lazy approach
+eliminates this entirely — the daemon starts in &lt;1 second with zero memory
+footprint. The first job pays the model-loading cost, which is unavoidable.
 
 ### No-duplicate guarantee
 
@@ -297,6 +411,57 @@ A potential future improvement: sort files largest-first before dispatch so
 the longest files start processing immediately, reducing straggler effects.
 The discovery layer already sorts by file size, but this could be made
 explicit in the dispatch path.
+
+## Debugging memory issues
+
+### Startup log
+
+The server logs its detected tier at startup:
+
+```
+Starting server on 0.0.0.0:8001...
+Memory tier: Small (<24 GB) (total: 16 GB, headroom: 2 GB, stanza: 3 GB, gpu: 6 GB)
+```
+
+If the tier seems wrong, check `sysinfo::total_memory()` vs actual RAM.
+
+### Common failures and fixes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Daemon hangs at "Starting local daemon..." | Capability probe blocked by memory guard | Tier system auto-fixes this; if still failing, set `memory_gate_mb: 0` in `server.yaml` |
+| "timed out waiting for host-memory capacity" | Worker startup reservation exceeds available RAM minus headroom | Check the tier log; reduce `memory_gate_mb` in `server.yaml` if needed |
+| Worker spawn succeeds but OOM kills the process | Actual model RSS exceeds the tier budget | Report to team — the tier budgets may need adjustment |
+| "insufficient memory to spawn worker" | Pre-spawn check (`BATCHALIGN_SPAWN_MIN_MEMORY_MB`) failed | Override: `BATCHALIGN_SPAWN_MIN_MEMORY_MB=2048` |
+
+### Manual overrides
+
+In `~/.batchalign3/server.yaml`:
+
+```yaml
+# Reduce host headroom (default: tier-dependent, 2-8 GB)
+memory_gate_mb: 2048
+
+# Disable host headroom checks entirely (dangerous on shared machines)
+memory_gate_mb: 0
+
+# Limit concurrent workers
+max_workers_per_job: 1
+max_total_workers: 1
+```
+
+### Diagnostic commands
+
+```bash
+# Check detected tier and current memory state
+batchalign3 serve start --foreground -v 2>&1 | head -5
+
+# Check health endpoint for live memory state
+curl -s http://127.0.0.1:8001/health | python3 -m json.tool | grep -E 'memory|tier|worker'
+
+# Check host-memory ledger (cross-process reservations)
+cat /tmp/batchalign3-host-memory-*.json 2>/dev/null | python3 -m json.tool
+```
 
 See also:
 - [Pipeline System](pipeline-system.md) — dispatch shapes and command lifecycle

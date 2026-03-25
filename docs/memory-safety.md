@@ -1,7 +1,7 @@
 # Memory Safety: Preventing Kernel OOM Crashes
 
 **Status:** Current
-**Last updated:** 2026-03-21 13:17 EDT
+**Last updated:** 2026-03-24 21:21 EDT
 
 ## The Problem
 
@@ -54,7 +54,8 @@ The coordinator tracks three lease types:
 
 The reserve/headroom policy comes from `ServerConfig.memory_gate_mb`, which now
 means "keep at least this much RAM free after reservations" rather than a
-standalone job gate. The default is now **8192 MB**, not 2048.
+standalone job gate. The default is **tier-dependent**: 2000 MB (Small, ≤16 GB),
+4000 MB (Medium, 17–63 GB), 6000 MB (Large, 64–127 GB), 8000 MB (Fleet, ≥128 GB).
 
 ### Layer 2: Spawn semaphore (prevents in-process TOCTOU race)
 
@@ -94,16 +95,21 @@ sequenceDiagram
 
 ### Layer 3: Explicit startup reservations (before every worker spawn)
 
-Worker startup budgets are now explicit profile-shaped constants from
-`runtime_constants.toml`:
+Worker startup budgets are now **tier-adaptive**, scaled by a `MemoryTier`
+derived from total system RAM:
 
-- GPU worker startup: **16000 MB**
-- Stanza worker startup: **12000 MB**
-- IO worker startup: **4000 MB**
+| Tier | Total RAM | GPU Startup | Stanza Startup | IO Startup |
+|------|-----------|-------------|----------------|------------|
+| Small | ≤16 GB | tier-scaled | tier-scaled | tier-scaled |
+| Medium | 17–63 GB | tier-scaled | tier-scaled | tier-scaled |
+| Large | 64–127 GB | tier-scaled | tier-scaled | tier-scaled |
+| Fleet | ≥128 GB | tier-scaled | tier-scaled | tier-scaled |
 
-These are intentionally more conservative than the per-command execution budgets.
-They protect the model-loading spike where Whisper, Stanza, or related engines
-can temporarily consume far more memory than steady-state request handling.
+The base budgets come from `runtime_constants.toml` and are adjusted by the
+tier system. These are intentionally more conservative than the per-command
+execution budgets. They protect the model-loading spike where Whisper, Stanza,
+or related engines can temporarily consume far more memory than steady-state
+request handling.
 
 **Note:** On macOS, `sysinfo::available_memory()` undercounts because it only
 reports free + purgeable pages, not inactive pages. The kernel can reclaim
@@ -190,7 +196,7 @@ make test-ml         # ML model tests — net only (256 GB)
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `memory_gate_mb` | `8192` | Host reserve/headroom preserved after reservations |
+| `memory_gate_mb` | tier-dependent (2000–8000) | Host reserve/headroom preserved after reservations (Small: 2000, Medium: 4000, Large: 6000, Fleet: 8000) |
 | `max_concurrent_worker_startups` | `1` | Host-wide limit for simultaneous worker/model startups |
 | `gpu_thread_pool_size` | `4` | In-process GPU request concurrency, now forwarded into Python |
 

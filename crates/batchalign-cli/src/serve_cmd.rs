@@ -77,7 +77,17 @@ pub async fn start(
     }
 
     if args.foreground {
-        eprintln!("\nStarting server on {}:{}...\n", cfg.host, cfg.port);
+        let tier = cfg.resolved_memory_tier();
+        eprintln!("\nStarting server on {}:{}...", cfg.host, cfg.port);
+        eprintln!(
+            "Memory tier: {}{} (total: {} GB, headroom: {} GB, stanza: {} GB, gpu: {} GB)\n",
+            tier.kind,
+            if cfg.memory_tier.is_some() { " (override)" } else { "" },
+            tier.total_mb / 1000,
+            tier.headroom_mb.0 / 1000,
+            tier.stanza_startup_mb.0 / 1000,
+            tier.gpu_startup_mb.0 / 1000,
+        );
 
         let idle_timeout_s = args.worker_idle_timeout_s.unwrap_or_else(|| {
             if cfg.worker_idle_timeout_s > 0 {

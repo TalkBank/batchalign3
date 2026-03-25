@@ -163,7 +163,14 @@ impl WorkerPool {
 
         // Slot claimed -- now spawn. If spawn fails, release the slot.
         match WorkerHandle::spawn(self.worker_config(profile, lang, engine_overrides)).await {
-            Ok(handle) => {
+            Ok(mut handle) => {
+                // Lazily detect capabilities from the first spawned worker.
+                // This is a single IPC round-trip on an already-running worker.
+                if self.lazy_capabilities.get().is_none() {
+                    if let Err(e) = self.detect_capabilities_from_worker(&mut handle).await {
+                        tracing::warn!(error = %e, "Failed to detect capabilities from first worker (continuing)");
+                    }
+                }
                 // Don't use a separate push_spawned (which would double-increment
                 // total). We already incremented via compare_exchange.
                 super::lock_recovered(&group.idle).push_back(handle);
