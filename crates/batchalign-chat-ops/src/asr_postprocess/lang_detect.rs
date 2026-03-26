@@ -183,6 +183,7 @@ fn whatlang_to_iso639_3(lang: whatlang::Lang) -> String {
         Lang::Aka => "aka",
         Lang::Sna => "sna",
         Lang::Zul => "zul",
+        Lang::Cym => "cym",
     };
     code.to_string()
 }

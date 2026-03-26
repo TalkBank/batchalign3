@@ -440,23 +440,14 @@ impl<'de> serde::Deserialize<'de> for WorkerLanguage {
 }
 
 impl schemars::JsonSchema for WorkerLanguage {
-    fn schema_name() -> String {
-        "WorkerLanguage".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "WorkerLanguage".into()
     }
 
-    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        use schemars::schema::{InstanceType, Metadata, Schema, SchemaObject};
-
-        Schema::Object(SchemaObject {
-            instance_type: Some(InstanceType::String.into()),
-            metadata: Some(Box::new(Metadata {
-                description: Some(
-                    "Worker-runtime language string: ISO 639-3 code, \"auto\", or empty string."
-                        .to_string(),
-                ),
-                ..Default::default()
-            })),
-            ..Default::default()
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Worker-runtime language string: ISO 639-3 code, \"auto\", or empty string."
         })
     }
 }
@@ -582,11 +573,11 @@ impl<'de> Deserialize<'de> for LanguageSpec {
 }
 
 impl schemars::JsonSchema for LanguageSpec {
-    fn schema_name() -> String {
-        "LanguageSpec".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "LanguageSpec".into()
     }
 
-    fn json_schema(g: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
         // Reuse the string schema — "auto" or a 3-letter code.
         <String as schemars::JsonSchema>::json_schema(g)
     }

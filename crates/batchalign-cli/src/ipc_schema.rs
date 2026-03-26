@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use schemars::schema::RootSchema;
+use schemars::Schema;
 
 /// Helper macro to reduce boilerplate when registering types.
 ///
@@ -31,8 +31,9 @@ macro_rules! register {
     ($map:expr, $($ty:ty),+ $(,)?) => {
         $(
             let schema = schemars::schema_for!($ty);
-            let name = schema.schema.metadata.as_ref()
-                .and_then(|m| m.title.clone())
+            let name = schema.get("title")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| {
                     let full = stringify!($ty);
                     full.rsplit("::").next().unwrap_or(full).to_string()
@@ -44,9 +45,9 @@ macro_rules! register {
 
 /// Generate JSON Schema for all IPC-boundary types, grouped by protocol layer.
 ///
-/// Returns a map of `layer_name → { type_name → RootSchema }`.
-pub fn generate_ipc_schema() -> BTreeMap<String, BTreeMap<String, RootSchema>> {
-    let mut layers: BTreeMap<String, BTreeMap<String, RootSchema>> = BTreeMap::new();
+/// Returns a map of `layer_name → { type_name → Schema }`.
+pub fn generate_ipc_schema() -> BTreeMap<String, BTreeMap<String, Schema>> {
+    let mut layers: BTreeMap<String, BTreeMap<String, Schema>> = BTreeMap::new();
 
     // --- Worker Protocol V2 types ---
     {
@@ -154,7 +155,7 @@ pub fn generate_ipc_schema() -> BTreeMap<String, BTreeMap<String, RootSchema>> {
 
 /// Write IPC schemas to a directory structure: `{dir}/{layer}/{type}.json`.
 pub fn write_ipc_schema(
-    schemas: &BTreeMap<String, BTreeMap<String, RootSchema>>,
+    schemas: &BTreeMap<String, BTreeMap<String, Schema>>,
     dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let base = Path::new(dir);
@@ -167,9 +168,10 @@ pub fn write_ipc_schema(
             std::fs::write(&path, json)?;
         }
     }
+    let total: usize = schemas.values().map(|v| v.len()).sum();
     eprintln!(
         "Wrote {} schemas across {} layers to {}",
-        schemas.values().map(|v| v.len()).sum::<usize>(),
+        total,
         schemas.len(),
         dir
     );
@@ -178,7 +180,7 @@ pub fn write_ipc_schema(
 
 /// Check that existing schema files match the current Rust types.
 pub fn check_ipc_schema(
-    schemas: &BTreeMap<String, BTreeMap<String, RootSchema>>,
+    schemas: &BTreeMap<String, BTreeMap<String, Schema>>,
     dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let base = Path::new(dir);
