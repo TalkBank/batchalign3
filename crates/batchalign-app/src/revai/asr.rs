@@ -8,8 +8,7 @@
 use std::path::Path;
 
 use batchalign_chat_ops::asr_postprocess::{
-    AsrElement, AsrElementKind, AsrMonologue, AsrOutput, AsrRawText, AsrTimestampSecs,
-    SpeakerIndex,
+    AsrElement, AsrElementKind, AsrMonologue, AsrOutput, AsrRawText, AsrTimestampSecs, SpeakerIndex,
 };
 use batchalign_revai::{RevAiClient, SubmitOptions, Transcript, TranscriptResult};
 use tracing::info;

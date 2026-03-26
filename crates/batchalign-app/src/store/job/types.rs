@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use crate::api::{
-    ReleasedCommand, ContentType, CorrelationId, DisplayPath, FileProgressStage, JobId, JobStatus,
-    LanguageSpec, NodeId, NumSpeakers, UnixTimestamp,
+    ContentType, CorrelationId, DisplayPath, FileProgressStage, JobId, JobStatus, LanguageSpec,
+    NodeId, NumSpeakers, ReleasedCommand, UnixTimestamp,
 };
 use crate::options::CommandOptions;
 use tokio_util::sync::CancellationToken;
@@ -286,4 +286,3 @@ pub(crate) enum RecoveryDisposition {
     /// The job had completed output and was promoted to completed.
     Completed,
 }
-

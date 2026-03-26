@@ -689,10 +689,7 @@ mod tests {
             batch_size: 8,
         };
 
-        assert_eq!(
-            opts.effective_asr_engine(),
-            AsrEngineName::HkTencent
-        );
+        assert_eq!(opts.effective_asr_engine(), AsrEngineName::HkTencent);
     }
 
     #[test]
@@ -711,10 +708,7 @@ mod tests {
             merge_abbrev: false.into(),
         };
 
-        assert_eq!(
-            opts.effective_asr_engine(),
-            AsrEngineName::HkAliyun
-        );
+        assert_eq!(opts.effective_asr_engine(), AsrEngineName::HkAliyun);
     }
 
     #[test]
@@ -814,9 +808,7 @@ mod tests {
     fn utr_engine_roundtrip_preserves_wire_names() {
         let rev_json = serde_json::to_string(&UtrEngine::RevAi).unwrap();
         let whisper_json = serde_json::to_string(&UtrEngine::Whisper).unwrap();
-        let custom_json =
-            serde_json::to_string(&UtrEngine::HkTencent)
-                .unwrap();
+        let custom_json = serde_json::to_string(&UtrEngine::HkTencent).unwrap();
 
         assert_eq!(rev_json, "\"rev_utr\"");
         assert_eq!(whisper_json, "\"whisper_utr\"");
@@ -840,9 +832,7 @@ mod tests {
     fn fa_engine_roundtrip_preserves_wire_names() {
         let wav2vec_json = serde_json::to_string(&FaEngineName::Wave2Vec).unwrap();
         let whisper_json = serde_json::to_string(&FaEngineName::Whisper).unwrap();
-        let custom_json =
-            serde_json::to_string(&FaEngineName::Wav2vecCanto)
-                .unwrap();
+        let custom_json = serde_json::to_string(&FaEngineName::Wav2vecCanto).unwrap();
 
         assert_eq!(wav2vec_json, "\"wav2vec_fa\"");
         assert_eq!(whisper_json, "\"whisper_fa\"");
@@ -866,9 +856,7 @@ mod tests {
     fn asr_engine_roundtrip_preserves_wire_names() {
         let rev_json = serde_json::to_string(&AsrEngineName::RevAi).unwrap();
         let whisperx_json = serde_json::to_string(&AsrEngineName::WhisperX).unwrap();
-        let custom_json =
-            serde_json::to_string(&AsrEngineName::HkTencent)
-                .unwrap();
+        let custom_json = serde_json::to_string(&AsrEngineName::HkTencent).unwrap();
 
         assert_eq!(rev_json, "\"rev\"");
         assert_eq!(whisperx_json, "\"whisperx\"");

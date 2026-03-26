@@ -3,16 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::api::{ContentType, LanguageCode3, ReleasedCommand};
+use crate::api::{LanguageCode3, ReleasedCommand};
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
+use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
 use crate::scheduling::{FailureCategory, WorkUnitKind};
-use crate::workflow::text_batch::{TextBatchFileInput, TextBatchFileResult, TextBatchFileResults};
+use crate::text_batch::{TextBatchFileInput, TextBatchFileResult, TextBatchFileResults};
 use tracing::warn;
 
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 
-use super::super::util::{FileRunTracker, FileStage, apply_result_filename, set_file_progress};
+use super::super::util::{FileRunTracker, FileStage, set_file_progress};
 use super::BatchedInferDispatchPlan;
 use super::compare_pipeline::dispatch_compare;
 
@@ -29,13 +30,14 @@ pub(in crate::runner) fn apply_merge_abbrev(chat_text: &str) -> String {
 ///
 /// Reads all CHAT files, runs processing in Rust (parse ->
 /// cache -> infer -> inject -> serialize), and records results per file.
-pub(in crate::runner) async fn dispatch_batched_infer(
+pub(crate) async fn dispatch_batched_infer(
     job: &RunnerJobSnapshot,
     store: &Arc<JobStore>,
     services: PipelineServices<'_>,
     plan: BatchedInferDispatchPlan,
 ) {
     let BatchedInferDispatchPlan {
+        kernel_plan,
         tokenization_mode,
         multilingual_policy,
         cache_policy,
@@ -48,6 +50,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
     let fallback_lang = LanguageCode3::eng();
     let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
     let command = job.dispatch.command;
+    debug_assert_eq!(kernel_plan.file_parallelism_hint, 1);
 
     let started_at = unix_now();
 
@@ -155,18 +158,19 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                             .await
                     };
                     match result {
-                        Ok(text) => results.push(TextBatchFileResult::ok(file.filename.clone(), text)),
-                        Err(e) => results.push(TextBatchFileResult::err(file.filename.clone(), e.to_string())),
+                        Ok(text) => {
+                            results.push(TextBatchFileResult::ok(file.filename.clone(), text))
+                        }
+                        Err(e) => results.push(TextBatchFileResult::err(
+                            file.filename.clone(),
+                            e.to_string(),
+                        )),
                     }
                 }
                 results
             } else {
-                crate::morphosyntax::process_morphosyntax_batch(
-                    &file_texts,
-                    services,
-                    &mor_params,
-                )
-                .await
+                crate::morphosyntax::process_morphosyntax_batch(&file_texts, services, &mor_params)
+                    .await
             }
         }
         ReleasedCommand::Utseg => {
@@ -192,12 +196,7 @@ pub(in crate::runner) async fn dispatch_batched_infer(
             .await
         }
         ReleasedCommand::Coref => {
-            crate::coref::process_coref_batch(
-                &file_texts,
-                lang,
-                services.pool,
-            )
-            .await
+            crate::coref::process_coref_batch(&file_texts, lang, services.pool).await
         }
         ReleasedCommand::Compare => {
             dispatch_compare(
@@ -254,13 +253,9 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 };
 
                 // Write output
-                let write_path = if job.filesystem.paths_mode
-                    && file_index < job.filesystem.output_paths.len()
-                {
-                    apply_result_filename(&job.filesystem.output_paths[file_index], &filename)
-                } else {
-                    job.filesystem.staging_dir.join("output").join(&*filename)
-                };
+                let primary_output = primary_output_artifact(command, &filename);
+                let write_path =
+                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -277,7 +272,11 @@ pub(in crate::runner) async fn dispatch_batched_infer(
                 }
 
                 lifecycle
-                    .complete_with_result(filename.clone(), ContentType::Chat, finished_at)
+                    .complete_with_result(
+                        primary_output.display_path.clone(),
+                        primary_output.content_type,
+                        finished_at,
+                    )
                     .await;
             }
             Err(err) => {

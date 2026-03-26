@@ -1,7 +1,7 @@
 # Data Flow Overview
 
 **Status:** Current
-**Last modified:** 2026-03-21 15:30 EDT
+**Last updated:** 2026-03-26 14:05 EDT
 
 This document traces the complete data flow for every batchalign command,
 from CLI invocation through the Rust server to Python ML inference and back.
@@ -32,12 +32,11 @@ that dispatches work to a Rust server (local daemon or remote). The server
 owns CHAT parsing, caching, validation, and serialization. Python workers are
 stateless ML inference endpoints that never see CHAT text.
 
-The production data flow for all commands begins with the registry in
-[`crates/batchalign-app/src/workflow/registry.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/registry.rs),
-with the family contracts in
-[`crates/batchalign-app/src/workflow/traits.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/traits.rs).
-`workflow/mod.rs` is now the top-level map that points readers to those two
-roles.
+The production data flow for released commands now begins with the command-owned
+catalog in `crates/batchalign-app/src/commands/catalog.rs`, the concrete
+entrypoints under `crates/batchalign-app/src/commands/`, and the small shared
+metadata/helpers in `command_family.rs` and `text_batch.rs`. There is no longer
+a live `crates/batchalign-app/src/workflow/` tree in the app crate.
 
 The production data flow for all commands:
 
@@ -45,7 +44,7 @@ The production data flow for all commands:
 Rust CLI (dispatch/mod.rs)
   --> HTTP POST /jobs to Rust server
   --> Server runner (runner/mod.rs) spawns async job task
-  --> Dispatch routing consumes the workflow registry and then enters one of:
+  --> Dispatch routing resolves the command-owned catalog entry and then enters one of:
       1. dispatch_batched_infer()        — morphotag / utseg / translate / coref
       2. dispatch_fa_infer()             — forced alignment
       3. dispatch_transcribe_infer()     — transcription from audio
@@ -53,7 +52,7 @@ Rust CLI (dispatch/mod.rs)
       5. dispatch_benchmark_infer()      — composite transcribe + compare
       6. dispatch_media_analysis_v2()    — opensmile / avqi
       7. process_one_file()              — worker-owned media analysis legacy path
-  --> Per-workflow orchestrator runs the pipeline:
+  --> Command-owned wrapper + shared dispatch family run the pipeline:
       parse → cache check → typed worker IPC → inject → validate → serialize
   --> CLI polls /jobs/{id}/results and writes output files
 ```
@@ -104,14 +103,14 @@ CHAT files (`@Options: dummy`).
 ## Server Job Runner
 
 The job runner (`crates/batchalign-app/src/runner/mod.rs`) receives submitted
-jobs and routes them through the workflow registry
-(`crates/batchalign-app/src/workflow/registry.rs`) and family-specific dispatch
-paths.
+jobs, resolves their command-owned metadata, builds a host-aware dispatch plan,
+and then routes them into the appropriate shared dispatch family.
 
 ### Dispatch routing
 
-Two functions in `crates/batchalign-app/src/runner/policy.rs` control routing
-(they delegate to the workflow registry):
+Two compatibility helpers in `crates/batchalign-app/src/runner/policy.rs`
+still answer routing questions (they now derive directly from the command-owned
+catalog):
 
 - **`infer_task_for_command()`** maps each command to an `InferTask` enum
   variant (e.g., `"morphotag"` → `InferTask::Morphosyntax`)
@@ -156,9 +155,10 @@ infer only when all inputs are CHAT files (not raw audio).
 | `dispatch_media_analysis_v2` | opensmile, avqi | Per-file Rust-owned prepared-audio requests over worker `execute_v2` |
 | `process_one_file` | legacy compatibility only | Per-file worker IPC retained for non-release compatibility code, not for the current CLI surface |
 
-The registry in `workflow/registry.rs` is the source of truth for which released
-command maps to which family. The dispatch functions above are the runtime
-entry points that consume that registry.
+The command-owned catalog in `commands/catalog.rs` is the source of truth for
+which released command maps to which family and performance profile. The
+dispatch functions above are the runtime entry points those command wrappers
+reuse.
 
 ---
 
@@ -311,11 +311,13 @@ because results depend on full document context.
 
 ```
 main CHAT text + gold CHAT text (FILE.gold.cha)
-  → Rust: build typed comparison bundle from main + gold
-  → Rust: run morphosyntax pipeline where needed
-  → Rust: DP-align main vs gold words inside the projection bundle
-  → Rust: materialize %xsrep / metrics outputs
-  → serialize projected CHAT + CSV metrics
+  → Rust: pair main with gold companion
+  → Rust: run morphosyntax on main only; keep gold raw
+  → Rust: parse both sides into `ChatFile` ASTs
+  → Rust: `compare()` builds main/gold views, structural word matches, and metrics
+  → Rust: released materializer injects `%xsrep` / `%xsmor` on the main transcript
+  → Rust: internal gold materializer projects onto the gold AST only when structurally safe
+  → serialize CHAT + `.compare.csv` metrics
 ```
 
 ---
@@ -436,7 +438,7 @@ output).
 | `crates/batchalign-cli/src/dispatch/mod.rs` | CLI dispatch router |
 | `crates/batchalign-app/src/runner/` | Job runner (`mod.rs`), policy helpers (`policy.rs`), util |
 | `crates/batchalign-app/src/runner/dispatch/` | Dispatch family implementations (`infer_batched.rs`, `fa_pipeline.rs`, `transcribe_pipeline.rs`, `benchmark_pipeline.rs`, `compare_pipeline.rs`, `media_analysis_v2.rs`) |
-| `crates/batchalign-app/src/workflow/` | Workflow-family registry, descriptors, traits, per-command implementations |
+| `crates/batchalign-app/src/commands/` | Released-command specs, command-owned wrappers, and contributor-facing entrypoints |
 | `crates/batchalign-app/src/morphosyntax/` | Morphosyntax orchestrator |
 | `crates/batchalign-app/src/utseg.rs` | Utseg orchestrator |
 | `crates/batchalign-app/src/translate.rs` | Translation orchestrator |

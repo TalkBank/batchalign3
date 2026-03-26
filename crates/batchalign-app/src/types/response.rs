@@ -9,8 +9,8 @@ use crate::options::CommandOptions;
 use crate::scheduling::{FailureCategory, LeaseRecord};
 
 use super::domain::{
-    ReleasedCommand, ContentType, DisplayPath, DurationSeconds, HealthStatus, JobId, LanguageSpec,
-    MemoryMb, NodeId, UnixTimestamp,
+    ContentType, DisplayPath, DurationSeconds, HealthStatus, JobId, LanguageSpec, MemoryMb, NodeId,
+    ReleasedCommand, UnixTimestamp,
 };
 use super::request::default_lang;
 use super::status::{FileProgressStage, FileStatusKind, JobStatus};
@@ -410,9 +410,8 @@ mod tests {
                 {"filename": "Control/TYO_n1.cha", "status": "queued"}
             ]
         }"#;
-        let info: JobInfo = serde_json::from_str(json).expect(
-            "JobInfo must deserialize file_statuses with relative-path display names"
-        );
+        let info: JobInfo = serde_json::from_str(json)
+            .expect("JobInfo must deserialize file_statuses with relative-path display names");
         assert_eq!(info.file_statuses.len(), 2);
         assert_eq!(&*info.file_statuses[0].filename, "PWA/TYO_a1.cha");
     }

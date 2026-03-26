@@ -94,8 +94,7 @@ mod tests {
         )
         .unwrap();
 
-        let (inputs, out) =
-            resolve_inputs(&[], None, Some(&list_file), false).unwrap();
+        let (inputs, out) = resolve_inputs(&[], None, Some(&list_file), false).unwrap();
         assert_eq!(inputs.len(), 2);
         assert!(out.is_none());
     }
@@ -115,8 +114,7 @@ mod tests {
         let f1 = dir.path().join("a.cha");
         fs::write(&f1, "content").unwrap();
 
-        let (inputs, out) =
-            resolve_inputs(&[f1.clone()], None, None, true).unwrap();
+        let (inputs, out) = resolve_inputs(&[f1.clone()], None, None, true).unwrap();
         assert_eq!(inputs.len(), 1);
         assert!(out.is_none());
     }
@@ -128,10 +126,7 @@ mod tests {
         fs::create_dir(&in_dir).unwrap();
 
         let (inputs, out) = resolve_inputs(
-            &[
-                in_dir.clone(),
-                PathBuf::from("/tmp/nonexistent_output_dir"),
-            ],
+            &[in_dir.clone(), PathBuf::from("/tmp/nonexistent_output_dir")],
             None,
             None,
             false,
@@ -148,13 +143,8 @@ mod tests {
         let f1 = dir.path().join("a.cha");
         fs::write(&f1, "content").unwrap();
 
-        let (inputs, out) = resolve_inputs(
-            &[f1.clone()],
-            Some(Path::new("/tmp/out")),
-            None,
-            false,
-        )
-        .unwrap();
+        let (inputs, out) =
+            resolve_inputs(&[f1.clone()], Some(Path::new("/tmp/out")), None, false).unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(out.as_deref(), Some(Path::new("/tmp/out")));
     }

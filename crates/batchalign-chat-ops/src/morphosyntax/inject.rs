@@ -193,7 +193,7 @@ pub fn inject_results(
                 }
 
                 crate::retokenize::retokenize_utterance(
-                    &parser,
+                    parser,
                     utt,
                     &words,
                     &tokens,

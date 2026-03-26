@@ -11,8 +11,8 @@
 
 mod common;
 
-use std::collections::BTreeSet;
 use batchalign_app::api::{LanguageCode3, ReleasedCommand, WorkerLanguage};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -663,9 +663,7 @@ macro_rules! require_python {
     () => {{
         let available_mb = batchalign_app::worker::memory_guard::available_memory_mb();
         if available_mb < 4096 {
-            eprintln!(
-                "SKIP: insufficient memory ({available_mb} MB available, 4096 MB required)"
-            );
+            eprintln!("SKIP: insufficient memory ({available_mb} MB available, 4096 MB required)");
             return;
         }
         match resolve_python() {

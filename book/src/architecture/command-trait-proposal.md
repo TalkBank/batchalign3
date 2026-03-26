@@ -1,12 +1,17 @@
 # ADR: Command Trait for Full-Lifecycle Command Definition
 
-**Status:** Draft — awaiting validation from Houjun's compare implementation
-**Last updated:** 2026-03-24 21:21 EDT
+**Status:** Draft — superseded in practice by the compare reset and recipe-runner spike
+**Last updated:** 2026-03-26 14:05 EDT
+
+> **Status note:** This proposal remains useful as a critique target, but the
+> current rewrite spike recommends the recipe-driven replacement in
+> [`recipe-runner-architecture.md`](recipe-runner-architecture.md).
 
 ## Problem
 
-Adding a new batchalign3 command requires touching **11 files** across 5 crates,
-with no compile-time guarantee that all registration points are consistent:
+At the time this proposal was written, adding a new batchalign3 command
+required touching **11 files** across 5 crates, with no compile-time guarantee
+that all registration points were consistent:
 
 | # | File | What you add |
 |---|------|-------------|
@@ -24,6 +29,13 @@ with no compile-time guarantee that all registration points are consistent:
 
 If any of these are missed or inconsistent, the error surfaces at runtime (wrong
 dispatch, missing capability, silent no-op) rather than at compile time.
+
+The current spike has already reduced some of this spread by moving
+released-command ownership into `crates/batchalign-app/src/commands/`, keeping
+family metadata in `command_family.rs`, and deleting the old `src/workflow/`
+tree entirely. That helps, but it still does not rescue the
+monolithic-command-trait idea itself; the deeper architectural critique in this
+document still stands.
 
 ### Reference: talkbank-tools
 
@@ -203,7 +215,7 @@ impl Command for CompareCommand {
 }
 ```
 
-The existing `CompareWorkflow` and `MainAnnotatedCompareMaterializer` become
+The existing `CompareWorkflow` and compare materializers become
 implementation details inside `execute()` — the trait provides the public
 contract.
 
@@ -230,18 +242,18 @@ No string matching. The `EngineBackend` trait ensures all engines implement
 
 The trait is **additive** — it does not require rewriting existing commands.
 
-1. **Phase 0 (now):** This design doc. Houjun validates against compare.
+1. **Phase 0 (now):** This design doc. Compare is the validation target.
 2. **Phase 1:** Define the trait and `CommandServices` in `batchalign-app`.
 3. **Phase 2:** Implement `Command` for one simple command (e.g., morphotag)
    alongside the existing dispatch. Both paths work.
-4. **Phase 3:** Implement for compare (Houjun's first real use case).
+4. **Phase 3:** Implement for compare (the first real reference-projection use case).
 5. **Phase 4:** Migrate remaining commands one at a time.
 6. **Phase 5:** Remove legacy dispatch match arms once all commands are migrated.
 
 At each phase, both old and new commands coexist. The runner checks the trait
 registry first, falls back to the legacy descriptor registry.
 
-## Open questions for Houjun
+## Open questions for compare
 
 1. **Input shape:** Does `Vec<InputFile>` with an optional `companion` field
    work for compare's gold-file pairing? Or does compare need a fundamentally

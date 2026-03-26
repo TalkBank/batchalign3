@@ -319,8 +319,12 @@ mod tests {
 
     #[test]
     fn benchmark_is_treated_as_local_audio_command() {
-        assert!(released_command_uses_local_audio(ReleasedCommand::Benchmark));
-        assert!(released_command_uses_local_audio(ReleasedCommand::Transcribe));
+        assert!(released_command_uses_local_audio(
+            ReleasedCommand::Benchmark
+        ));
+        assert!(released_command_uses_local_audio(
+            ReleasedCommand::Transcribe
+        ));
         assert!(!released_command_uses_local_audio(
             ReleasedCommand::Morphotag
         ));

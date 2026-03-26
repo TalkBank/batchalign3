@@ -6,7 +6,10 @@
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
 use crate::common::{poll_job_done, require_live_server, submit_and_complete};
-use batchalign_app::api::{ReleasedCommand, FilePayload, JobStatus, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers};
+use batchalign_app::api::{
+    FilePayload, JobStatus, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers,
+    ReleasedCommand,
+};
 use batchalign_app::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 use batchalign_app::worker::InferTask;
 

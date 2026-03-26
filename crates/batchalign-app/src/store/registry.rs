@@ -246,7 +246,7 @@ impl JobRegistry {
                     .map(|conflict| crate::error::ConflictDetail {
                         filename: conflict.filename,
                         job_id: conflict.job_id,
-                        command: conflict.command.into(),
+                        command: conflict.command,
                         status: conflict.status,
                     })
                     .collect();

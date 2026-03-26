@@ -50,7 +50,7 @@ impl JobStore {
         };
         let job_id = job.identity.job_id.clone();
         let correlation_id = job.identity.correlation_id.clone();
-        let command = job.dispatch.command.clone();
+        let command = job.dispatch.command;
         let total_files = job.total_files();
         self.registry.insert_checked(job).await?;
 

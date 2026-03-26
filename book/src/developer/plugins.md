@@ -1,5 +1,8 @@
 # Plugin Architecture (Removed)
 
+**Status:** Current
+**Last updated:** 2026-03-26 14:05 EDT
+
 > **Status: Removed (March 2026).** The plugin system (`batchalign.plugins`,
 > `PluginDescriptor`, `InferenceProvider`, `discover_plugins()`) was deleted.
 > The only plugin that existed (`batchalign-hk-plugin`) was folded into the
@@ -34,10 +37,12 @@ To add a new inference engine, use the built-in engine pattern documented in
 5. Add provider/runtime dependencies to the base package if the engine is part
    of the supported built-in surface
 
-If you are adding a new command workflow, do not reach for a plugin system.
-Put the workflow in `crates/batchalign-app/src/workflow/` and keep the engine
-as a provider for that workflow. Workflow composition now happens in Rust,
-explicitly, not through late-bound plugin discovery.
+If you are adding a new command, do not reach for a plugin system. Put the
+released command in `crates/batchalign-app/src/commands/` and keep any
+algorithmic or orchestration logic in the owning Rust module (`compare.rs`,
+`benchmark.rs`, `transcribe/`, `fa/`, `morphosyntax/`, etc.). Engines remain
+providers for Rust-owned command flows; command composition does not happen
+through late-bound plugin discovery.
 
 For a real-world example of this pattern, see the HK engines in
 `batchalign/inference/hk/` and the

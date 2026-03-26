@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 **Status:** Current
-**Last modified:** 2026-03-21 15:30 EDT
+**Last modified:** 2026-03-26 07:32 EDT
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -332,6 +332,9 @@ contributor-facing documentation comments.
 - Use `typing.NewType` (e.g., `TimestampMs = NewType("TimestampMs", int)`) or Pydantic constrained types at module/IPC boundaries. For lightweight internal use, `type` aliases are acceptable when they clarify intent.
 - Domain types already defined in `_domain_types.py`: `AudioPath`, `NumSpeakers`, `SpeakerId`, `TimestampMs`. Use these instead of bare `str`/`int`.
 - Parse raw strings into typed values at the boundary (CLI args, IPC, file I/O). Interior code should never handle raw strings for typed values.
+- New semantic strings introduced for intermediate artifacts or serializers must
+  also be typed. Tier labels, token payloads, POS labels, CSV metric keys, and
+  similar boundaries do not get to hide inside ad hoc `str` variables.
 - **No ad-hoc format parsing.** Use real parsers (JSON: `json`, XML: `xml.etree`, etc.) not regex or string splitting for structured formats. Regex is for flat text only (normalization, search, validation).
 
 ### Boundary Hygiene
@@ -360,6 +363,13 @@ uv run mypy
 
 - **Parsing**: Use `batchalign_core` Rust functions. These parse CHAT into a proper AST, manipulate it, and re-serialize correctly.
 - **Never** use regex, string splitting, or line-by-line processing to extract or modify CHAT content. If `batchalign_core` doesn't expose the data you need, add a new Rust function.
+- **Serializer-owned boundaries only**: if you need new CHAT tiers or other
+  structured output, define explicit pre-serialization models first and lower
+  them once at the boundary. Do not drive semantics from already serialized CHAT
+  lines or user-defined tier text.
+- **Parity is semantic, not textual**: when matching legacy behavior, compare the
+  meaning and typed output model, not the legacy implementation shell. Do not
+  copy `Document`/string architecture when the AST can express the intent.
 
 ## Rust Extension (`batchalign_core`)
 
@@ -601,7 +611,17 @@ For all Rust code in `crates/` and `pyo3/`.
 - **File paths:** Use `std::path::Path`/`PathBuf`, not `&str`/`String`. Convert to strings only at IPC/JSON boundaries via `to_string_lossy()`.
 - **Boundary conversion:** Parse raw strings into newtypes at entry points (HTTP handlers, CLI flags, JSON deserialization) using `TryFrom` or `try_new()`. Interior code never handles raw primitives for typed values. `Deref<Target=str>` enables zero-friction coercion where `&str` is needed.
 - **Well-known constants:** For frequently-used validated values, provide named factory methods (e.g., `LanguageCode3::eng()`, `LanguageCode3::spa()`) instead of `From<&str>`. These are infallible by construction and eliminate scattered string literals.
+- **New serializer boundaries count too:** if you add a new semantic string in a
+  tier model, CSV row model, filename part, or other intermediate output shape,
+  wrap it in a named type instead of smuggling it through `String`.
 - **No ad-hoc format parsing.** Use real parsers, not regex or string splitting for structured formats.
+- **Structured output must have structured models:** introduce explicit
+  intermediate types for CHAT tier payloads, CSV rows/tables, JSON payloads,
+  etc., then serialize once with the right tool (`WriteChat`, `csv`, `serde`,
+  ...). Do not build structured artifacts by concatenating strings.
+- **Legacy parity is semantic:** use tests and live oracles to match BA2
+  behavior, but do not import BA2's lossy string/document architecture into the
+  Rust codebase.
 - See `book/src/architecture/type-driven-design.md` for the full pattern catalog and boundary conversion recipes.
 
 ### File Size Limits

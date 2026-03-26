@@ -320,8 +320,14 @@ fn stage_infer<'a, 'ctx>(ctx: &'a mut MorphosyntaxPipelineContext<'ctx>) -> Stag
         ctx.miss_line_indices = ctx.misses.iter().map(|(idx, ..)| *idx).collect();
         let lang_code = ctx.lang.clone();
         let retokenize = ctx.tokenization_mode == TokenizationMode::StanzaRetokenize;
-        ctx.ud_responses =
-            infer_batch(ctx.services.pool, &ctx.misses, &lang_code, ctx.mwt, retokenize).await?;
+        ctx.ud_responses = infer_batch(
+            ctx.services.pool,
+            &ctx.misses,
+            &lang_code,
+            ctx.mwt,
+            retokenize,
+        )
+        .await?;
         Ok(())
     })
 }

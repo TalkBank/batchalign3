@@ -146,9 +146,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{DisplayPath, UnixTimestamp};
     use crate::db::JobDB;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::store::job::{
         Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity, JobLeaseState,
         JobRuntimeControl, JobScheduleState, JobSourceContext,
@@ -172,7 +172,11 @@ mod tests {
         (store, db, dir)
     }
 
-    pub(super) fn make_job(id: &str, command: crate::api::ReleasedCommand, filenames: Vec<String>) -> Job {
+    pub(super) fn make_job(
+        id: &str,
+        command: crate::api::ReleasedCommand,
+        filenames: Vec<String>,
+    ) -> Job {
         use crate::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
 
         let mut file_statuses = HashMap::new();
@@ -612,13 +616,13 @@ mod tests {
 
     #[test]
     fn auto_max_concurrent_caps_large_hosts() {
-        assert_eq!(auto_max_concurrent_from(28), 8);
+        assert_eq!(auto_max_concurrent_from(28, 8), 8);
     }
 
     #[test]
-    fn auto_max_concurrent_fallback_and_floor() {
-        assert_eq!(auto_max_concurrent_from(0), 2);
-        assert_eq!(auto_max_concurrent_from(1), 2);
-        assert_eq!(auto_max_concurrent_from(4), 4);
+    fn auto_max_concurrent_respects_memory_tier() {
+        assert_eq!(auto_max_concurrent_from(4, 1), 1);
+        assert_eq!(auto_max_concurrent_from(8, 2), 2);
+        assert_eq!(auto_max_concurrent_from(4, 8), 4);
     }
 }

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use super::*;
 use std::fs;
+use std::path::PathBuf;
 
 #[test]
 fn discover_filters_by_extension() {
@@ -86,7 +86,13 @@ fn copy_nonmatching_skips_generation() {
     let out = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("a.txt"), "txt").unwrap();
 
-    copy_nonmatching(dir.path(), out.path(), &["mp3"], ReleasedCommand::Transcribe).unwrap();
+    copy_nonmatching(
+        dir.path(),
+        out.path(),
+        &["mp3"],
+        ReleasedCommand::Transcribe,
+    )
+    .unwrap();
     assert!(!out.path().join("a.txt").exists());
 }
 
@@ -154,12 +160,8 @@ fn discover_server_inputs_dir_and_file() {
     fs::write(&loose, "@Begin\n@End").unwrap();
 
     let out = tempfile::tempdir().unwrap();
-    let inputs = vec![
-        sub.to_path_buf(),
-        loose.to_path_buf(),
-    ];
-    let (files, outputs) =
-        discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
+    let inputs = vec![sub.to_path_buf(), loose.to_path_buf()];
+    let (files, outputs) = discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
     assert_eq!(files.len(), 2);
     assert_eq!(outputs.len(), 2);
 }
@@ -172,8 +174,7 @@ fn discover_server_inputs_file_only() {
 
     let out = tempfile::tempdir().unwrap();
     let inputs = vec![f.to_path_buf()];
-    let (files, outputs) =
-        discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
+    let (files, outputs) = discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(outputs.len(), 1);
     assert_eq!(
@@ -237,10 +238,7 @@ fn infer_base_dir_multiple_files() {
     fs::write(&a, "x").unwrap();
     fs::write(&b, "y").unwrap();
 
-    let inputs = vec![
-        a.to_path_buf(),
-        b.to_path_buf(),
-    ];
+    let inputs = vec![a.to_path_buf(), b.to_path_buf()];
     let base = infer_base_dir(&inputs).unwrap();
     // Common ancestor of two files in the same dir → that dir
     let canonical_dir = fs::canonicalize(dir.path()).unwrap();
@@ -284,10 +282,7 @@ fn build_server_names_individual_files() {
     let oa = dir.path().join("out_a.cha");
     let ob = dir.path().join("out_b.cha");
 
-    let inputs = vec![
-        a.to_path_buf(),
-        b.to_path_buf(),
-    ];
+    let inputs = vec![a.to_path_buf(), b.to_path_buf()];
     let (names, result_map) =
         build_server_names(&[a, b], &[oa.clone(), ob.clone()], &inputs).unwrap();
     assert_eq!(names.len(), 2);
@@ -519,8 +514,7 @@ fn discover_server_inputs_recursive_with_output() {
     make_nested_tree(dir.path());
 
     let inputs = vec![dir.path().to_path_buf()];
-    let (files, outputs) =
-        discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
+    let (files, outputs) = discover_server_inputs(&inputs, Some(out.path()), &["cha"]).unwrap();
 
     assert_eq!(files.len(), 4);
     assert_eq!(outputs.len(), 4);

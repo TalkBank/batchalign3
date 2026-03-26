@@ -278,8 +278,15 @@ async fn e2e_override_cache_option() {
         content: MINIMAL_CHAT.into(),
     }];
 
-    let (info, _results) =
-        run_job_to_completion(&client, &base_url, ReleasedCommand::Transcribe, "eng", files, options).await;
+    let (info, _results) = run_job_to_completion(
+        &client,
+        &base_url,
+        ReleasedCommand::Transcribe,
+        "eng",
+        files,
+        options,
+    )
+    .await;
 
     assert_eq!(info.status, JobStatus::Completed);
 }
@@ -305,8 +312,15 @@ async fn e2e_retokenize_option() {
         content: MINIMAL_CHAT.into(),
     }];
 
-    let (info, _results) =
-        run_job_to_completion(&client, &base_url, ReleasedCommand::Transcribe, "eng", files, options).await;
+    let (info, _results) = run_job_to_completion(
+        &client,
+        &base_url,
+        ReleasedCommand::Transcribe,
+        "eng",
+        files,
+        options,
+    )
+    .await;
 
     assert_eq!(info.status, JobStatus::Completed);
 }
@@ -445,7 +459,11 @@ async fn e2e_invalid_command_rejected() {
         .await
         .expect("POST /jobs");
 
-    assert_eq!(resp.status(), 422, "Unknown command should be rejected at deserialization");
+    assert_eq!(
+        resp.status(),
+        422,
+        "Unknown command should be rejected at deserialization"
+    );
 }
 
 /// Malformed CHAT content still completes (test-echo returns it unchanged).

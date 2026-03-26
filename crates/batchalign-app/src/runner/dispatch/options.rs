@@ -21,8 +21,8 @@
 use crate::api::DurationMs;
 #[allow(unused_imports)]
 use crate::options::{
-    AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions,
-    MorphotagOptions, OpensmileOptions, TranscribeOptions, UtrEngine, UtrOverlapStrategy,
+    AlignOptions, AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, MorphotagOptions,
+    OpensmileOptions, TranscribeOptions, UtrEngine, UtrOverlapStrategy,
 };
 use crate::params::{CachePolicy, FaParams, MergeAbbrevPolicy, WorTierPolicy};
 use batchalign_chat_ops::fa::{FaEngineType, FaTimingMode};
@@ -311,20 +311,11 @@ mod tests {
         assert_eq!(p2.utr_engine, None);
 
         let p3 = extract_fa_dispatch_params(
-            &align_opts(
-                "wav2vec_fa",
-                Some(UtrEngine::HkTencent),
-                false,
-                true,
-                false,
-            ),
+            &align_opts("wav2vec_fa", Some(UtrEngine::HkTencent), false, true, false),
             CachePolicy::UseCache,
         )
         .unwrap();
-        assert_eq!(
-            p3.utr_engine,
-            Some(UtrEngine::HkTencent)
-        );
+        assert_eq!(p3.utr_engine, Some(UtrEngine::HkTencent));
     }
 
     #[test]
@@ -417,10 +408,7 @@ mod tests {
         });
 
         let params = extract_transcribe_dispatch_params(&opts).unwrap();
-        assert_eq!(
-            params.asr_engine,
-            AsrEngineName::HkTencent
-        );
+        assert_eq!(params.asr_engine, AsrEngineName::HkTencent);
     }
 
     // =======================================================================
@@ -491,10 +479,7 @@ mod tests {
         });
 
         let params = extract_benchmark_dispatch_params(&opts).unwrap();
-        assert_eq!(
-            params.asr_engine,
-            AsrEngineName::HkAliyun
-        );
+        assert_eq!(params.asr_engine, AsrEngineName::HkAliyun);
     }
 
     // =======================================================================

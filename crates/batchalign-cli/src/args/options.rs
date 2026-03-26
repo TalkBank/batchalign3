@@ -23,9 +23,8 @@ use super::{
 ///
 /// Rejects unknown keys and invalid engine names at parse time.
 pub(crate) fn parse_engine_overrides_json(input: &str) -> Result<EngineOverrides, String> {
-    serde_json::from_str::<EngineOverrides>(input).map_err(|error| {
-        format!("invalid --engine-overrides JSON: {error}")
-    })
+    serde_json::from_str::<EngineOverrides>(input)
+        .map_err(|error| format!("invalid --engine-overrides JSON: {error}"))
 }
 
 /// Parse an optional JSON string into typed `EngineOverrides`.
@@ -104,7 +103,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
     match cmd {
         Commands::Align(a) => {
             let fa_engine = if let Some(engine) = a.fa_engine_custom.as_deref() {
-                FaEngineName::from_wire_name(&engine).ok()?
+                FaEngineName::from_wire_name(engine).ok()?
             } else if a.whisper_fa {
                 // BA2 compat alias
                 FaEngineName::Whisper
@@ -116,7 +115,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
             };
             let utr_engine = if a.utr && !a.no_utr {
                 let utr = if let Some(engine) = a.utr_engine_custom.as_deref() {
-                    AppUtrEngine::from_wire_name(&engine).ok()?
+                    AppUtrEngine::from_wire_name(engine).ok()?
                 } else if a.whisper && !a.rev {
                     // BA2 compat alias
                     AppUtrEngine::Whisper
@@ -163,7 +162,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
         }
         Commands::Transcribe(a) => {
             let asr_engine = if let Some(engine) = a.asr_engine_custom.as_deref() {
-                AsrEngineName::from_wire_name(&engine).ok()?
+                AsrEngineName::from_wire_name(engine).ok()?
             } else if a.whisperx {
                 // BA2 compat alias
                 AsrEngineName::WhisperX
@@ -229,7 +228,7 @@ pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<Comman
         })),
         Commands::Benchmark(a) => {
             let asr_engine = if let Some(engine) = a.asr_engine_custom.as_deref() {
-                AsrEngineName::from_wire_name(&engine).ok()?
+                AsrEngineName::from_wire_name(engine).ok()?
             } else if a.whisper_oai {
                 // BA2 compat alias
                 AsrEngineName::WhisperOai

@@ -1,7 +1,7 @@
 # Worker Tuning
 
 **Status:** Current
-**Last modified:** 2026-03-24 21:21 EDT
+**Last updated:** 2026-03-26 15:16 EDT
 
 This page explains how the server decides how many workers to run, how memory
 budgets work, and how to configure warmup and tuning for your hardware.
@@ -49,7 +49,7 @@ GPU, file N+1 can do post-processing, utseg, or morphosyntax on CPU. The GPU
 itself serializes inference, but pipeline stages overlap. On a machine with
 256 GB RAM, the coordinator may grant 4–8 parallel files for transcribe.
 
-## Worker profiles
+## Worker profiles and host bootstrap mode
 
 The server groups related commands into three worker profiles that share loaded
 models within a single process:
@@ -60,10 +60,17 @@ models within a single process:
 | **Stanza** | `morphotag`, `utseg`, `coref`, `compare` | Stanza NLP models (POS, constituency, coreference) |
 | **IO** | `translate`, `opensmile`, `avqi` | Lightweight translation and audio analysis |
 
-This means running `align` followed by `transcribe` reuses the same GPU worker
-process — the ASR model loaded for transcription stays in memory and the FA
-model for alignment lives in the same process. On a 64 GB machine, this saves
-roughly 3 GB compared to loading each model in a separate process.
+On large machines, this means running `align` followed by `transcribe` reuses
+the same GPU worker process — the ASR model loaded for transcription stays in
+memory and the FA model for alignment lives in the same process. On a 64 GB
+machine, this saves roughly 3 GB compared to loading each model in a separate
+process.
+
+On **small-memory hosts**, the server now resolves a different host execution
+policy: local workers use **task bootstrap** instead of full profile bootstrap.
+That lets a weak laptop load only `infer:asr` or `infer:morphosyntax` instead
+of speculatively loading every model in a profile. The machine trades some
+reuse for a much lower idle footprint.
 
 GPU workers handle multiple requests concurrently via internal threading. When
 processing 10 files with `align`, four alignment requests run in parallel
@@ -114,8 +121,11 @@ batchalign3 serve start --warmup align          # Only forced alignment
 batchalign3 serve start --warmup morphotag,align  # Both morphotag and align
 ```
 
-Without `--warmup`, the server uses `warmup_commands` from `server.yaml`,
-defaulting to the built-in full preset (`morphotag`, `align`, `transcribe`).
+`warmup_commands` still describes which commands are *eligible* for warmup.
+However, the current production startup path stays lazy by default: real worker
+warmup is normally skipped unless you are using a test-echo or test harness
+path. That matches the current resource-first architecture — small and medium
+machines should not speculatively preload models at process start.
 
 ### server.yaml warmup key
 
@@ -132,8 +142,8 @@ The `--warmup` CLI flag overrides this config key.
 
 ### Background warmup
 
-Warmup runs in the background — the HTTP port binds immediately. While models
-are loading:
+When warmup is actually enabled, it runs in the background — the HTTP port binds
+immediately. While models are loading:
 
 - The `/health` endpoint reports `"warmup_status": "in_progress"`
 - Jobs that need a model still loading will wait for the warmup to finish
@@ -141,8 +151,9 @@ are loading:
 - Once complete, `/health` reports `"warmup_status": "complete"`
 
 Warmup still fans out across commands, but each heavy worker startup must now
-acquire a host-wide startup lease. On shared machines this intentionally
-reduces warmup aggression so background warmup cannot stampede the host.
+acquire a host-wide startup lease. Host policy may also suppress warmup
+entirely, and constrained hosts keep warmup off so background preload cannot
+stampede the machine.
 
 ### On-demand loading
 
@@ -152,6 +163,16 @@ first job that needs them. This is ideal for:
 - Testing and development
 - Users who only run one command type
 - Memory-constrained machines where you don't want idle model overhead
+
+Lazy startup does **not** mean the first real command is allowed to run against
+unknown infer-task metadata. The current server resolves that by forcing a live
+capability probe from the worker it is actually about to use. In practice:
+
+- `/health` may still show an optimistic command surface immediately after boot
+- the first real job pays the worker startup cost and records the detected
+  infer-task/engine-version view
+- later jobs reuse that detected capability view instead of the cold-start
+  placeholder
 
 ## server.yaml reference
 
@@ -212,11 +233,11 @@ warmup_commands: []             # No warmup — workers spawn on demand
 worker_idle_timeout_s: 60       # Small tier default: free memory quickly
 ```
 
-Worker profiles are especially helpful here: the GPU profile loads ASR, FA, and
-speaker models into one process (~5 GB total), rather than spawning separate
-processes that each load their own copy. On a 16 GB machine, this can be the
-difference between running a full `align` pipeline and hitting an out-of-memory
-error.
+The Small tier now also switches local workers to **task bootstrap** and clamps
+eligible file-parallel commands to one file at a time. That keeps the execution
+shape honest for 16 GB laptops: no speculative profile preload, no multi-file
+GPU stampede, and no assumption that the machine can afford idle models it is
+not about to use.
 
 Or start with no warmup:
 

@@ -271,7 +271,8 @@ fn handle_annotated_word_retokenize(word: &mut Word, ctx: &mut RetokenizeContext
     {
         // Only replace if the Stanza token parses as valid CHAT.
         // If it doesn't, keep the original word -- it's already valid.
-        if let Some(parsed) = try_parse_token_as_word(ctx.parser, &token_text, &mut ctx.diagnostics) {
+        if let Some(parsed) = try_parse_token_as_word(ctx.parser, &token_text, &mut ctx.diagnostics)
+        {
             *word = parsed;
         }
     }

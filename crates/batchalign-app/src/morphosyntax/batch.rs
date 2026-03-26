@@ -7,9 +7,7 @@ use crate::cache::{CacheBackend, UtteranceCache};
 use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
-use crate::workflow::text_batch::{
-    TextBatchFileInput, TextBatchFileResult, TextBatchFileResults,
-};
+use crate::text_batch::{TextBatchFileInput, TextBatchFileResult, TextBatchFileResults};
 use batchalign_chat_ops::morphosyntax::{
     BatchItemWithPosition, MwtDict, TokenizationMode, cache_key, clear_morphosyntax,
     collect_payloads, declared_languages, extract_strings, inject_from_cache, inject_results,
@@ -154,8 +152,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             let keys: Vec<CacheKey> = batch_items
                 .iter()
                 .map(|(_, _, item, _)| {
-                    let retokenize =
-                        params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+                    let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
                     cache_key(&item.words, &item.lang, params.mwt, retokenize)
                 })
                 .collect();
@@ -202,13 +199,20 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         Vec::new()
     } else {
         let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
-        match infer_batch(services.pool, &all_misses, params.lang, params.mwt, retokenize).await {
+        match infer_batch(
+            services.pool,
+            &all_misses,
+            params.lang,
+            params.mwt,
+            retokenize,
+        )
+        .await
+        {
             Ok(responses) => {
                 // Debug: dump UD responses
-                services.debug_dumper.dump_morphosyntax_ud_responses(
-                    "batch",
-                    &responses,
-                );
+                services
+                    .debug_dumper
+                    .dump_morphosyntax_ud_responses("batch", &responses);
                 responses
             }
             Err(e) => {
@@ -301,7 +305,10 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             warn!(filename = %filename, errors = ?msgs, "morphotag post-validation warnings (non-fatal)");
         }
 
-        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(chat_file)));
+        results.push(TextBatchFileResult::ok(
+            file.filename.clone(),
+            to_chat_string(chat_file),
+        ));
     }
 
     results

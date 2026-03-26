@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::api::{NumSpeakers, WorkerLanguage};
 use tracing::{error, info, warn};
 
-use crate::worker::WorkerProfile;
+use crate::worker::WorkerTarget;
 use crate::worker::error::WorkerError;
 use crate::worker::handle::{WorkerConfig, WorkerHandle};
 
@@ -55,13 +55,14 @@ impl WorkerPool {
     /// Build a `WorkerConfig` for the given worker profile and worker language.
     pub(super) fn worker_config(
         &self,
-        profile: &WorkerProfile,
+        target: &WorkerTarget,
         lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> WorkerConfig {
         WorkerConfig {
             python_path: self.config.python_path.clone(),
-            profile: *profile,
+            profile: target.profile_kind(),
+            task: target.task(),
             lang: lang.clone(),
             num_speakers: NumSpeakers(1),
             engine_overrides: engine_overrides.to_owned(),
@@ -78,11 +79,11 @@ impl WorkerPool {
     /// Get or create the `WorkerGroup` for a key.
     pub(super) fn get_or_create_group(
         &self,
-        profile: &WorkerProfile,
+        target: &WorkerTarget,
         lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Arc<WorkerGroup> {
-        let key: super::WorkerKey = (*profile, lang.clone(), engine_overrides.to_owned());
+        let key: super::WorkerKey = (*target, lang.clone(), engine_overrides.to_owned());
         let mut groups = super::lock_recovered(&self.groups);
         groups
             .entry(key)
@@ -151,7 +152,7 @@ impl WorkerPool {
     pub(super) async fn try_spawn_into_group(
         &self,
         group: &Arc<WorkerGroup>,
-        profile: &WorkerProfile,
+        target: &WorkerTarget,
         lang: &WorkerLanguage,
         engine_overrides: &str,
     ) -> Result<bool, WorkerError> {
@@ -162,14 +163,14 @@ impl WorkerPool {
         let _bootstrap_guard = group.bootstrap.lock().await;
 
         // Slot claimed -- now spawn. If spawn fails, release the slot.
-        match WorkerHandle::spawn(self.worker_config(profile, lang, engine_overrides)).await {
+        match WorkerHandle::spawn(self.worker_config(target, lang, engine_overrides)).await {
             Ok(mut handle) => {
                 // Lazily detect capabilities from the first spawned worker.
                 // This is a single IPC round-trip on an already-running worker.
-                if self.lazy_capabilities.get().is_none() {
-                    if let Err(e) = self.detect_capabilities_from_worker(&mut handle).await {
-                        tracing::warn!(error = %e, "Failed to detect capabilities from first worker (continuing)");
-                    }
+                if self.lazy_capabilities.get().is_none()
+                    && let Err(e) = self.detect_capabilities_from_worker(&mut handle).await
+                {
+                    tracing::warn!(error = %e, "Failed to detect capabilities from first worker (continuing)");
                 }
                 // Don't use a separate push_spawned (which would double-increment
                 // total). We already incremented via compare_exchange.
@@ -292,7 +293,8 @@ pub(super) async fn run_health_check(
 
             let config = WorkerConfig {
                 python_path: pool_config.python_path.clone(),
-                profile: key.0,
+                profile: key.0.profile_kind(),
+                task: key.0.task(),
                 lang: key.1.clone(),
                 num_speakers: NumSpeakers(1),
                 engine_overrides: key.2.clone(),

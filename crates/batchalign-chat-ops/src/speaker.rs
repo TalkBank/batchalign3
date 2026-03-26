@@ -145,7 +145,7 @@ pub fn reassign_speakers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{parse_strict, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_strict};
     use crate::serialize::to_chat_string;
 
     #[test]

@@ -3,7 +3,9 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api::{ContentType, DisplayPath, FileProgressStage, JobId, ReleasedCommand, UnixTimestamp};
+use crate::api::{
+    ContentType, DisplayPath, FileProgressStage, JobId, ReleasedCommand, UnixTimestamp,
+};
 use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
 use crate::store::{
     AttemptFinishRecord, CompletedFileOutput, FileFailureRecord, FileProgressRecord,

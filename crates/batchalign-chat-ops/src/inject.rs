@@ -93,8 +93,8 @@ pub fn replace_or_add_tier(tiers: &mut SmallVec<[DependentTier; 3]>, new_tier: D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_parser::TreeSitterParser;
     use talkbank_model::model::{ChatFile, Line, WriteChat};
+    use talkbank_parser::TreeSitterParser;
 
     fn parse_chat(text: &str) -> ChatFile {
         let parser = TreeSitterParser::new().unwrap();

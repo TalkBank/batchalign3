@@ -1,0 +1,16 @@
+metric,value
+wer,0.0
+accuracy,1.0
+matches,2
+insertions,0
+deletions,0
+total_gold_words,2
+total_main_words,2
+INTJ:matches,1
+INTJ:insertions,0
+INTJ:deletions,0
+INTJ:total,1
+NOUN:matches,1
+NOUN:insertions,0
+NOUN:deletions,0
+NOUN:total,1

@@ -19,8 +19,8 @@ fn check_version_sync(root: &Path) -> std::result::Result<(), String> {
     let pyproject_path = root.join("pyproject.toml");
     let pyproject_str = std::fs::read_to_string(&pyproject_path)
         .map_err(|e| format!("Cannot read {}: {e}", pyproject_path.display()))?;
-    let pyproject: toml::Value = toml::from_str(&pyproject_str)
-        .map_err(|e| format!("Cannot parse pyproject.toml: {e}"))?;
+    let pyproject: toml::Value =
+        toml::from_str(&pyproject_str).map_err(|e| format!("Cannot parse pyproject.toml: {e}"))?;
     let py_version = pyproject["project"]["version"]
         .as_str()
         .ok_or("pyproject.toml missing [project].version")?;
@@ -28,8 +28,8 @@ fn check_version_sync(root: &Path) -> std::result::Result<(), String> {
     let cargo_path = root.join("crates/batchalign-cli/Cargo.toml");
     let cargo_str = std::fs::read_to_string(&cargo_path)
         .map_err(|e| format!("Cannot read {}: {e}", cargo_path.display()))?;
-    let cargo: toml::Value = toml::from_str(&cargo_str)
-        .map_err(|e| format!("Cannot parse CLI Cargo.toml: {e}"))?;
+    let cargo: toml::Value =
+        toml::from_str(&cargo_str).map_err(|e| format!("Cannot parse CLI Cargo.toml: {e}"))?;
     let cargo_version = cargo["package"]["version"]
         .as_str()
         .ok_or("Cargo.toml missing [package].version")?;
@@ -67,27 +67,81 @@ struct BannedPattern {
 }
 
 const BANNED_PATTERNS: &[BannedPattern] = &[
-    BannedPattern { pattern: "batchalign-next", reason: "retired command name" },
-    BannedPattern { pattern: "batchalign_next", reason: "retired package/module name" },
-    BannedPattern { pattern: "/opt/python/bin/python", reason: "hardcoded interpreter path" },
-    BannedPattern { pattern: "batchalign.cli", reason: "retired Python CLI package path" },
-    BannedPattern { pattern: "pip install 'batchalign-hk-plugin", reason: "retired HK plugin package install guidance" },
-    BannedPattern { pattern: "pip install \"batchalign-hk-plugin", reason: "retired HK plugin package install guidance" },
-    BannedPattern { pattern: "batchalign.providers.models", reason: "nonexistent public module path" },
-    BannedPattern { pattern: "plugin discovery still happens in `batchalign.plugins`", reason: "entry-point plugin discovery was removed" },
-    BannedPattern { pattern: "Entry-point plugin system (`batchalign.plugins`)", reason: "current release has no public entry-point plugin system" },
-    BannedPattern { pattern: "batchalign-hk-plugin/common.py", reason: "retired HK plugin source path in current docs" },
-    BannedPattern { pattern: "batchalign-hk-plugin/cantonese_fa.py", reason: "retired HK plugin source path in current docs" },
+    BannedPattern {
+        pattern: "batchalign-next",
+        reason: "retired command name",
+    },
+    BannedPattern {
+        pattern: "batchalign_next",
+        reason: "retired package/module name",
+    },
+    BannedPattern {
+        pattern: "/opt/python/bin/python",
+        reason: "hardcoded interpreter path",
+    },
+    BannedPattern {
+        pattern: "batchalign.cli",
+        reason: "retired Python CLI package path",
+    },
+    BannedPattern {
+        pattern: "pip install 'batchalign-hk-plugin",
+        reason: "retired HK plugin package install guidance",
+    },
+    BannedPattern {
+        pattern: "pip install \"batchalign-hk-plugin",
+        reason: "retired HK plugin package install guidance",
+    },
+    BannedPattern {
+        pattern: "batchalign.providers.models",
+        reason: "nonexistent public module path",
+    },
+    BannedPattern {
+        pattern: "plugin discovery still happens in `batchalign.plugins`",
+        reason: "entry-point plugin discovery was removed",
+    },
+    BannedPattern {
+        pattern: "Entry-point plugin system (`batchalign.plugins`)",
+        reason: "current release has no public entry-point plugin system",
+    },
+    BannedPattern {
+        pattern: "batchalign-hk-plugin/common.py",
+        reason: "retired HK plugin source path in current docs",
+    },
+    BannedPattern {
+        pattern: "batchalign-hk-plugin/cantonese_fa.py",
+        reason: "retired HK plugin source path in current docs",
+    },
 ];
 
 const DOC_BANNED: &[BannedPattern] = &[
-    BannedPattern { pattern: "batchalign2", reason: "legacy repository/name in active docs" },
-    BannedPattern { pattern: "BA2-usage.pdf", reason: "historical Batchalign2 PDF linked from active docs" },
-    BannedPattern { pattern: "BA2-cleanup.pdf", reason: "historical Batchalign2 PDF linked from active docs" },
-    BannedPattern { pattern: "--whisper-oai", reason: "retired public CLI flag form; use --asr-engine whisper-oai" },
-    BannedPattern { pattern: concat!("rust", "-next/"), reason: "retired public workspace path" },
-    BannedPattern { pattern: "worker.py", reason: "retired Python worker module path in active docs" },
-    BannedPattern { pattern: "test_worker.py", reason: "retired Python test file path in active docs" },
+    BannedPattern {
+        pattern: "batchalign2",
+        reason: "legacy repository/name in active docs",
+    },
+    BannedPattern {
+        pattern: "BA2-usage.pdf",
+        reason: "historical Batchalign2 PDF linked from active docs",
+    },
+    BannedPattern {
+        pattern: "BA2-cleanup.pdf",
+        reason: "historical Batchalign2 PDF linked from active docs",
+    },
+    BannedPattern {
+        pattern: "--whisper-oai",
+        reason: "retired public CLI flag form; use --asr-engine whisper-oai",
+    },
+    BannedPattern {
+        pattern: concat!("rust", "-next/"),
+        reason: "retired public workspace path",
+    },
+    BannedPattern {
+        pattern: "worker.py",
+        reason: "retired Python worker module path in active docs",
+    },
+    BannedPattern {
+        pattern: "test_worker.py",
+        reason: "retired Python test file path in active docs",
+    },
 ];
 
 const DOC_ACTIVE_PREFIXES: &[&str] = &[
@@ -285,7 +339,10 @@ fn check_legacy_terms(root: &Path) -> std::result::Result<(), String> {
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(format!("Legacy term check failed:\n- {}", failures.join("\n- ")))
+        Err(format!(
+            "Legacy term check failed:\n- {}",
+            failures.join("\n- ")
+        ))
     }
 }
 

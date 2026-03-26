@@ -15,7 +15,7 @@
 //! Update snapshots: `cargo insta review`
 
 use crate::common::{assert_completed_without_errors, require_live_server, submit_and_complete};
-use batchalign_app::api::{ReleasedCommand, FilePayload, JobStatus};
+use batchalign_app::api::{FilePayload, JobStatus, ReleasedCommand};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CompareOptions, CorefOptions, MorphotagOptions,
     TranslateOptions, UtsegOptions,

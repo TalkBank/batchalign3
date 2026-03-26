@@ -4,13 +4,16 @@
 //! Callers provide a `&TreeSitterParser` handle — create one per entry point
 //! and share it across all parsing calls. Do not create throwaway handles.
 
-pub use talkbank_parser::TreeSitterParser;
 use talkbank_model::model::ChatFile;
+pub use talkbank_parser::TreeSitterParser;
 
 /// Parse CHAT text leniently (tree-sitter with error recovery).
 ///
 /// Always returns a `ChatFile` (best-effort), plus any parse warnings/errors.
-pub fn parse_lenient(parser: &TreeSitterParser, chat_text: &str) -> (ChatFile, Vec<talkbank_model::ParseError>) {
+pub fn parse_lenient(
+    parser: &TreeSitterParser,
+    chat_text: &str,
+) -> (ChatFile, Vec<talkbank_model::ParseError>) {
     let errors = talkbank_model::ErrorCollector::new();
     let chat_file = parser.parse_chat_file_streaming(chat_text, &errors);
     let error_vec = errors.into_vec();
@@ -18,7 +21,10 @@ pub fn parse_lenient(parser: &TreeSitterParser, chat_text: &str) -> (ChatFile, V
 }
 
 /// Parse CHAT text strictly (tree-sitter, no error recovery).
-pub fn parse_strict(parser: &TreeSitterParser, chat_text: &str) -> Result<ChatFile, talkbank_model::ParseErrors> {
+pub fn parse_strict(
+    parser: &TreeSitterParser,
+    chat_text: &str,
+) -> Result<ChatFile, talkbank_model::ParseErrors> {
     parser.parse_chat_file(chat_text)
 }
 

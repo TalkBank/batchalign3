@@ -40,4 +40,4 @@ pub mod text_result_v2;
 // Re-export wire-format types from types::worker so that
 // `crate::worker::InferTask` etc. continues to resolve.
 pub use crate::types::worker::*;
-pub use target::{WorkerProfile, WorkerTarget};
+pub use target::{WorkerBootstrapMode, WorkerProfile, WorkerTarget};

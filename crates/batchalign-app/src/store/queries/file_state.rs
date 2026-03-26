@@ -265,7 +265,11 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
         store
-            .submit(make_job("job-1", ReleasedCommand::Morphotag, vec!["a.cha".into()]))
+            .submit(make_job(
+                "job-1",
+                ReleasedCommand::Morphotag,
+                vec!["a.cha".into()],
+            ))
             .await
             .unwrap();
 
@@ -292,7 +296,11 @@ mod tests {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = JobStore::new(test_config(), None, tx);
         store
-            .submit(make_job("job-1", ReleasedCommand::Morphotag, vec!["a.cha".into()]))
+            .submit(make_job(
+                "job-1",
+                ReleasedCommand::Morphotag,
+                vec!["a.cha".into()],
+            ))
             .await
             .unwrap();
 

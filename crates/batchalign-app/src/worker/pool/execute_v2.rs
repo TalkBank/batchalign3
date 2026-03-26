@@ -1,15 +1,15 @@
 //! V2 execute dispatch helpers — task mapping and engine override resolution.
 //!
 //! These pure functions bridge the V2 execute protocol (typed per-backend
-//! requests) to the pool's worker-key abstraction (profile + lang + engine
-//! overrides). Extracted from `mod.rs` for browsability.
+//! requests) to the pool's worker-key abstraction (bootstrap target + lang +
+//! engine overrides). Extracted from `mod.rs` for browsability.
 
 use crate::api::WorkerLanguage;
 use crate::types::worker_v2::{
     AsrBackendV2, ExecuteRequestV2, FaBackendV2, InferenceTaskV2, TaskRequestV2,
 };
-use crate::worker::{InferTask, WorkerProfile};
 use crate::worker::error::WorkerError;
+use crate::worker::{InferTask, WorkerBootstrapMode, WorkerTarget};
 
 /// Map a V2 inference task enum to the pool's infer-task vocabulary.
 pub(super) fn infer_task_for_execute_v2(task: InferenceTaskV2) -> Result<InferTask, WorkerError> {
@@ -26,18 +26,19 @@ pub(super) fn infer_task_for_execute_v2(task: InferenceTaskV2) -> Result<InferTa
     }
 }
 
-/// Derive the worker-pool key (profile, lang, engine overrides) for one V2
+/// Derive the worker-pool key (target, lang, engine overrides) for one V2
 /// execute request.
 pub(super) fn execute_v2_worker_key(
     lang: WorkerLanguage,
     request: &ExecuteRequestV2,
     default_engine_overrides: &str,
-) -> Result<(WorkerProfile, WorkerLanguage, String), WorkerError> {
+    bootstrap_mode: WorkerBootstrapMode,
+) -> Result<(WorkerTarget, WorkerLanguage, String), WorkerError> {
     let infer_task = infer_task_for_execute_v2(request.task)?;
     let engine_overrides =
         execute_v2_engine_overrides(request).unwrap_or_else(|| default_engine_overrides.to_owned());
     Ok((
-        WorkerProfile::for_task(infer_task),
+        WorkerTarget::from_infer_task(infer_task, bootstrap_mode),
         lang.clone(),
         engine_overrides,
     ))
@@ -79,9 +80,10 @@ mod tests {
     use super::*;
     use crate::api::LanguageCode3;
     use crate::types::worker_v2::{
-        AsrInputV2, AsrRequestV2, FaTextModeV2, ForcedAlignmentRequestV2, PreparedAudioInputV2,
-        WorkerArtifactIdV2, WorkerRequestIdV2,
+        AsrInputV2, AsrRequestV2, FaTextModeV2, ForcedAlignmentRequestV2, MorphosyntaxRequestV2,
+        PreparedAudioInputV2, WorkerArtifactIdV2, WorkerRequestIdV2,
     };
+    use crate::worker::{WorkerBootstrapMode, WorkerProfile, WorkerTarget};
 
     fn request_with_payload(task: InferenceTaskV2, payload: TaskRequestV2) -> ExecuteRequestV2 {
         ExecuteRequestV2 {
@@ -117,10 +119,11 @@ mod tests {
             WorkerLanguage::from(LanguageCode3::fra()),
             &request,
             r#"{"asr":"tencent"}"#,
+            WorkerBootstrapMode::Profile,
         )
         .unwrap();
 
-        assert_eq!(key.0, WorkerProfile::for_task(InferTask::Asr));
+        assert_eq!(key.0, WorkerTarget::profile(WorkerProfile::Gpu));
         assert_eq!(key.1, WorkerLanguage::from(LanguageCode3::fra()));
         assert_eq!(key.2, r#"{"asr":"whisper"}"#);
     }
@@ -138,12 +141,39 @@ mod tests {
             }),
         );
 
-        let key =
-            execute_v2_worker_key(WorkerLanguage::from(LanguageCode3::eng()), &request, r#"{"fa":"whisper"}"#)
-                .unwrap();
+        let key = execute_v2_worker_key(
+            WorkerLanguage::from(LanguageCode3::eng()),
+            &request,
+            r#"{"fa":"whisper"}"#,
+            WorkerBootstrapMode::Profile,
+        )
+        .unwrap();
 
-        assert_eq!(key.0, WorkerProfile::for_task(InferTask::Fa));
+        assert_eq!(key.0, WorkerTarget::profile(WorkerProfile::Gpu));
         assert_eq!(key.1, WorkerLanguage::from(LanguageCode3::eng()));
         assert_eq!(key.2, r#"{"fa":"wave2vec"}"#);
+    }
+
+    #[test]
+    fn execute_v2_worker_key_uses_task_target_when_requested() {
+        let request = request_with_payload(
+            InferenceTaskV2::Morphosyntax,
+            TaskRequestV2::Morphosyntax(MorphosyntaxRequestV2 {
+                lang: LanguageCode3::eng(),
+                payload_ref_id: WorkerArtifactIdV2::from("payload-1"),
+                item_count: 1,
+                retokenize: false,
+            }),
+        );
+
+        let key = execute_v2_worker_key(
+            WorkerLanguage::from(LanguageCode3::eng()),
+            &request,
+            "",
+            WorkerBootstrapMode::Task,
+        )
+        .unwrap();
+
+        assert_eq!(key.0, WorkerTarget::infer_task(InferTask::Morphosyntax));
     }
 }

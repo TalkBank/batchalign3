@@ -1,10 +1,11 @@
 //! Configuration types for spawning Python worker processes.
 
-use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
+use crate::api::{LanguageCode3, MemoryMb, NumSpeakers, WorkerLanguage};
 use crate::host_memory::HostMemoryRuntimeConfig;
 use crate::revai::load_revai_api_key;
-use crate::worker::WorkerProfile;
+use crate::types::runtime::MemoryTier;
 use crate::worker::python::resolve_python_executable;
+use crate::worker::{InferTask, WorkerBootstrapMode, WorkerProfile, WorkerTarget};
 
 /// Runtime-owned launch inputs for one worker subprocess.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +18,17 @@ pub struct WorkerRuntimeConfig {
     pub gpu_thread_pool_size: u32,
     /// Host-memory coordination settings shared with the worker spawn path.
     pub host_memory: HostMemoryRuntimeConfig,
+    /// Resolved memory tier used for startup reservations and other
+    /// tier-derived worker-launch decisions.
+    pub memory_tier: MemoryTier,
+    /// Host-chosen bootstrap policy for local workers.
+    pub bootstrap_mode: WorkerBootstrapMode,
+    /// Unique identity for the current server instance when it owns spawned
+    /// TCP daemons. `None` means spawned daemons should register as external.
+    pub server_instance_id: Option<String>,
+    /// PID of the current Rust server process when it owns spawned TCP daemons.
+    /// `None` means there is no owning server process to record.
+    pub server_process_id: Option<u32>,
 }
 
 impl Default for WorkerRuntimeConfig {
@@ -28,6 +40,7 @@ impl Default for WorkerRuntimeConfig {
                 .map(|key| key.as_str().to_string()),
             crate::config::ServerConfig::default().gpu_thread_pool_size,
             HostMemoryRuntimeConfig::default(),
+            crate::config::ServerConfig::default().resolved_memory_tier(),
         )
     }
 }
@@ -39,6 +52,7 @@ impl WorkerRuntimeConfig {
         revai_api_key: Option<String>,
         gpu_thread_pool_size: u32,
         host_memory: HostMemoryRuntimeConfig,
+        memory_tier: MemoryTier,
     ) -> Self {
         Self {
             force_cpu,
@@ -47,7 +61,17 @@ impl WorkerRuntimeConfig {
                 .filter(|value| !value.is_empty()),
             gpu_thread_pool_size,
             host_memory,
+            memory_tier,
+            bootstrap_mode: WorkerBootstrapMode::Profile,
+            server_instance_id: None,
+            server_process_id: None,
         }
+    }
+
+    /// Override the host bootstrap mode for worker spawns built from this runtime.
+    pub fn with_bootstrap_mode(mut self, bootstrap_mode: WorkerBootstrapMode) -> Self {
+        self.bootstrap_mode = bootstrap_mode;
+        self
     }
 }
 
@@ -58,6 +82,8 @@ pub struct WorkerConfig {
     pub python_path: String,
     /// Worker profile describing which task group this worker owns.
     pub profile: WorkerProfile,
+    /// Optional infer task for task-targeted bootstrap.
+    pub task: Option<InferTask>,
     /// Worker-runtime language string.
     pub lang: WorkerLanguage,
     /// Number of speakers.
@@ -90,6 +116,7 @@ impl Default for WorkerConfig {
         Self {
             python_path: resolve_python_executable(),
             profile: WorkerProfile::Stanza,
+            task: None,
             lang: WorkerLanguage::from(LanguageCode3::eng()),
             num_speakers: NumSpeakers(1),
             engine_overrides: String::new(),
@@ -101,5 +128,62 @@ impl Default for WorkerConfig {
             analysis_task_timeout_s: 0,
             test_delay_ms: 0,
         }
+    }
+}
+
+impl WorkerConfig {
+    /// Return the actual bootstrap target for this worker spawn.
+    pub fn bootstrap_target(&self) -> WorkerTarget {
+        match self.task {
+            Some(task) => WorkerTarget::infer_task(task),
+            None => WorkerTarget::profile(self.profile),
+        }
+    }
+
+    /// Return the human-readable bootstrap label for logs and status.
+    pub fn bootstrap_label(&self) -> String {
+        self.bootstrap_target().label()
+    }
+
+    /// Resolve the startup reservation for this worker spawn using the
+    /// runtime-owned memory tier rather than raw host auto-detection.
+    pub fn startup_reservation_mb(&self) -> MemoryMb {
+        self.profile
+            .startup_reservation_mb_for_tier(&self.runtime.memory_tier)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerConfig, WorkerRuntimeConfig};
+    use crate::host_memory::HostMemoryRuntimeConfig;
+    use crate::types::runtime::MemoryTier;
+    use crate::worker::{InferTask, WorkerProfile};
+
+    #[test]
+    fn startup_reservation_uses_runtime_memory_tier() {
+        let runtime = WorkerRuntimeConfig::from_sources(
+            false,
+            None,
+            4,
+            HostMemoryRuntimeConfig::default(),
+            MemoryTier::from_total_mb(16_000),
+        );
+        let config = WorkerConfig {
+            profile: WorkerProfile::Stanza,
+            runtime,
+            ..Default::default()
+        };
+        assert_eq!(config.startup_reservation_mb().0, 3_000);
+    }
+
+    #[test]
+    fn bootstrap_target_uses_task_when_present() {
+        let config = WorkerConfig {
+            profile: WorkerProfile::Stanza,
+            task: Some(InferTask::Morphosyntax),
+            ..Default::default()
+        };
+        assert_eq!(config.bootstrap_label(), "infer:morphosyntax");
     }
 }

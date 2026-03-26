@@ -1,19 +1,24 @@
 # Hybrid Workflow Architecture
 
-**Status:** Implemented slice, with follow-up slices planned
-**Last modified:** 2026-03-21 07:27 EDT
+**Status:** Historical
+**Last updated:** 2026-03-26 14:05 EDT
 
-This page describes the architectural direction that is already in the tree and
-the follow-up slices that should continue to evolve from it.
+This page records the intermediate workflow-family slice that preceded the
+current command-owned architecture cutover.
 
-If you prefer reading code first, start at
-[`crates/batchalign-app/src/workflow/mod.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/mod.rs).
-That file is now the entry map only. The split that matters is:
+Contributor-facing ownership has since moved to `crates/batchalign-app/src/commands/`
+and `commands/catalog.rs`. The workflow-family layer described here was an
+intermediate architecture slice; the old `src/workflow/` tree has since been
+deleted and replaced by smaller shared seams such as `command_family.rs` and
+`text_batch.rs`.
+
+If you prefer reading code first today, start at
+`crates/batchalign-app/src/commands/mod.rs` and `commands/catalog.rs`. The
+historical split documented in this page was:
 
 - [`crates/batchalign-app/src/workflow/traits.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/traits.rs)
   for workflow families
-- [`crates/batchalign-app/src/workflow/registry.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/registry.rs)
-  for the released command catalog
+- `workflow/registry.rs` for the then-contributor-facing released command catalog
 
 The goal is not to make batchalign3 "more like BA2." The goal is to recover the
 parts of BA2 that made workflows easy to understand and extend, while keeping
@@ -25,7 +30,7 @@ the runtime and systems advantages that BA3 already has:
 - cross-file batching
 - explicit job lifecycle management
 
-The motivating case is Houjun's `compare` redesign on `batchalign2-master`
+The motivating case is the later `compare` redesign on `batchalign2-master`
 (`1f224df346c2ec590d45afa31136a3b878db622b`), but the proposal is broader than
 `compare`.
 
@@ -58,7 +63,7 @@ The first concrete slice now exists under the registry and family traits in:
 - [`crates/batchalign-app/src/workflow/compare.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/compare.rs)
 - [`crates/batchalign-app/src/workflow/benchmark.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/benchmark.rs)
 
-## The Stress Test: Houjun's New Compare
+## The Stress Test: Later BA2 Compare
 
 The new BA2 compare redesign is a useful architectural stress test because it is
 not just "a better algorithm." It changes the shape of the workflow.
@@ -107,10 +112,12 @@ The architectural lesson is that batchalign needs to represent:
 
 That is the harbinger of future work, not an isolated compare issue.
 
-## Code-First Entry Point
+## Code-First Entry Point (historical slice)
 
-The registry in `workflow/registry.rs` is the contributor-facing map from command
-name to workflow family and worker capability:
+At the time of this slice, the registry in `workflow/registry.rs` was the
+contributor-facing map from command name to workflow family and worker
+capability. In the current tree, that role belongs to `commands/catalog.rs`,
+with `workflow/registry.rs` preserved as a compatibility facade.
 
 - `released_command_workflows()` is the single list of released command
   descriptors.
@@ -124,7 +131,7 @@ name to workflow family and worker capability:
 
 ```mermaid
 flowchart TD
-    registry["workflow/registry.rs\nreleased_command_workflows()"]
+    registry["workflow/registry.rs\nhistorical command catalog"]
     traits["workflow/traits.rs\nMaterializer / PerFileWorkflow / CrossFileBatchWorkflow /\nReferenceProjectionWorkflow / CompositeWorkflow"]
     transcribe["transcribe.rs\nper-file transform"]
     fa["fa.rs\nper-file transform"]
@@ -145,14 +152,15 @@ flowchart TD
     traits --> benchmark
 ```
 
-The registry is the right place to answer two questions quickly:
+At that stage, the registry was the right place to answer two questions quickly:
 
 1. Which released command belongs to which family?
 2. Does the server own the command directly or compose it from lower-level
    worker capabilities?
 
-That makes it the best starting point for contributors who want to understand
-workflow shape before reading the surrounding orchestration code.
+Today, the best starting point for contributors is the command-owned module in
+`src/commands/<name>.rs`, with this page kept only as historical context for
+how the transitional workflow-family slice was structured.
 
 ## Current BA3 Reality
 
@@ -263,7 +271,7 @@ that can be materialized in more than one form.
 Examples:
 
 - current `compare`
-- Houjun-style gold-projected compare
+- projected compare
 - future forced normalization against a curated reference
 - future "align model output back onto reviewed transcript" workflows
 
@@ -578,9 +586,9 @@ And it may later want:
 That is exactly the kind of pressure that workflow families plus typed
 materializers are meant to absorb.
 
-## Integration Guidance For Houjun's Future Work
+## Integration Guidance For Future Compare Work
 
-If Houjun starts landing richer compare, analysis, or multi-stage workflows, the
+If compare keeps growing richer analysis or multi-stage workflows, the
 architecture should guide implementation like this:
 
 1. Add or refine a workflow family if the runtime shape is genuinely new.
@@ -622,7 +630,7 @@ only useful if future refactors keep the diagrams and invariants current.
 
 ## Bottom Line
 
-Houjun is right to worry about architecture that can survive growth.
+The concern about architecture that can survive growth is valid.
 
 The answer is not to restore BA2 unchanged, and it is not to keep BA3's current
 command-specific orchestration forever.

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{DurationSeconds, LanguageCode3, ReleasedCommand, WorkerLanguage};
+use crate::api::{DurationSeconds, LanguageCode3, WorkerLanguage};
 
 // ---------------------------------------------------------------------------
 // Domain newtypes (worker-specific)

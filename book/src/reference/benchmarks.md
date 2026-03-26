@@ -1,7 +1,7 @@
 # Benchmarks
 
 **Status:** Current
-**Last updated:** 2026-03-19
+**Last updated:** 2026-03-26 00:52 EDT
 
 Batchalign provides a `benchmark` command to evaluate ASR accuracy against
 gold transcripts. It transcribes each audio file, compares the result
@@ -35,7 +35,7 @@ flowchart LR
     gold["Gold .cha file\n(same directory,\nsame stem)"] --> compare
     transcribe --> morphotag["Morphotag\n(Stanza %mor/%gra)"]
     morphotag --> compare["Stage 2: Compare\n(DP align → WER)"]
-    compare --> output_cha["Output .cha\n(with %xsrep tiers)"]
+    compare --> output_cha["Output .cha\n(with %xsrep / %xsmor tiers)"]
     compare --> output_csv["Output .compare.csv\n(WER metrics)"]
 ```
 
@@ -46,8 +46,8 @@ detection).
 
 **Stage 2 — Compare:** Runs morphosyntax on the transcribed CHAT (to generate
 `%mor`/`%gra`), then DP-aligns the transcribed words against the gold
-transcript words (Hirschberg case-insensitive alignment). Produces `%xsrep`
-tiers and CSV metrics.
+transcript words (Hirschberg case-insensitive alignment). Produces `%xsrep` /
+`%xsmor` tiers and CSV metrics.
 
 ## Gold File Discovery
 
@@ -107,12 +107,14 @@ Two files are produced per input audio file:
 
 ### 1. Hypothesis CHAT file (`{stem}.cha`)
 
-A full CHAT transcript with ASR results plus `%xsrep` comparison tiers.
-Each utterance gets a `%xsrep` dependent tier showing the alignment:
+A full CHAT transcript with ASR results plus `%xsrep` / `%xsmor` comparison
+tiers. Each utterance gets a `%xsrep` dependent tier showing the word
+alignment and a matching `%xsmor` tier showing the POS alignment:
 
 ```
 *PAR:   hello big world today .
 %xsrep: hello [+ main]big world [- gold]today .
+%xsmor: INTJ  +ADJ      NOUN  -?            PUNCT
 ```
 
 - Unmarked words = match (in both hypothesis and gold)
@@ -158,7 +160,7 @@ The `--lang` flag affects ASR engine behavior:
 | WER computation | `crates/batchalign-chat-ops/src/compare.rs` | `compare()` |
 | Word normalization | `crates/batchalign-chat-ops/src/wer_conform.rs` | `conform_words()` |
 | CSV output | `crates/batchalign-chat-ops/src/compare.rs` | `format_metrics_csv()` |
-| %xsrep injection | `crates/batchalign-chat-ops/src/compare.rs` | `inject_comparison()` |
+| %xsrep / %xsmor injection | `crates/batchalign-chat-ops/src/compare.rs` | `inject_comparison()` |
 
 ## See also
 

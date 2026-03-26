@@ -31,7 +31,7 @@ use crate::infer_retry::dispatch_execute_v2_with_retry;
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::pipeline::text_infer::{CachedTextPipelineHooks, run_cached_text_pipeline};
-use crate::workflow::text_batch::{
+use crate::text_batch::{
     TextBatchFileInput, TextBatchFileResult, TextBatchFileResults, TextBatchOperation,
     TextBatchWorkflow, TextBatchWorkflowRequest, TextPerFileWorkflowRequest,
 };
@@ -316,7 +316,10 @@ async fn run_utseg_batch_impl(
                         if !cached.is_empty() {
                             apply_utseg_results(chat_file, cached);
                         }
-                        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(chat_file)));
+                        results.push(TextBatchFileResult::ok(
+                            file.filename.clone(),
+                            to_chat_string(chat_file),
+                        ));
                     }
                 }
                 return results;
@@ -380,7 +383,10 @@ async fn run_utseg_batch_impl(
             warn!(filename = %filename, errors = ?msgs, "utseg post-validation warnings (non-fatal)");
         }
 
-        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(chat_file)));
+        results.push(TextBatchFileResult::ok(
+            file.filename.clone(),
+            to_chat_string(chat_file),
+        ));
     }
 
     results

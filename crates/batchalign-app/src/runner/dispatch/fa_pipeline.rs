@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::api::{
-    ContentType, DurationMs, EngineVersion, DisplayPath, LanguageCode3, NumWorkers, RevAiJobId,
-    UnixTimestamp,
+    DisplayPath, DurationMs, EngineVersion, LanguageCode3, NumWorkers, RevAiJobId, UnixTimestamp,
 };
 use crate::cache::UtteranceCache;
 use crate::options::{CommandOptions, EngineBackend as _};
 use crate::params::{AudioContext, FaParams};
 use crate::pipeline::PipelineServices;
+use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
 use crate::runner::debug_dumper::DebugDumper;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::worker::pool::WorkerPool;
@@ -20,10 +20,10 @@ use tracing::{info, warn};
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 
 use super::super::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_server_error,
-    compute_audio_identity, drain_supervised_file_tasks, get_audio_duration_ms,
-    is_retryable_worker_failure, resolve_audio_for_chat_with_media_dir, spawn_progress_forwarder,
-    spawn_supervised_file_task, user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, classify_server_error, compute_audio_identity,
+    drain_supervised_file_tasks, get_audio_duration_ms, is_retryable_worker_failure,
+    resolve_audio_for_chat_with_media_dir, spawn_progress_forwarder, spawn_supervised_file_task,
+    user_facing_error,
 };
 use super::FaDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -34,7 +34,7 @@ use super::utr::{UtrPassContext, run_utr_pass};
 /// The runner always passes this set together when it hands an `align` job to
 /// the server-owned FA pipeline, so the bundle is the real boundary rather
 /// than eight separate parameters.
-pub(in crate::runner) struct FaDispatchRuntime {
+pub(crate) struct FaDispatchRuntime {
     /// Worker pool used for typed V2 FA requests and any worker-owned UTR work.
     pub pool: Arc<WorkerPool>,
     /// Cache used by FA group reuse and worker result persistence.
@@ -86,7 +86,7 @@ struct FaFileContext<'a> {
 /// concurrently up to `num_workers` at a time, bounded by a semaphore.
 /// Within each file, utterances are grouped into time windows and batched
 /// to the worker.
-pub(in crate::runner) async fn dispatch_fa_infer(
+pub(crate) async fn dispatch_fa_infer(
     job: &RunnerJobSnapshot,
     store: &Arc<JobStore>,
     runtime: FaDispatchRuntime,
@@ -99,12 +99,17 @@ pub(in crate::runner) async fn dispatch_fa_infer(
     let should_merge_abbrev = plan.options.merge_abbrev.should_merge();
     let utr_engine = plan.options.utr_engine;
     let utr_overlap_strategy = plan.options.utr_overlap_strategy;
+    let file_parallelism = runtime
+        .num_workers
+        .0
+        .max(1)
+        .min(plan.kernel_plan.file_parallelism_hint.max(1));
 
     // Read before_paths once for incremental FA
     let before_paths = job.filesystem.before_paths.clone();
 
     // Process files concurrently, bounded by available workers.
-    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.0.max(1)));
+    let file_sem = Arc::new(tokio::sync::Semaphore::new(file_parallelism));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -113,7 +118,10 @@ pub(in crate::runner) async fn dispatch_fa_infer(
             break;
         }
 
-        let Ok(permit) = file_sem.clone().acquire_owned().await else { tracing::warn!("file semaphore closed during shutdown"); break; };
+        let Ok(permit) = file_sem.clone().acquire_owned().await else {
+            tracing::warn!("file semaphore closed during shutdown");
+            break;
+        };
         let store = store.clone();
         let pool = runtime.pool.clone();
         let cache = runtime.cache.clone();
@@ -222,9 +230,6 @@ async fn process_one_fa_file(
         } else {
             job.filesystem.staging_dir.join("input").join(filename)
         };
-    let paths_mode = job.filesystem.paths_mode;
-    let output_paths = job.filesystem.output_paths.clone();
-    let staging_dir = job.filesystem.staging_dir.clone();
     let media_mapping = job.filesystem.media_mapping.clone();
     let media_subdir = job.filesystem.media_subdir.clone();
     let source_dir = job.filesystem.source_dir.clone();
@@ -248,7 +253,7 @@ async fn process_one_fa_file(
     //   2. Source directory (client's original path — works when server shares filesystem)
     //   3. Media roots (server-configured search directories)
     //   4. Alongside staged file (last resort)
-    let original_audio_path = if paths_mode {
+    let original_audio_path = if job.filesystem.paths_mode {
         resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await
     } else {
         let mut found: Option<PathBuf> = None;
@@ -520,12 +525,10 @@ async fn process_one_fa_file(
                     output_text
                 };
 
-                // Write output
-                let write_path = if paths_mode && file_index < output_paths.len() {
-                    apply_result_filename(&output_paths[file_index], filename)
-                } else {
-                    staging_dir.join("output").join(filename)
-                };
+                let primary_output =
+                    primary_output_artifact(job.dispatch.command, &DisplayPath::from(filename));
+                let write_path =
+                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -542,7 +545,11 @@ async fn process_one_fa_file(
                 }
 
                 lifecycle
-                    .complete_with_result(DisplayPath::from(filename), ContentType::Chat, finished_at)
+                    .complete_with_result(
+                        primary_output.display_path.clone(),
+                        primary_output.content_type,
+                        finished_at,
+                    )
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }

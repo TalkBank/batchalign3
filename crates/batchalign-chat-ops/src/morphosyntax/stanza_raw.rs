@@ -343,6 +343,10 @@ mod tests {
         // %gra includes the terminator, %mor does not. The inject path handles
         // this correctly — the terminator GRA is stored in the GraTier and the
         // MOR count check only looks at MOR items vs alignable words.
-        assert_eq!(gras.len(), 7, "GRA should have 6 word relations + 1 terminator PUNCT");
+        assert_eq!(
+            gras.len(),
+            7,
+            "GRA should have 6 word relations + 1 terminator PUNCT"
+        );
     }
 }

@@ -8,16 +8,17 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::warn;
 
+use crate::commands::released_command_workflows;
+use crate::commands::spec::CommandCapabilityKind;
 use crate::config::ServerConfig;
 use crate::error;
 use crate::media::MediaResolver;
 use crate::queue::QueueBackend;
 use crate::runtime_supervisor::{RuntimeSupervisor, ShutdownError, ShutdownSummary};
 use crate::store::JobStore;
-use crate::worker::InferTask;
+use crate::worker::{InferTask, WorkerCapabilities};
 use crate::worker::pool::WorkerPool;
 use crate::worker::target::task_name as infer_task_capability_name;
-use crate::workflow::{CommandCapabilityKind, released_command_workflows};
 use crate::ws::WsEvent;
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,18 @@ pub(crate) struct WorkerSubsystem {
     pub capabilities: Vec<String>,
     /// Infer tasks advertised by the probe worker.
     pub infer_tasks: Vec<InferTask>,
+}
+
+/// One resolved view of worker capability state used by execution-time callers.
+///
+/// The startup path may only know an optimistic command list while the worker
+/// pool has not yet spawned a real backend. Once the pool has lazily probed a
+/// live worker, callers should switch to that detected infer-task/engine view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerCapabilitySnapshot {
+    pub capabilities: Vec<String>,
+    pub infer_tasks: Vec<InferTask>,
+    pub engine_versions: BTreeMap<String, String>,
 }
 
 /// Filesystem roots owned by the server process.
@@ -200,10 +213,39 @@ pub(crate) fn validate_infer_capability_gate(
     Ok(derived)
 }
 
+/// Resolve one capability snapshot, preferring live detected worker data when
+/// the pool has already probed a real backend.
+pub(crate) fn resolve_worker_capability_snapshot(
+    startup_capabilities: &[String],
+    startup_infer_tasks: &[InferTask],
+    startup_engine_versions: &BTreeMap<String, String>,
+    test_echo_mode: bool,
+    detected: Option<&WorkerCapabilities>,
+) -> Result<WorkerCapabilitySnapshot, error::ServerError> {
+    if let Some(detected) = detected {
+        let capabilities = validate_infer_capability_gate(
+            &detected.infer_tasks,
+            &detected.engine_versions,
+            test_echo_mode,
+        )?;
+        return Ok(WorkerCapabilitySnapshot {
+            capabilities,
+            infer_tasks: detected.infer_tasks.clone(),
+            engine_versions: detected.engine_versions.clone(),
+        });
+    }
+
+    Ok(WorkerCapabilitySnapshot {
+        capabilities: startup_capabilities.to_vec(),
+        infer_tasks: startup_infer_tasks.to_vec(),
+        engine_versions: startup_engine_versions.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::validate_infer_capability_gate;
-    use crate::worker::InferTask;
+    use super::{resolve_worker_capability_snapshot, validate_infer_capability_gate};
+    use crate::worker::{InferTask, WorkerCapabilities};
     use std::collections::BTreeMap;
 
     #[test]
@@ -317,5 +359,70 @@ mod tests {
             .expect("test-echo mode should bypass strict infer gate");
         assert!(filtered.iter().any(|command| command == "morphotag"));
         assert!(filtered.iter().any(|command| command == "transcribe"));
+    }
+
+    #[test]
+    fn resolve_worker_capability_snapshot_prefers_live_detected_tasks() {
+        let startup_capabilities = vec!["morphotag".to_string(), "utseg".to_string()];
+        let startup_infer_tasks = Vec::new();
+        let startup_engine_versions = BTreeMap::new();
+        let detected = WorkerCapabilities {
+            commands: Vec::new(),
+            free_threaded: false,
+            infer_tasks: vec![InferTask::Morphosyntax, InferTask::Utseg],
+            engine_versions: BTreeMap::from([
+                ("morphosyntax".to_string(), "stanza-1.10.1".to_string()),
+                ("utseg".to_string(), "stanza-1.10.1".to_string()),
+            ]),
+        };
+
+        let snapshot = resolve_worker_capability_snapshot(
+            &startup_capabilities,
+            &startup_infer_tasks,
+            &startup_engine_versions,
+            false,
+            Some(&detected),
+        )
+        .expect("live detected capabilities should override startup placeholder state");
+
+        assert_eq!(
+            snapshot.capabilities,
+            vec![
+                "morphotag".to_string(),
+                "utseg".to_string(),
+                "compare".to_string(),
+            ]
+        );
+        assert_eq!(
+            snapshot.infer_tasks,
+            vec![InferTask::Morphosyntax, InferTask::Utseg]
+        );
+        assert_eq!(
+            snapshot.engine_versions.get("morphosyntax"),
+            Some(&"stanza-1.10.1".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_worker_capability_snapshot_falls_back_to_startup_when_no_live_data() {
+        let startup_capabilities = vec!["morphotag".to_string()];
+        let startup_infer_tasks = vec![InferTask::Morphosyntax];
+        let startup_engine_versions = BTreeMap::from([(
+            "morphosyntax".to_string(),
+            "stanza-1.9.2".to_string(),
+        )]);
+
+        let snapshot = resolve_worker_capability_snapshot(
+            &startup_capabilities,
+            &startup_infer_tasks,
+            &startup_engine_versions,
+            false,
+            None,
+        )
+        .expect("startup snapshot should still be usable when no live worker was probed");
+
+        assert_eq!(snapshot.capabilities, startup_capabilities);
+        assert_eq!(snapshot.infer_tasks, startup_infer_tasks);
+        assert_eq!(snapshot.engine_versions, startup_engine_versions);
     }
 }

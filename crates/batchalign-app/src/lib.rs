@@ -132,25 +132,29 @@ pub mod types;
 // `types::worker` is NOT re-exported because it conflicts with `crate::worker`
 // (the WorkerHandle/WorkerPool module). Access types::worker items via
 // `crate::types::worker::` or the re-exports below.
-pub use types::{api, config, options, params, runtime, scheduling, traces};
 pub use batchalign_types::domain::ReleasedCommand;
+pub use types::{api, config, options, params, runtime, scheduling, traces};
 
 pub mod benchmark;
 pub mod cache;
+pub(crate) mod command_family;
+pub(crate) mod commands;
 pub mod compare;
 pub mod coref;
 pub mod db;
 pub mod ensure_wav;
 pub mod error;
 pub mod fa;
-pub mod hostname;
 pub mod host_memory;
+pub mod host_policy;
+pub mod hostname;
 mod infer_retry;
 pub mod media;
 pub mod morphosyntax;
 pub mod openapi;
 mod pipeline;
 mod queue;
+pub(crate) mod recipe_runner;
 pub(crate) mod revai;
 pub mod routes;
 pub mod runner;
@@ -159,13 +163,13 @@ pub(crate) mod runtime_supervisor;
 pub mod server;
 pub mod state;
 pub mod store;
+pub(crate) mod text_batch;
 pub mod trace_store;
 pub mod transcribe;
 pub mod translate;
 pub mod utseg;
 pub(crate) mod websocket;
 pub mod worker;
-pub(crate) mod workflow;
 pub mod ws;
 
 // Re-export primary API surface from submodules.
@@ -178,7 +182,7 @@ pub(crate) use websocket::ws_route;
 
 /// Return whether one closed released command requires client-local audio access.
 pub fn released_command_uses_local_audio(command: ReleasedCommand) -> bool {
-    workflow::released_command_uses_local_audio(command)
+    commands::released_command_uses_local_audio(command)
 }
 
 /// Return whether one released command name requires client-local audio access.
@@ -187,5 +191,5 @@ pub fn released_command_uses_local_audio(command: ReleasedCommand) -> bool {
 /// trust boundary. Contributor-facing Rust code should prefer
 /// [`released_command_uses_local_audio`].
 pub fn command_uses_local_audio(command: &str) -> bool {
-    workflow::command_uses_local_audio(command)
+    commands::command_uses_local_audio(command)
 }

@@ -27,10 +27,11 @@ const DEFAULT_TEST_LOCK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Host-wide memory pressure level derived from the current memory snapshot and
 /// reserved headroom.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HostMemoryPressureLevel {
     /// Plenty of free headroom remains after the configured reserve.
+    #[default]
     Healthy,
     /// Some headroom remains, but operators should expect reduced concurrency.
     Guarded,
@@ -38,12 +39,6 @@ pub enum HostMemoryPressureLevel {
     Constrained,
     /// The configured reserve is exhausted or nearly exhausted.
     Critical,
-}
-
-impl Default for HostMemoryPressureLevel {
-    fn default() -> Self {
-        Self::Healthy
-    }
 }
 
 /// Runtime-owned configuration for the machine-local memory ledger.
@@ -62,7 +57,7 @@ impl HostMemoryRuntimeConfig {
     pub fn from_server_config(config: &ServerConfig) -> Self {
         Self {
             coordinator_path: default_host_memory_ledger_path(),
-            reserve_mb: config.memory_gate_mb,
+            reserve_mb: config.resolved_memory_gate_mb(),
             max_concurrent_worker_startups: config.max_concurrent_worker_startups as usize,
         }
     }
@@ -86,8 +81,8 @@ impl Default for HostMemoryRuntimeConfig {
         Self {
             coordinator_path: default_host_memory_ledger_path(),
             reserve_mb: ServerConfig::default().memory_gate_mb,
-            max_concurrent_worker_startups: ServerConfig::default()
-                .max_concurrent_worker_startups as usize,
+            max_concurrent_worker_startups: ServerConfig::default().max_concurrent_worker_startups
+                as usize,
         }
     }
 }
@@ -176,8 +171,11 @@ impl MachineMlTestLock {
     /// binaries release it.
     pub fn acquire(label: &str) -> Result<Self, HostMemoryError> {
         let coordinator = HostMemoryCoordinator::new(HostMemoryRuntimeConfig::default());
-        let lease =
-            coordinator.acquire_ml_test_lock(label, DEFAULT_TEST_LOCK_TIMEOUT, DEFAULT_LOCK_POLL)?;
+        let lease = coordinator.acquire_ml_test_lock(
+            label,
+            DEFAULT_TEST_LOCK_TIMEOUT,
+            DEFAULT_LOCK_POLL,
+        )?;
         Ok(Self { _lease: lease })
     }
 }
@@ -218,7 +216,7 @@ pub enum HostMemoryError {
     #[error(
         "host-memory reserve would be exceeded for {label}: {available_mb} MB available, \
          {pending_reserved_mb} MB already reserved, {requested_mb} MB requested, \
-         {reserve_mb} MB reserved for host headroom"
+         {reserve_mb} MB reserved for host headroom (total RAM: {total_mb} MB)"
     )]
     CapacityRejected {
         /// Human-readable request label.
@@ -231,6 +229,8 @@ pub enum HostMemoryError {
         requested_mb: u64,
         /// Configured reserve that must remain free.
         reserve_mb: u64,
+        /// Total physical RAM observed on this machine.
+        total_mb: u64,
     },
     /// Another local process is already using the exclusive ML test lock.
     #[error("machine-wide ML test lock is already held by {holders:?}")]
@@ -251,7 +251,9 @@ pub enum HostMemoryError {
         max_slots: usize,
     },
     /// Waiting for capacity exceeded the configured timeout.
-    #[error("timed out waiting for host-memory capacity for {label} after {waited_s}s: {last_reason}")]
+    #[error(
+        "timed out waiting for host-memory capacity for {label} after {waited_s}s: {last_reason}"
+    )]
     TimedOut {
         /// Human-readable request label.
         label: String,
@@ -365,6 +367,7 @@ impl HostMemoryCoordinator {
     pub fn acquire_worker_startup_lease(
         &self,
         profile: WorkerProfile,
+        startup_reservation_mb: MemoryMb,
         lang: &WorkerLanguage,
         engine_overrides: &str,
         timeout: Duration,
@@ -372,7 +375,7 @@ impl HostMemoryCoordinator {
     ) -> Result<HostMemoryLease, HostMemoryError> {
         let request = MemoryLeaseRequest {
             kind: MemoryLeaseKind::WorkerStartup,
-            reserved_mb: profile.startup_reservation_mb(),
+            reserved_mb: startup_reservation_mb,
             startup_slot: true,
             label: format!(
                 "worker-startup:{}:{}:{}",
@@ -449,7 +452,8 @@ impl HostMemoryCoordinator {
         let per_worker_budget = runtime::command_execution_budget_mb(command.as_ref());
         with_locked_ledger(&self.config.coordinator_path, |ledger| {
             let system = system_memory_snapshot();
-            let pending_reserved_mb: u64 = ledger.leases.iter().map(|lease| lease.reserved_mb).sum();
+            let pending_reserved_mb: u64 =
+                ledger.leases.iter().map(|lease| lease.reserved_mb).sum();
             let Some((granted_workers, reserved_mb)) = plan_job_reservation(
                 requested_workers.0,
                 per_worker_budget.0,
@@ -465,6 +469,7 @@ impl HostMemoryCoordinator {
                         .0
                         .saturating_mul(requested_workers.0 as u64),
                     reserve_mb: self.config.reserve_mb.0,
+                    total_mb: system.total_mb.0,
                 });
             };
 
@@ -477,7 +482,8 @@ impl HostMemoryCoordinator {
                 label: label.to_owned(),
                 created_at_epoch_s: unix_epoch_s(),
             };
-            let lease = HostMemoryLease::new(self.config.coordinator_path.clone(), record.id.clone());
+            let lease =
+                HostMemoryLease::new(self.config.coordinator_path.clone(), record.id.clone());
             ledger.leases.push(record);
             Ok(JobExecutionPlan {
                 granted_workers: NumWorkers(granted_workers),
@@ -539,7 +545,11 @@ impl HostMemoryCoordinator {
             }
 
             if request.startup_slot {
-                let active_slots = ledger.leases.iter().filter(|lease| lease.startup_slot).count();
+                let active_slots = ledger
+                    .leases
+                    .iter()
+                    .filter(|lease| lease.startup_slot)
+                    .count();
                 if active_slots >= self.config.max_concurrent_worker_startups {
                     return Err(HostMemoryError::StartupSlotsBusy {
                         label: request.label.clone(),
@@ -550,7 +560,8 @@ impl HostMemoryCoordinator {
             }
 
             let system = system_memory_snapshot();
-            let pending_reserved_mb: u64 = ledger.leases.iter().map(|lease| lease.reserved_mb).sum();
+            let pending_reserved_mb: u64 =
+                ledger.leases.iter().map(|lease| lease.reserved_mb).sum();
             let projected_available_mb = system
                 .available_mb
                 .0
@@ -563,6 +574,7 @@ impl HostMemoryCoordinator {
                     pending_reserved_mb,
                     requested_mb: request.reserved_mb.0,
                     reserve_mb: self.config.reserve_mb.0,
+                    total_mb: system.total_mb.0,
                 });
             }
 
@@ -575,7 +587,8 @@ impl HostMemoryCoordinator {
                 label: request.label,
                 created_at_epoch_s: unix_epoch_s(),
             };
-            let lease = HostMemoryLease::new(self.config.coordinator_path.clone(), record.id.clone());
+            let lease =
+                HostMemoryLease::new(self.config.coordinator_path.clone(), record.id.clone());
             ledger.leases.push(record);
             Ok(lease)
         })
@@ -604,10 +617,11 @@ fn with_locked_ledger<T>(
             source,
         })?;
 
-    file.lock_exclusive().map_err(|source| HostMemoryError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    file.lock_exclusive()
+        .map_err(|source| HostMemoryError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
 
     let mut raw = String::new();
     file.read_to_string(&mut raw)
@@ -619,9 +633,11 @@ fn with_locked_ledger<T>(
     let mut ledger = if raw.trim().is_empty() {
         MemoryLedger::default()
     } else {
-        serde_json::from_str::<MemoryLedger>(&raw).map_err(|error| HostMemoryError::CorruptLedger {
-            path: path.to_path_buf(),
-            message: error.to_string(),
+        serde_json::from_str::<MemoryLedger>(&raw).map_err(|error| {
+            HostMemoryError::CorruptLedger {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            }
         })?
     };
 
@@ -638,14 +654,17 @@ fn with_locked_ledger<T>(
             path: path.to_path_buf(),
             source,
         })?;
-    serde_json::to_writer_pretty(&mut file, &ledger).map_err(|error| HostMemoryError::CorruptLedger {
-        path: path.to_path_buf(),
-        message: error.to_string(),
+    serde_json::to_writer_pretty(&mut file, &ledger).map_err(|error| {
+        HostMemoryError::CorruptLedger {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
     })?;
-    file.write_all(b"\n").map_err(|source| HostMemoryError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    file.write_all(b"\n")
+        .map_err(|source| HostMemoryError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     file.sync_all().map_err(|source| HostMemoryError::Io {
         path: path.to_path_buf(),
         source,
@@ -710,12 +729,22 @@ fn plan_job_reservation(
 }
 
 fn retryable_error(error: &HostMemoryError) -> bool {
-    matches!(
-        error,
-        HostMemoryError::CapacityRejected { .. }
-            | HostMemoryError::MlTestLockBusy { .. }
-            | HostMemoryError::StartupSlotsBusy { .. }
-    )
+    match error {
+        HostMemoryError::CapacityRejected {
+            total_mb,
+            requested_mb,
+            reserve_mb,
+            ..
+        } => capacity_rejection_is_retryable(*total_mb, *requested_mb, *reserve_mb),
+        HostMemoryError::MlTestLockBusy { .. } | HostMemoryError::StartupSlotsBusy { .. } => true,
+        HostMemoryError::Io { .. }
+        | HostMemoryError::CorruptLedger { .. }
+        | HostMemoryError::TimedOut { .. } => false,
+    }
+}
+
+fn capacity_rejection_is_retryable(total_mb: u64, requested_mb: u64, reserve_mb: u64) -> bool {
+    requested_mb.saturating_add(reserve_mb) <= total_mb
 }
 
 fn unix_epoch_s() -> u64 {
@@ -744,7 +773,10 @@ fn host_ledger_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostMemoryPressureLevel, plan_job_reservation, pressure_level_for};
+    use super::{
+        HostMemoryError, HostMemoryPressureLevel, plan_job_reservation, pressure_level_for,
+        retryable_error,
+    };
     use crate::api::MemoryMb;
 
     #[test]
@@ -769,32 +801,52 @@ mod tests {
 
     #[test]
     fn job_planner_reduces_worker_count_to_fit_headroom() {
-        let planned = plan_job_reservation(
-            8,
-            6_000,
-            32_000,
-            8_192,
-            0,
-        )
-        .expect("some worker count should fit");
+        let planned =
+            plan_job_reservation(8, 6_000, 32_000, 8_192, 0).expect("some worker count should fit");
         assert_eq!(planned, (3, 18_000));
     }
 
     #[test]
     fn job_planner_accounts_for_pending_reservations() {
-        let planned = plan_job_reservation(
-            4,
-            4_000,
-            24_000,
-            8_192,
-            6_000,
-        )
-        .expect("some worker count should fit");
+        let planned = plan_job_reservation(4, 4_000, 24_000, 8_192, 6_000)
+            .expect("some worker count should fit");
         assert_eq!(planned, (2, 8_000));
     }
 
     #[test]
     fn job_planner_rejects_when_even_one_worker_breaks_reserve() {
         assert!(plan_job_reservation(2, 8_000, 12_000, 8_192, 1_000).is_none());
+    }
+
+    #[test]
+    fn impossible_capacity_rejection_is_not_retryable() {
+        let error = HostMemoryError::CapacityRejected {
+            label: String::from("impossible"),
+            available_mb: 32_000,
+            pending_reserved_mb: 0,
+            requested_mb: 80_000,
+            reserve_mb: 8_192,
+            total_mb: 64_000,
+        };
+        assert!(
+            !retryable_error(&error),
+            "impossible reservations should fail immediately"
+        );
+    }
+
+    #[test]
+    fn capacity_rejection_stays_retryable_when_it_can_fit_later() {
+        let error = HostMemoryError::CapacityRejected {
+            label: String::from("contended"),
+            available_mb: 6_000,
+            pending_reserved_mb: 20_000,
+            requested_mb: 16_000,
+            reserve_mb: 8_192,
+            total_mb: 64_000,
+        };
+        assert!(
+            retryable_error(&error),
+            "requests that could fit later should keep retry semantics"
+        );
     }
 }

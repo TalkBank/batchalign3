@@ -39,9 +39,7 @@ macro_rules! require_python {
     () => {{
         let available_mb = batchalign_app::worker::memory_guard::available_memory_mb();
         if available_mb < 4096 {
-            eprintln!(
-                "SKIP: insufficient memory ({available_mb} MB available, 4096 MB required)"
-            );
+            eprintln!("SKIP: insufficient memory ({available_mb} MB available, 4096 MB required)");
             return;
         }
         match resolve_python() {
@@ -124,10 +122,10 @@ async fn gpu_concurrent_dispatch_all_responses_arrive() {
 
     // Warmup to create the SharedGpuWorker.
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     let n = 8;
@@ -187,10 +185,10 @@ async fn gpu_concurrent_dispatch_shares_same_pid() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     // Get the GPU worker info from the pool summary.
@@ -253,10 +251,10 @@ async fn gpu_sequential_after_concurrent_works() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     // Phase 1: concurrent dispatch (4 requests).
@@ -303,10 +301,10 @@ async fn gpu_health_check_works_after_concurrent_dispatch() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     // Dispatch 4 concurrent requests.
@@ -348,8 +346,12 @@ async fn gpu_stdio_shared_worker_drop_reaps_process() {
 
     let pid = {
         let pool = test_pool(python);
-        pool.pre_scale(ReleasedCommand::Transcribe, WorkerLanguage::from(LanguageCode3::eng()), 1)
-            .await;
+        pool.pre_scale(
+            ReleasedCommand::Transcribe,
+            WorkerLanguage::from(LanguageCode3::eng()),
+            1,
+        )
+        .await;
 
         let entry = pool
             .worker_summary()
@@ -382,10 +384,10 @@ async fn gpu_single_execute_v2_through_pool() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     let request = gpu_execute_request("single-dispatch-test");
@@ -410,10 +412,10 @@ async fn gpu_repeated_execute_v2_through_pool() {
     let pool = test_pool(python);
 
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     for i in 0..5 {
@@ -447,10 +449,10 @@ async fn gpu_dispatch_after_warmup_shutdown_spawns_fallback() {
 
     // Warmup creates a TCP daemon worker.
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     // First dispatch should work.
@@ -557,10 +559,10 @@ async fn gpu_request_with_short_timeout_fails_cleanly() {
 
     // Warmup without delay (so the worker starts).
     pool.warmup(&[batchalign_app::server::WarmupTarget {
-            command: ReleasedCommand::Transcribe,
-            lang: WorkerLanguage::from(LanguageCode3::eng()),
-        }])
-        .await;
+        command: ReleasedCommand::Transcribe,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+    }])
+    .await;
     pool.mark_warmup_complete();
 
     // The execute_v2 timeout for ASR tasks uses audio_task_timeout_s (2s).

@@ -8,10 +8,10 @@ use tokio::sync::Semaphore;
 use tracing::{error, warn};
 
 use crate::ensure_wav;
+use crate::recipe_runner::runtime::{output_write_path, result_display_path_for_command};
 use crate::runner::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_worker_error,
-    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_supervised_file_task,
-    user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, classify_worker_error, drain_supervised_file_tasks,
+    is_retryable_worker_failure, spawn_supervised_file_task, user_facing_error,
 };
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::store::{JobStore, PendingJobFile, RunnerJobSnapshot, unix_now};
@@ -30,7 +30,7 @@ use crate::api::{ContentType, LanguageCode3, NumWorkers};
 use super::MediaAnalysisDispatchPlan;
 
 /// Shared runtime dependencies for top-level media-analysis dispatch.
-pub(in crate::runner) struct MediaAnalysisDispatchRuntime {
+pub(crate) struct MediaAnalysisDispatchRuntime {
     /// Worker pool used for typed V2 media-analysis requests.
     pub pool: Arc<WorkerPool>,
     /// Maximum number of file tasks to run concurrently for this job.
@@ -38,13 +38,22 @@ pub(in crate::runner) struct MediaAnalysisDispatchRuntime {
 }
 
 /// Dispatch per-file media-analysis commands through typed worker protocol V2.
-pub(in crate::runner) async fn dispatch_media_analysis_v2(
+pub(crate) async fn dispatch_media_analysis_v2(
     job: &RunnerJobSnapshot,
     store: &Arc<JobStore>,
     runtime: MediaAnalysisDispatchRuntime,
     plan: MediaAnalysisDispatchPlan,
 ) {
-    let file_sem = Arc::new(Semaphore::new(runtime.num_workers.0.max(1)));
+    let file_parallelism_hint = match &plan {
+        MediaAnalysisDispatchPlan::Opensmile { kernel_plan, .. }
+        | MediaAnalysisDispatchPlan::Avqi { kernel_plan } => kernel_plan.file_parallelism_hint,
+    };
+    let file_parallelism = runtime
+        .num_workers
+        .0
+        .max(1)
+        .min(file_parallelism_hint.max(1));
+    let file_sem = Arc::new(Semaphore::new(file_parallelism));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -52,7 +61,10 @@ pub(in crate::runner) async fn dispatch_media_analysis_v2(
             break;
         }
 
-        let Ok(permit) = file_sem.clone().acquire_owned().await else { tracing::warn!("file semaphore closed during shutdown"); break; };
+        let Ok(permit) = file_sem.clone().acquire_owned().await else {
+            tracing::warn!("file semaphore closed during shutdown");
+            break;
+        };
         let store = store.clone();
         let pool = runtime.pool.clone();
         let job = job.clone();
@@ -109,8 +121,6 @@ async fn process_one_media_analysis_file_v2(
         } else {
             job.filesystem.staging_dir.join("input").join(filename)
         };
-    let output_paths = job.filesystem.output_paths.clone();
-    let staging_dir = job.filesystem.staging_dir.clone();
 
     let retry_policy = RetryPolicy::default();
     for attempt_number in 1..=retry_policy.max_attempts {
@@ -135,11 +145,8 @@ async fn process_one_media_analysis_file_v2(
             Ok((result_filename, output_text, output_type)) => {
                 lifecycle.stage(FileStage::Writing).await;
                 let finished_at = unix_now();
-                let write_path = if job.filesystem.paths_mode && file_index < output_paths.len() {
-                    apply_result_filename(&output_paths[file_index], &result_filename)
-                } else {
-                    staging_dir.join("output").join(&result_filename)
-                };
+                let write_path =
+                    output_write_path(&job.filesystem, file_index, &result_filename.clone().into());
 
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -231,11 +238,14 @@ async fn dispatch_one_media_analysis_attempt(
         })?;
 
     match plan {
-        MediaAnalysisDispatchPlan::Opensmile { feature_set } => {
+        MediaAnalysisDispatchPlan::Opensmile {
+            kernel_plan: _,
+            feature_set,
+        } => {
             dispatch_opensmile_attempt(job, pool, file_index, filename, &audio_path, feature_set)
                 .await
         }
-        MediaAnalysisDispatchPlan::Avqi => {
+        MediaAnalysisDispatchPlan::Avqi { kernel_plan: _ } => {
             dispatch_avqi_attempt(job, pool, file_index, filename, &audio_path).await
         }
     }
@@ -463,25 +473,11 @@ fn format_avqi_report(result: &AvqiResultV2) -> String {
 }
 
 fn opensmile_result_filename(filename: &str) -> String {
-    let path = Path::new(filename);
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    format!("{stem}.opensmile.csv")
+    result_display_path_for_command(crate::api::ReleasedCommand::Opensmile, filename).to_string()
 }
 
 fn avqi_result_filename(filename: &str) -> String {
-    let basename = Path::new(filename)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
-    let lower = basename.to_ascii_lowercase();
-    if let Some(idx) = lower.find(".cs.") {
-        return format!("{}.avqi.txt", &basename[..idx]);
-    }
-    let stem = Path::new(filename)
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy();
-    format!("{stem}.avqi.txt")
+    result_display_path_for_command(crate::api::ReleasedCommand::Avqi, filename).to_string()
 }
 
 fn resolve_avqi_sv_path(cs_audio_path: &Path) -> Option<PathBuf> {

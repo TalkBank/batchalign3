@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 use crate::options::{AsrEngineName, CommandOptions};
 use crate::revai::try_revai_language_hint;
 
-use super::domain::{ReleasedCommand, DisplayPath, LanguageCode3, LanguageSpec, NumSpeakers};
+use super::domain::{DisplayPath, LanguageCode3, LanguageSpec, NumSpeakers, ReleasedCommand};
 
 // ---------------------------------------------------------------------------
 // Request models

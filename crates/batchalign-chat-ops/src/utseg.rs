@@ -255,8 +255,8 @@ pub fn split_utterance(utt: Utterance, assignments: &[usize]) -> Vec<Utterance> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_parser::TreeSitterParser;
     use talkbank_model::model::WriteChat;
+    use talkbank_parser::TreeSitterParser;
 
     fn parse_chat(text: &str) -> ChatFile {
         let parser = TreeSitterParser::new().unwrap();

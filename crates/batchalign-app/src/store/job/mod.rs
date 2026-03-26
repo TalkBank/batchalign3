@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{
-    ContentType, DurationSeconds, DisplayPath, FileProgressStage, FileStatusEntry, FileStatusKind,
+    ContentType, DisplayPath, DurationSeconds, FileProgressStage, FileStatusEntry, FileStatusKind,
     JobId, JobInfo, JobListItem, JobStatus, NodeId, ReleasedCommand, UnixTimestamp,
 };
 use crate::scheduling::LeaseRecord;
@@ -481,7 +481,7 @@ impl Job {
         JobInfo {
             job_id: self.identity.job_id.clone(),
             status: self.execution.status,
-            command: self.dispatch.command.clone(),
+            command: self.dispatch.command,
             options: self.dispatch.options.clone(),
             lang: self.dispatch.lang.clone(),
             source_dir: self.source.source_dir.to_string_lossy().into_owned(),
@@ -525,7 +525,7 @@ impl Job {
         JobListItem {
             job_id: self.identity.job_id.clone(),
             status: self.execution.status,
-            command: self.dispatch.command.clone(),
+            command: self.dispatch.command,
             lang: self.dispatch.lang.clone(),
             source_dir: self.source.source_dir.to_string_lossy().into_owned(),
             total_files: self.total_files() as i64,
@@ -585,7 +585,7 @@ impl Job {
                 correlation_id: self.identity.correlation_id.clone(),
             },
             dispatch: RunnerDispatchConfig {
-                command: self.dispatch.command.clone(),
+                command: self.dispatch.command,
                 lang: self.dispatch.lang.clone(),
                 num_speakers: self.dispatch.num_speakers,
                 options: self.dispatch.options.clone(),
@@ -663,7 +663,7 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
                 conflicts.push(ConflictEntry {
                     filename: fn_.clone(),
                     job_id: active.identity.job_id.clone(),
-                    command: active.dispatch.command.clone(),
+                    command: active.dispatch.command,
                     status: active.execution.status,
                 });
             }
@@ -675,10 +675,10 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::api::{CorrelationId, LanguageSpec, NumSpeakers};
     use crate::options::CommandOptions;
     use crate::store::FileStatus;
+    use std::collections::BTreeMap;
 
     /// Build a small queued job for projection and conflict tests.
     fn sample_job(job_id: &str, filenames: &[&str]) -> Job {

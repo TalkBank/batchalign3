@@ -554,7 +554,11 @@ async fn golden_benchmark_eng() {
         JobStatus::Completed,
         "benchmark_eng: job should complete"
     );
-    assert_eq!(outputs.len(), 2, "benchmark_eng: expected csv + chat outputs");
+    assert_eq!(
+        outputs.len(),
+        2,
+        "benchmark_eng: expected csv + chat outputs"
+    );
     assert_eq!(
         count_wor_tiers(&outputs[1]),
         0,

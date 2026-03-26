@@ -1,7 +1,7 @@
 # Alignment Structures and Algorithms
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-26 00:52 EDT
 
 This document inventories all alignment data structures, algorithms, and
 abstractions used in batchalign3 and its upstream dependency `talkbank-tools`.
@@ -280,7 +280,7 @@ enum MatchMode {
 | Caller | Purpose |
 |--------|---------|
 | `benchmark.rs` | WER computation (hypothesis vs reference) |
-| `compare.rs` | Transcript comparison, `%xsrep` tier annotation |
+| `compare.rs` | Transcript comparison, `%xsrep` / `%xsmor` tier annotation |
 | Python `batchalign_core.dp_align` | PyO3 bridge for Python callers |
 
 ### DP Policy

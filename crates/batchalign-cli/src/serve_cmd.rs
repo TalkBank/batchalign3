@@ -19,6 +19,7 @@
 
 use batchalign_app::config::{self, RuntimeLayout, WARMUP_PRESET_FULL, WARMUP_PRESET_MINIMAL};
 use batchalign_app::host_memory::HostMemoryRuntimeConfig;
+use batchalign_app::host_policy::HostExecutionPolicy;
 use batchalign_app::worker::handle::WorkerRuntimeConfig;
 use batchalign_app::worker::pool::PoolConfig;
 
@@ -78,28 +79,32 @@ pub async fn start(
 
     if args.foreground {
         let tier = cfg.resolved_memory_tier();
+        let host_policy = HostExecutionPolicy::from_server_config(&cfg);
         eprintln!("\nStarting server on {}:{}...", cfg.host, cfg.port);
         eprintln!(
-            "Memory tier: {}{} (total: {} GB, headroom: {} GB, stanza: {} GB, gpu: {} GB)\n",
+            "Memory tier: {}{} (total: {} GB, headroom: {} GB, stanza: {} GB, gpu: {} GB, bootstrap: {:?})\n",
             tier.kind,
-            if cfg.memory_tier.is_some() { " (override)" } else { "" },
+            if cfg.memory_tier.is_some() {
+                " (override)"
+            } else {
+                ""
+            },
             tier.total_mb / 1000,
             tier.headroom_mb.0 / 1000,
             tier.stanza_startup_mb.0 / 1000,
             tier.gpu_startup_mb.0 / 1000,
+            host_policy.bootstrap_mode,
         );
 
-        let idle_timeout_s = args.worker_idle_timeout_s.unwrap_or_else(|| {
-            if cfg.worker_idle_timeout_s > 0 {
-                cfg.worker_idle_timeout_s
-            } else {
-                PoolConfig::default().idle_timeout_s
-            }
-        });
+        let idle_timeout_s = args
+            .worker_idle_timeout_s
+            .unwrap_or_else(|| cfg.resolved_worker_idle_timeout_s());
         let worker_runtime = WorkerRuntimeConfig {
             force_cpu,
             gpu_thread_pool_size: cfg.gpu_thread_pool_size,
             host_memory: HostMemoryRuntimeConfig::from_server_config(&cfg),
+            memory_tier: tier,
+            bootstrap_mode: host_policy.bootstrap_mode,
             ..WorkerRuntimeConfig::default()
         };
         let pool_config = PoolConfig {
@@ -397,10 +402,8 @@ fn apply_warmup_flag(value: &str, cfg: &mut batchalign_app::config::ServerConfig
 fn kill_pid(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        let pgid_ok =
-            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) == 0 };
-        let pid_ok =
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 };
+        let pgid_ok = unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) == 0 };
+        let pid_ok = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 };
 
         if !pgid_ok && !pid_ok {
             return false;

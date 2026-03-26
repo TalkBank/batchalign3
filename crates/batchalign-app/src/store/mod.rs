@@ -28,10 +28,13 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::{
-    ContentType, DisplayPath, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus, NodeId,
-    UnixTimestamp,
+    ContentType, DisplayPath, FileProgressStage, FileStatusEntry, FileStatusKind, JobStatus,
+    NodeId, UnixTimestamp,
 };
 use crate::config::ServerConfig;
+use crate::host_policy::HostExecutionPolicy;
+#[cfg(test)]
+use crate::host_policy::auto_max_concurrent_from as host_auto_max_concurrent_from;
 use crate::scheduling::FailureCategory;
 use tokio::sync::{AcquireError, Semaphore, SemaphorePermit, broadcast};
 use tracing::info;
@@ -40,16 +43,6 @@ use crate::db::JobDB;
 use crate::ws::WsEvent;
 use counters::OperationalCounterStore;
 use registry::JobRegistry;
-
-/// Hard upper bound on auto-tuned concurrent slots, regardless of available RAM.
-///
-/// Even on large hosts, too many simultaneously active jobs amplify queue churn
-/// and worker contention. Host-memory coordination handles the actual capacity
-/// decision; this is only a CPU-side runner ceiling.
-const AUTO_CONCURRENT_MAX_SLOTS: usize = 8;
-
-/// Fallback slot count when the CPU count cannot be detected.
-const AUTO_CONCURRENT_FALLBACK_SLOTS: usize = 4;
 
 // ---------------------------------------------------------------------------
 // Per-file status
@@ -261,7 +254,7 @@ impl JobStore {
         let max_concurrent = if explicit > 0 {
             explicit as usize
         } else {
-            auto_max_concurrent()
+            HostExecutionPolicy::from_server_config(&config).auto_max_concurrent_jobs()
         };
         info!(
             max_concurrent_jobs = max_concurrent,
@@ -307,16 +300,14 @@ impl JobStore {
 // Auto-tune concurrency
 // ---------------------------------------------------------------------------
 
-fn auto_max_concurrent() -> usize {
-    let by_cpu = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(AUTO_CONCURRENT_FALLBACK_SLOTS);
-
-    auto_max_concurrent_from(by_cpu)
+#[cfg(test)]
+fn auto_max_concurrent(config: &ServerConfig) -> usize {
+    HostExecutionPolicy::from_server_config(config).auto_max_concurrent_jobs()
 }
 
-fn auto_max_concurrent_from(by_cpu: usize) -> usize {
-    by_cpu.clamp(2, AUTO_CONCURRENT_MAX_SLOTS)
+#[cfg(test)]
+fn auto_max_concurrent_from(by_cpu: usize, by_memory: usize) -> usize {
+    host_auto_max_concurrent_from(by_cpu, by_memory)
 }
 
 // ---------------------------------------------------------------------------

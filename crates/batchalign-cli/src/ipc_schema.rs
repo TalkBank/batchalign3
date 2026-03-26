@@ -31,7 +31,8 @@ macro_rules! register {
     ($map:expr, $($ty:ty),+ $(,)?) => {
         $(
             let schema = schemars::schema_for!($ty);
-            let name = schema.get("title")
+            let name = schema
+                .get("title")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| {

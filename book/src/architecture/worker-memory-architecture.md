@@ -1,7 +1,7 @@
 # Worker Memory Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-24 21:14 EDT
+**Last updated:** 2026-03-26 16:08 EDT
 
 Developer reference for the host-memory coordinator, worker pool, and warmup
 internals. For user-facing configuration, see
@@ -241,31 +241,63 @@ sequenceDiagram
     Server->>Server: Inject into CHAT AST, serialize
 ```
 
-The GPU profile is the key memory optimization: ASR, FA, and Speaker models
-load in a single process instead of three separate processes. For a mixed
-workload this means ~1.5 GB instead of ~4.5 GB, because the models share a
-single Python interpreter, CUDA context, and ThreadPoolExecutor.
+The GPU profile is still the key memory optimization on large hosts: ASR, FA,
+and Speaker models load in a single process instead of three separate
+processes. For a mixed workload this means ~1.5 GB instead of ~4.5 GB, because
+the models share a single Python interpreter, CUDA context, and
+ThreadPoolExecutor.
+
+That is no longer the only bootstrap shape. The current host execution policy
+resolves memory tier into a concrete worker bootstrap mode:
+
+- **Large/Fleet hosts** use `WorkerBootstrapMode::Profile` so related commands
+  can reuse one long-lived worker process
+- **Small hosts** use `WorkerBootstrapMode::Task` so a weak laptop can load only
+  the task it is actually about to run
+
+This keeps profile reuse as an optimization, not as an always-on hidden cost.
+
+### TCP daemon ownership and registry discovery
+
+`workers.json` now carries explicit ownership metadata for TCP daemons:
+
+- **external** — started outside the current Rust server lifecycle; reusable
+  across server restarts and preserved on routine shutdown
+- **server_owned** — spawned by the current Rust server (for example by warmup);
+  tagged with a `server_instance_id` plus server PID and retired by that same
+  server instance on shutdown
+
+Registry discovery applies that model directly:
+
+- accept external daemons
+- accept daemons owned by the current server instance
+- skip daemons owned by a different live server
+- reap stale foreign server-owned daemons whose owning server PID is gone
+
+This fixes the old zombie/kill-all whackamole by giving the registry a real
+lifecycle model instead of treating every entry as implicitly persistent or
+implicitly disposable.
 
 ### Structure
 
 ```
 WorkerPool
 ├── config: PoolConfig
-├── groups: Arc<Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>  (Stanza, IO profiles)
+├── groups: Arc<Mutex<HashMap<WorkerKey, Arc<WorkerGroup>>>>  (task/profile keyed sequential workers)
 ├── gpu_workers: Arc<tokio::sync::Mutex<HashMap<GpuWorkerKey, Arc<SharedGpuWorker>>>>
 ├── cancel: CancellationToken
 └── warmup_status: AtomicU8 (WarmupStatus enum)
 
-WorkerKey = (WorkerProfile, LanguageCode3, String)  // (profile, lang, engine_overrides)
-GpuWorkerKey = (LanguageCode3, String)              // (lang, engine_overrides)
+WorkerKey = (WorkerTarget, LanguageCode3, String)   // (target, lang, engine_overrides)
+GpuWorkerKey = (WorkerTarget, LanguageCode3, String)
 
-WorkerGroup (per (profile, lang, engine_overrides) key — Stanza and IO profiles)
+WorkerGroup (per (target, lang, engine_overrides) key — task/profile sequential workers)
 ├── idle: std::sync::Mutex<VecDeque<WorkerHandle>>
 ├── available: Semaphore (permits = idle count)
 ├── total: AtomicUsize (idle + checked-out)
 └── bootstrap: AsyncMutex<()> (serializes spawns per key)
 
-SharedGpuWorker (per (lang, engine_overrides) — GPU profile, concurrent dispatch)
+SharedGpuWorker (per (target, lang, engine_overrides) — GPU task/profile, concurrent dispatch)
 ├── stdin: tokio::sync::Mutex<ChildStdin>   (serialized writes)
 ├── pending: Mutex<HashMap<String, oneshot::Sender<ExecuteResponseV2>>>  (request_id routing)
 ├── control: tokio::sync::Mutex<Option<oneshot::Sender>>  (sequential ops)
@@ -276,9 +308,9 @@ SharedGpuWorker (per (lang, engine_overrides) — GPU profile, concurrent dispat
 
 ### Checkout flow
 
-`checkout()` is the core worker acquisition path for Stanza and IO profiles.
-GPU profile workers use `SharedGpuWorker` with concurrent `execute_v2()` calls
-instead — there is no exclusive checkout for GPU tasks.
+`checkout()` is the core worker acquisition path for sequential worker targets.
+GPU targets use `SharedGpuWorker` with concurrent `execute_v2()` calls instead
+— there is no exclusive checkout for GPU tasks.
 
 1. Try `semaphore.try_acquire()` — if a permit exists, pop from idle queue
 2. If no permits, try `try_spawn_into_group()` — atomically claim a slot via
@@ -353,22 +385,34 @@ Two entry points in `server.rs`:
 ### Concurrent warmup
 
 Within `pool.warmup()`, each command spawns as a separate `JoinSet` task. This
-means `morphotag`, `align`, and `transcribe` can still warm in parallel, but
-each heavy spawn must first acquire a host-wide startup lease. Each task:
+still uses **profile targets only**: persistent TCP daemons advertise profile
+capabilities in the registry, so task bootstrap is reserved for local stdio
+workers. Each warmup task:
 
-1. Resolves the `WorkerProfile` for the command via `WorkerProfile::for_command()`
-2. Gets or creates the `WorkerGroup` (Stanza/IO) or `SharedGpuWorker` (GPU)
+1. Resolves the profile target for the command via `WorkerProfile::for_command()`
+2. Gets or creates the `WorkerGroup` (sequential targets) or `SharedGpuWorker`
+   (concurrent GPU targets)
 3. Claims a slot via atomic `compare_exchange`
 4. Acquires the bootstrap lock (serializes per-key, but different keys proceed
    in parallel)
 5. Spawns `WorkerHandle::spawn()` with the appropriate config
 6. Pushes the handle to the idle queue and releases a semaphore permit
 
+In the current production startup path, host policy still keeps warmup disabled
+by default, so real servers stay lazy/on-demand unless a test-echo or test
+harness path explicitly enables worker warmup.
+
 ### Lazy capability detection (no startup probe)
 
 The server starts with **no Python process at all**. Capabilities are detected
 lazily when the first worker spawns for a real job. The `OnceLock` on the pool
 ensures detection runs only once, even under concurrent dispatch.
+
+There is now one important exception: if startup discovers healthy TCP daemons
+already listed in `workers.json`, the pool seeds its capability snapshot from
+that discovery pass. Because sequential TCP daemons accept one connection at a
+time, discovery now probes capabilities on the **same socket** it already opened
+for the health check instead of racing a second connection.
 
 ```mermaid
 sequenceDiagram

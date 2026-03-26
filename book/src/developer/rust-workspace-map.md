@@ -1,7 +1,7 @@
 # Rust Workspace Map
 
 **Status:** Current
-**Last modified:** 2026-03-21 15:30 EDT
+**Last modified:** 2026-03-26 14:05 EDT
 
 Batchalign3 currently has three active Rust surfaces plus one repo-local
 automation surface. The following diagram shows the crate dependency
@@ -54,7 +54,7 @@ Active crates:
 | `batchalign-cli` | `batchalign3` binary, argument parsing, dispatch, daemon/log/cache commands |
 | `batchalign-types` | shared domain, protocol, and scheduling types |
 | `xtask` | repo-local automation and affected-check orchestration |
-| `batchalign-app/src/workflow/` | workflow-family implementations for `transcribe`, `align`, `morphotag`, `compare`, `benchmark` |
+| `batchalign-app/src/commands/` | released-command specs, family metadata usage, and command-owned wrappers |
 
 Typical commands:
 
@@ -98,7 +98,7 @@ shell script does. Keep shell wrappers thin.
 ## Ownership Boundary
 
 - use the root workspace when the change affects CLI behavior, server APIs, job execution, logs, cache handling, or worker orchestration
-- use `crates/batchalign-app/src/workflow/` when the change affects command semantics, workflow composition, or output materialization
+- use `crates/batchalign-app/src/commands/` plus the owning modules (`compare.rs`, `benchmark.rs`, `transcribe/`, `fa/`, `morphosyntax/`, `text_batch.rs`) when the change affects command semantics, composition, or output materialization
 - use `pyo3/` when the change affects the Python extension surface exposed as `batchalign_core`
 - remember that `batchalign-chat-ops` is shared by both surfaces: rebuild
   `batchalign_core` with `make build-python`, and if you plan to run the
@@ -113,8 +113,9 @@ shell script does. Keep shell wrappers thin.
 3. `crates/batchalign-app/src/runner/` — server-side task routing and dispatch shapes
 4. `crates/batchalign-app/src/routes/` — Axum HTTP routes
 5. `crates/batchalign-app/src/worker/` — worker pool and IPC
-6. `crates/batchalign-app/src/workflow/` — workflow-family implementations and typed intermediate artifacts
-7. `pyo3/src/lib.rs` — PyO3 module organization and entry points
+6. `crates/batchalign-app/src/commands/` — released-command specs and command-owned wrappers
+7. `crates/batchalign-app/src/{compare.rs, benchmark.rs, text_batch.rs, command_family.rs}` — key shared command helpers and reference/composite seams
+8. `pyo3/src/lib.rs` — PyO3 module organization and entry points
 
 See also: [Rust CLI and Server](rust-cli-and-server.md) for detailed dispatch
 documentation and the checklist for adding new commands.

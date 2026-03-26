@@ -31,11 +31,10 @@ use tracing::{info, warn};
 
 use crate::error::ServerError;
 use crate::infer_retry::dispatch_execute_v2_with_retry;
-use crate::workflow::text_batch::{
+use crate::text_batch::{
     TextBatchFileInput, TextBatchFileResult, TextBatchFileResults, TextBatchOperation,
     TextBatchWorkflow, TextBatchWorkflowRequest, TextPerFileWorkflowRequest,
 };
-use crate::workflow::PerFileWorkflow;
 
 /// Check whether a parsed CHAT file declares English as one of its languages.
 ///
@@ -100,16 +99,14 @@ pub async fn process_coref(
     lang: &LanguageCode3,
     pool: &WorkerPool,
 ) -> Result<String, ServerError> {
-    PerFileWorkflow::run(
-        &CorefWorkflow::new(),
-        TextPerFileWorkflowRequest {
+    CorefWorkflow::new()
+        .run_per_file(TextPerFileWorkflowRequest {
             chat_text: ChatText::from(chat_text),
             lang,
             shared: pool,
             params: (),
-        },
-    )
-    .await
+        })
+        .await
 }
 
 async fn run_coref_impl(
@@ -311,7 +308,10 @@ async fn run_coref_batch_impl(
                 warn!(error = %e, "Batch coref execute_v2 failed for all files");
                 // Return all files serialized without coref
                 for (file_idx, file) in files.iter().enumerate() {
-                    results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(&parsed_files[file_idx])));
+                    results.push(TextBatchFileResult::ok(
+                        file.filename.clone(),
+                        to_chat_string(&parsed_files[file_idx]),
+                    ));
                 }
                 return results;
             }
@@ -352,7 +352,10 @@ async fn run_coref_batch_impl(
             warn!(filename = %filename, errors = ?msgs, "coref post-validation warnings (non-fatal)");
         }
 
-        results.push(TextBatchFileResult::ok(file.filename.clone(), to_chat_string(&parsed_files[file_idx])));
+        results.push(TextBatchFileResult::ok(
+            file.filename.clone(),
+            to_chat_string(&parsed_files[file_idx]),
+        ));
     }
 
     results

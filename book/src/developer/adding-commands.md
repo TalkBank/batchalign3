@@ -1,7 +1,7 @@
 # Adding a New Command
 
 **Status:** Current
-**Last updated:** 2026-03-21 13:00
+**Last updated:** 2026-03-26 14:05 EDT
 
 This guide walks through adding a new batchalign3 command end-to-end.
 
@@ -9,15 +9,15 @@ This guide walks through adding a new batchalign3 command end-to-end.
 
 | Family | Best example | Files to read |
 |--------|-------------|---------------|
-| `PerFileTransform` (one file → one output) | **`align`** | `workflow/fa.rs` (54 lines), `fa/mod.rs` |
-| `CrossFileBatchTransform` (batch-infer pool) | `morphotag` | `workflow/morphosyntax.rs`, `morphosyntax/` |
-| `ReferenceProjection` (compare against gold) | `compare` | `workflow/compare.rs`, `compare.rs` |
-| `Composite` (orchestrates sub-workflows) | `benchmark` | `workflow/benchmark.rs`, `benchmark.rs` |
+| `PerFileTransform` (one file → one output) | **`align`** | `commands/align.rs`, `runner/dispatch/fa_pipeline.rs` |
+| `CrossFileBatchTransform` (batch-infer pool) | `morphotag` | `commands/morphotag.rs`, `runner/dispatch/infer_batched.rs` |
+| `ReferenceProjection` (compare against gold) | `compare` | `commands/compare.rs`, `compare.rs` |
+| `Composite` (orchestrates sub-workflows) | `benchmark` | `commands/benchmark.rs`, `runner/dispatch/benchmark_pipeline.rs` |
 
-**Start with `align`** — it's the simplest complete example (54 lines for the
-workflow wrapper). If your command takes CHAT text in and produces modified CHAT
-out, follow `align`. If your command needs to batch multiple files through one
-ML call, follow `morphotag`.
+**Start with `align`** — it is still the simplest command-owned example. If
+your command takes CHAT text in and produces modified CHAT out, follow `align`.
+If your command needs to batch multiple files through one ML call, follow
+`morphotag`.
 
 ## Quick start
 
@@ -31,7 +31,8 @@ make test     # verify nothing broke (~6s)
 Every command flows through these layers:
 
 ```
-CLI args → CommandProfile → DispatchRequest → JobSubmission → Runner → Workflow → Worker → Output
+CLI args → CommandOptions → JobSubmission → Runner → commands::<name>::build_plan()
+        → shared kernel / worker pool → output materialization
 ```
 
 The key files, in the order you'll edit them:
@@ -39,9 +40,9 @@ The key files, in the order you'll edit them:
 | Step | File | What you add |
 |------|------|-------------|
 | 1 | `batchalign-types/src/domain.rs` | `ReleasedCommand::YourCommand` variant |
-| 2 | `batchalign-app/src/workflow/registry.rs` | `CommandWorkflowDescriptor` entry |
-| 3 | `batchalign-app/src/workflow/your_command.rs` | Workflow trait impl |
-| 4 | `batchalign-app/src/your_command.rs` | Core logic (ML dispatch, post-processing) |
+| 2 | `batchalign-app/src/commands/your_command.rs` | `CommandModuleSpec` + command-owned wrapper |
+| 3 | `batchalign-app/src/commands/catalog.rs` and `commands/mod.rs` | Register/export the module |
+| 4 | `batchalign-app/src/your_command.rs` or shared runner code | Core logic (ML dispatch, post-processing) |
 | 5 | `batchalign-cli/src/args/commands.rs` | CLI arg struct |
 | 6 | `batchalign-cli/src/args/mod.rs` | `CommandProfile` match arm |
 | 7 | `batchalign-cli/src/args/options.rs` | `CommandOptions` variant + `build_typed_options` arm |
@@ -58,13 +59,12 @@ pub enum ReleasedCommand {
 
 Update the `ALL` array, `as_str()`, `TryFrom<&str>`, and `From<ReleasedCommand> for CommandName`.
 
-## Step 2: Register the workflow descriptor
+## Step 2: Add the command-owned spec
 
 ```rust
-// crates/batchalign-app/src/workflow/registry.rs
-const RELEASED_COMMAND_WORKFLOWS: &[CommandWorkflowDescriptor] = &[
-    // ... existing ...
-    CommandWorkflowDescriptor {
+// crates/batchalign-app/src/commands/your_command.rs
+pub(crate) const YOUR_COMMAND_SPEC: CommandModuleSpec = CommandModuleSpec {
+    descriptor: CommandWorkflowDescriptor {
         command: ReleasedCommand::YourCommand,
         family: WorkflowFamily::CrossFileBatchTransform,  // pick one of 4 families
         infer_task: InferTask::YourTask,                  // or reuse existing
@@ -73,8 +73,16 @@ const RELEASED_COMMAND_WORKFLOWS: &[CommandWorkflowDescriptor] = &[
         output_path_kind: CommandOutputPathKind::PreserveInputName,
         runner_dispatch_kind: RunnerDispatchKind::BatchedTextInfer,
     },
-];
+    performance: CommandPerformanceProfile {
+        // Copy the nearest existing command, then narrow it deliberately.
+        ..MORPHOTAG_SPEC.performance
+    },
+};
 ```
+
+Then export the module from `commands/mod.rs` and add the spec to
+`commands/catalog.rs`. Do **not** create a second registry layer; the
+command-owned catalog is the source of truth for released command metadata.
 
 ### Which workflow family?
 
@@ -97,52 +105,63 @@ const RELEASED_COMMAND_WORKFLOWS: &[CommandWorkflowDescriptor] = &[
 
 Most text-only commands use `BatchedTextInfer`.
 
-## Step 3: Implement the workflow
+## Step 3: Implement the command-owned wrapper
 
-Create `crates/batchalign-app/src/workflow/your_command.rs`.
+Create `crates/batchalign-app/src/commands/your_command.rs`.
 
-**For a per-file command** (like `align` — the common case):
+**For a command that reuses an existing runner family**:
 
 ```rust
-// workflow/your_command.rs
-use async_trait::async_trait;
-use crate::api::ChatText;
-use crate::error::ServerError;
+// commands/your_command.rs
+use std::sync::Arc;
+
+use crate::config::ServerConfig;
 use crate::pipeline::PipelineServices;
-use super::PerFileWorkflow;
+use crate::runner::{dispatch_batched_infer, BatchedInferDispatchPlan, RunnerJobSnapshot};
+use crate::store::JobStore;
 
-/// Borrowed request bundle for one execution.
-pub(crate) struct YourCommandRequest<'a> {
-    pub chat_text: ChatText<'a>,
-    pub services: PipelineServices<'a>,
-    // ... command-specific params ...
+pub(crate) fn build_plan(
+    job: &RunnerJobSnapshot,
+    config: &ServerConfig,
+) -> Option<BatchedInferDispatchPlan> {
+    BatchedInferDispatchPlan::from_job(job, config)
 }
 
-/// Per-file workflow.
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct YourCommandWorkflow;
-
-#[async_trait]
-impl PerFileWorkflow for YourCommandWorkflow {
-    type Output = String;  // modified CHAT text
-    type Request<'a> = YourCommandRequest<'a> where Self: 'a;
-
-    async fn run(&self, request: Self::Request<'_>) -> Result<Self::Output, ServerError> {
-        run_your_command_impl(request.chat_text.as_ref(), request.services).await
-    }
+pub(crate) async fn run(
+    job: &RunnerJobSnapshot,
+    store: &Arc<JobStore>,
+    services: PipelineServices<'_>,
+) {
+    let Some(plan) = build_plan(job, store.config()) else {
+        return;
+    };
+    dispatch_batched_infer(job, store, services, plan).await;
 }
 ```
 
-See `workflow/fa.rs` (54 lines) for the real working version.
+Only touch `runner/dispatch/*` when your command shape is genuinely new. Most
+new commands should reuse an existing dispatch family and keep the obvious
+top-level ownership in `src/commands/your_command.rs`.
 
-**For a batch command** (like `morphotag`): use `CrossFileBatchWorkflow` instead.
-See `workflow/morphosyntax.rs` (66 lines).
-
-Register the new module in `workflow/mod.rs`:
+**If you truly need a new family**, add or extend the shared runner kernel and
+keep the command module as the contributor-facing entrypoint:
 
 ```rust
-pub(crate) mod your_command;
+use crate::pipeline::PipelineServices;
+pub(crate) async fn run(
+    job: &RunnerJobSnapshot,
+    store: &Arc<JobStore>,
+    services: PipelineServices<'_>,
+) {
+    let Some(plan) = build_plan(job, store.config()) else {
+        return;
+    };
+    dispatch_your_family(job, store, services, plan).await;
+}
 ```
+
+See `commands/align.rs`, `commands/morphotag.rs`, and `commands/benchmark.rs`
+for the current real examples.
 
 ## Step 4: Core logic
 
@@ -242,74 +261,80 @@ to wire the Rust side — the worker already knows how to handle the infer task.
 Compare is the most instructive example because it uses the `ReferenceProjection`
 family — the workflow produces typed intermediate artifacts, then a swappable
 `Materializer` turns them into the final output. This is how BA2's
-`CompareEngine` + `CompareAnalysisEngine` pair maps to BA3.
+`CompareEngine` + `CompareAnalysisEngine` pair maps to BA3 without falling back
+to string-level projection or ad hoc string assembly at the serialization
+boundary.
 
 ### BA2 Python → BA3 Rust mapping
 
 | BA2 Python (`compare.py`) | BA3 Rust | File |
 |---------------------------|----------|------|
-| `conform()` — contraction/filler normalization | `batchalign_chat_ops::compare::conform` | `batchalign-chat-ops/src/compare.rs` |
-| `match_fn()` — word equality with paren stripping | `batchalign_chat_ops::compare::match_fn` | same |
 | `_find_best_segment()` — bag-of-words window search | `batchalign_chat_ops::compare::find_best_segment` | same |
-| `CompareEngine.process()` — align main vs gold, annotate | `CompareWorkflow::build_artifacts()` | `workflow/compare.rs:157` |
-| `CompareAnalysisEngine.analyze()` — metrics CSV | `MainAnnotatedCompareMaterializer::materialize()` | `workflow/compare.rs:82` |
-| `Document` / `Utterance` / `Form` model | `ChatFile` via `batchalign_chat_ops::parse` | `batchalign-chat-ops/` |
-| `batchalign.utils.dp.align()` — Levenshtein DP | `batchalign_chat_ops::compare::compare()` | same |
+| `CompareEngine.process()` — local window alignment + token status | `batchalign_chat_ops::compare::compare()` | `batchalign-chat-ops/src/compare.rs` |
+| `CompareAnalysisEngine.analyze()` — metrics CSV | `CompareMetricsCsvTable` / `format_metrics_csv()` via compare materializers | `batchalign-chat-ops/src/compare.rs` / `compare.rs` |
+| gold document projection | `project_gold_structurally()` | `batchalign-chat-ops/src/compare.rs` |
+| `Document` / `Utterance` / `Form` model | `ChatFile` AST + dependent tiers | `talkbank-model` / `batchalign-chat-ops` |
+| CLI dispatch `morphosyntax -> compare -> compare_analysis` | `build_comparison_artifacts()` + released/main-annotated materializers | `compare.rs` |
 
 ### Architecture sketch
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │  CompareWorkflow<M: Materializer>           │
-                    │                                             │
-  CompareWorkflow   │  build_artifacts(request)                   │
-  Request {         │    1. morphotag main_text (reuses Stanza)   │
-    main_text,      │    2. parse main + gold (parse_lenient)     │
-    gold_text,      │    3. compare(&main, &gold) → Bundle        │
-    lang,           │    4. return ComparisonArtifacts             │
-    services,       │                                             │
-    cache_policy,   │  run(request)                               │
-    mwt             │    artifacts = build_artifacts(request)      │
-  }                 │    materializer.materialize(artifacts)       │
-                    └──────────────┬──────────────────────────────┘
-                                   │
-                    ┌──────────────┴──────────────────────────────┐
-                    │         Materializer (swappable)            │
-                    │                                             │
-                    │  MainAnnotatedCompareMaterializer (released)│
-                    │    → annotated CHAT + metrics CSV           │
-                    │                                             │
-                    │  GoldProjectedCompareSkeletonMaterializer   │
-                    │    → gold-shaped CHAT + metrics CSV         │
-                    │    (scaffold for Houjun's full projection)  │
-                    └─────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    request["compare.rs orchestration\nmain_text + gold_text"] --> morph["Morphotag main only\nreuses morphosyntax worker"]
+    request --> gold["Parse raw gold"]
+    morph --> main["Parse morphotagged main"]
+    main --> bundle["compare(&main, &gold)\nComparisonBundle:\nmain_utterances + gold_utterances\n+ gold_word_matches + metrics"]
+    gold --> bundle
+    bundle --> tiers["XsrepTierContent / XsmorTierContent"]
+    bundle --> csv["CompareMetricsCsvTable"]
+    tiers --> released["materialize_released()\nreleased output:\nprojected reference CHAT + .compare.csv"]
+    tiers --> main_view["materialize_main_annotated()\ninternal/benchmark output:\nmain %xsrep/%xsmor + .compare.csv"]
+    csv --> released
+    csv --> main_view
+    released --> safety["exact match -> copy %mor/%gra/%wor\nfull gold coverage -> %mor only\nelse keep gold tiers"]
 ```
 
 ### Key types
 
 ```rust
-// Intermediate artifacts — produced by build_artifacts(), consumed by materializer
+// Intermediate artifacts — produced by build_comparison_artifacts(), consumed by materializer
 struct ComparisonArtifacts {
     main_file: ChatFile,        // parsed morphotagged main
     gold_file: ChatFile,        // parsed gold
     bundle: ComparisonBundle,   // alignment + metrics from DP
 }
 
-// Released output shape
-struct CompareMaterializedOutputs {
-    annotated_main_chat: String,  // CHAT with %xsrep annotations
-    metrics_csv: String,          // WER, accuracy, per-POS breakdown
+struct ComparisonBundle {
+    main_utterances: Vec<UtteranceComparison>,
+    gold_utterances: Vec<UtteranceComparison>,
+    gold_word_matches: Vec<GoldWordMatch>,
+    metrics: CompareMetrics,
 }
 
-// Gold projection output (Houjun extends this)
-struct GoldProjectedCompareOutputs {
-    projected_gold_chat: String,
+struct XsrepTierContent {
+    items: Vec<CompareTierItem<CompareSurfaceToken>>,
+}
+
+struct XsmorTierContent {
+    items: Vec<CompareTierItem<ComparePosLabel>>,
+}
+
+struct CompareMetricsCsvTable {
+    rows: Vec<CompareMetricsCsvRow>,
+}
+
+struct CompareMaterializedOutputs {
+    chat_output: String,
     metrics_csv: String,
-    projection_mode: GoldProjectionMode,  // SkeletalPassthrough → full projection
+}
+
+struct MainAnnotatedCompareOutputs {
+    annotated_main_chat: String,
+    metrics_csv: String,
 }
 ```
 
-### How the BA2 `conform()` + `_find_best_segment()` + DP align maps
+### How the BA2 `_find_best_segment()` + local DP maps
 
 BA2's `CompareEngine.process()` does everything in one 250-line method:
 extract words → conform → find windows → DP align → annotate gold → set timing.
@@ -317,39 +342,54 @@ extract words → conform → find windows → DP align → annotate gold → se
 BA3 splits this into layers:
 
 1. **`batchalign_chat_ops::compare`** — pure functions, no ML, no IO:
-   - `conform()` — same normalization rules as BA2
-   - `compare(&main, &gold)` → `ComparisonBundle` with alignment + metrics
-   - `inject_comparison(&mut gold, &bundle)` — annotate gold file
-   - `format_metrics_csv(&metrics)` — CSV output
+   - `find_best_segment()` — same local-window idea as BA2
+   - `compare(&main, &gold)` → `ComparisonBundle` with main/gold compare views,
+     structural word matches, and metrics
+   - `project_gold_structurally()` — AST-first gold projection
+   - `XsrepTierContent` / `XsmorTierContent` — typed compare-tier models lowered
+     once at the `UserDefinedDependentTier` boundary
+   - `CompareMetricsCsvTable` / `format_metrics_csv()` — typed metrics rows
+     serialized through the Rust `csv` crate
 
-2. **`workflow/compare.rs`** — orchestration:
-   - `build_artifacts()` — morphotag main, parse both, call `compare()`
-   - `materialize()` — inject annotations, format outputs
+2. **`compare.rs`** — orchestration:
+    - `build_comparison_artifacts()` — morphotag main only, parse gold raw, call `compare()`
+    - `materialize_released()` — released compare output path
+    - `materialize_main_annotated()` — internal benchmark/main output path
 
 3. **`runner/dispatch/compare_pipeline.rs`** — server integration:
-   - Resolves gold file from `*.gold.cha` companion
-   - Submits to the workflow
-   - Writes output files
+    - Resolves gold file from `*.gold.cha` companion
+    - Calls the compare orchestrator
+    - Writes output files
 
-### What Houjun changes to extend gold projection
+### How to extend structural gold projection
 
-The `GoldProjectedCompareSkeletonMaterializer` is a stub that currently just
-passes through the gold file unchanged. To implement real projection:
+The gold materializer is no longer a stub. Extend it by working with typed data:
 
-1. Edit `GoldProjectedCompareSkeletonMaterializer::materialize()` in
-   `workflow/compare.rs` — use `ComparisonArtifacts.bundle` to project
-   timing, morphology, and dependency from main onto gold tokens.
+1. Edit `project_gold_structurally()` in
+   `batchalign-chat-ops/src/compare.rs`.
+2. Use `ComparisonBundle.gold_word_matches` and AST accessors, not `%xsrep` /
+   `%xsmor` strings, as the projection source.
+3. Keep the current safety rules explicit: exact matches may copy `%mor` /
+   `%gra` / `%wor`; full gold-word coverage may project `%mor`; partial `%gra` /
+   `%wor` needs chunk-safe mapping before it is allowed.
+4. Keep gold raw during artifact construction unless the reference file already
+   contains tiers you are intentionally preserving.
 
-2. Change `GoldProjectionMode::SkeletalPassthrough` to a new variant
-   reflecting the real projection strategy.
+### Serialization rule
 
-3. The workflow, runner, CLI, and registry are already wired — no plumbing
-   needed. Just change the materializer.
+When a workflow emits structured artifacts, add explicit pre-serialization
+types before you add serializer code.
+
+- New semantic strings must get newtypes.
+- CHAT tier content should be written from typed models via `WriteChat`.
+- CSV outputs should be written from typed row/table models via `csv`.
+- Do not drive semantics from `format!`, `join`, `split`, or regex surgery over
+  already serialized output.
 
 ### Files to read (in order)
 
-1. `crates/batchalign-chat-ops/src/compare.rs` (711 lines) — pure compare logic
-2. `crates/batchalign-app/src/workflow/compare.rs` (213 lines) — workflow + materializers
-3. `crates/batchalign-app/src/runner/dispatch/compare_pipeline.rs` (332 lines) — server dispatch
-4. `crates/batchalign-app/src/compare.rs` (149 lines) — shared helpers
-5. BA2 reference: `~/batchalign2-master/batchalign/pipelines/analysis/compare.py` (470 lines)
+1. `crates/batchalign-chat-ops/src/compare.rs` — compare core + structural projection
+2. `crates/batchalign-app/src/compare.rs` — orchestration + materializers
+3. `crates/batchalign-app/src/runner/dispatch/compare_pipeline.rs` — server dispatch
+4. `book/src/migration/ba2-compare-migration.md` — BA2-master compare to BA3 map
+5. BA2 reference: `~/batchalign2-master/batchalign/pipelines/analysis/compare.py`

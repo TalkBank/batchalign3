@@ -11,14 +11,21 @@ mod common;
 
 use batchalign_app::api::{LanguageCode3, NumSpeakers, ReleasedCommand, WorkerLanguage};
 use batchalign_app::worker::error::WorkerError;
-use batchalign_app::worker::handle::{WorkerConfig, WorkerHandle};
+use batchalign_app::worker::handle::{
+    WorkerConfig, WorkerHandle, WorkerRuntimeConfig, spawn_tcp_daemon,
+};
 use batchalign_app::worker::pool::{PoolConfig, WorkerPool};
-use batchalign_app::worker::{BatchInferRequest, InferRequest, InferTask, WorkerProfile};
+use batchalign_app::worker::registry::{RegistryOwnership, read_registry};
+use batchalign_app::worker::{
+    BatchInferRequest, InferRequest, InferTask, WorkerBootstrapMode, WorkerProfile,
+};
 use common::resolve_python;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::time::Duration;
 
 macro_rules! require_python {
     () => {{
@@ -40,6 +47,76 @@ macro_rules! require_python {
             }
         }
     }};
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set_path(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(previous) => unsafe {
+                std::env::set_var(self.key, previous);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) only checks process existence/permission.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn terminate_pid(pid: u32) {
+    // SAFETY: sending SIGTERM to an exact PID is the intended cleanup path.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_process_exit(pid: u32) {
+    for _ in 0..50 {
+        if !process_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("worker pid {pid} was still alive after waiting for exit");
+}
+
+#[cfg(unix)]
+fn registry_path_for(state_dir: &tempfile::TempDir) -> std::path::PathBuf {
+    state_dir.path().join("workers.json")
+}
+
+#[cfg(unix)]
+fn test_echo_tcp_config(python_path: String) -> WorkerConfig {
+    WorkerConfig {
+        python_path,
+        test_echo: true,
+        profile: WorkerProfile::Stanza,
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+        ready_timeout_s: 30,
+        ..Default::default()
+    }
 }
 
 fn infer_request(payload: Value) -> InferRequest {
@@ -94,10 +171,35 @@ async fn health_check_works() {
 
     let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     let health = handle.health_check().await.expect("health check failed");
-    assert_eq!(health.status, batchalign_app::worker::WorkerHealthStatus::Ok);
+    assert_eq!(
+        health.status,
+        batchalign_app::worker::WorkerHealthStatus::Ok
+    );
     assert_eq!(health.command, "profile:stanza");
     assert_eq!(health.lang, WorkerLanguage::from(LanguageCode3::eng()));
     assert!(*health.pid > 0);
+
+    handle.shutdown().await.expect("shutdown failed");
+}
+
+#[tokio::test]
+async fn spawn_test_echo_worker_task_bootstrap() {
+    let python = require_python!();
+    let config = WorkerConfig {
+        python_path: python,
+        test_echo: true,
+        profile: WorkerProfile::Stanza,
+        task: Some(InferTask::Morphosyntax),
+        lang: WorkerLanguage::from(LanguageCode3::eng()),
+        ready_timeout_s: 30,
+        ..Default::default()
+    };
+
+    let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
+    assert_eq!(handle.profile_label(), "infer:morphosyntax");
+
+    let health = handle.health_check().await.expect("health check failed");
+    assert_eq!(health.command, "infer:morphosyntax");
 
     handle.shutdown().await.expect("shutdown failed");
 }
@@ -285,6 +387,58 @@ async fn pool_multiple_task_groups() {
 }
 
 #[tokio::test]
+async fn pool_task_bootstrap_separates_same_profile_tasks() {
+    let python = require_python!();
+    let pool = WorkerPool::new(PoolConfig {
+        python_path: python,
+        health_check_interval_s: 60,
+        idle_timeout_s: 300,
+        ready_timeout_s: 30,
+        test_echo: true,
+        max_workers_per_key: 8,
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: WorkerRuntimeConfig::default().with_bootstrap_mode(WorkerBootstrapMode::Task),
+        ..Default::default()
+    });
+
+    let morph_item = json!({"task": "morph"});
+    let coref_item = json!({"task": "coref"});
+    let r1 = pool
+        .dispatch_batch_infer(
+            &LanguageCode3::eng(),
+            &batch_request(InferTask::Morphosyntax, vec![morph_item.clone()]),
+        )
+        .await
+        .expect("dispatch 1 failed");
+    let r2 = pool
+        .dispatch_batch_infer(
+            &LanguageCode3::eng(),
+            &batch_request(InferTask::Coref, vec![coref_item.clone()]),
+        )
+        .await
+        .expect("dispatch 2 failed");
+    assert_eq!(r1.results[0].result, Some(morph_item));
+    assert_eq!(r2.results[0].result, Some(coref_item));
+    assert_eq!(pool.worker_count(), 2);
+    let summary = pool.worker_summary();
+    assert!(
+        summary
+            .iter()
+            .any(|entry| entry.starts_with("infer:morphosyntax:eng:")),
+        "expected infer:morphosyntax worker in summary: {summary:?}"
+    );
+    assert!(
+        summary
+            .iter()
+            .any(|entry| entry.starts_with("infer:coref:eng:")),
+        "expected infer:coref worker in summary: {summary:?}"
+    );
+
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn pool_warmup_uses_infer_targets() {
     let python = require_python!();
     let pool = WorkerPool::new(PoolConfig {
@@ -301,8 +455,14 @@ async fn pool_warmup_uses_infer_targets() {
     });
 
     pool.warmup(&[
-        batchalign_app::server::WarmupTarget { command: ReleasedCommand::Morphotag, lang: WorkerLanguage::from(LanguageCode3::eng()) },
-        batchalign_app::server::WarmupTarget { command: ReleasedCommand::Align, lang: WorkerLanguage::from(LanguageCode3::eng()) },
+        batchalign_app::server::WarmupTarget {
+            command: ReleasedCommand::Morphotag,
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        },
+        batchalign_app::server::WarmupTarget {
+            command: ReleasedCommand::Align,
+            lang: WorkerLanguage::from(LanguageCode3::eng()),
+        },
     ])
     .await;
 
@@ -325,6 +485,157 @@ async fn pool_warmup_uses_infer_targets() {
     pool.shutdown().await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn discover_from_registry_seeds_capabilities_from_external_tcp_daemon() {
+    let python = require_python!();
+    let state_dir = tempfile::TempDir::new().expect("tempdir");
+    let _env = EnvVarGuard::set_path("BATCHALIGN_STATE_DIR", state_dir.path());
+    let registry_path = registry_path_for(&state_dir);
+
+    let external = test_echo_tcp_config(python.clone());
+    let (external_pid, _external_port) = spawn_tcp_daemon(&external, 0)
+        .await
+        .expect("spawn external tcp daemon");
+
+    let pool = WorkerPool::new(PoolConfig {
+        python_path: python,
+        health_check_interval_s: 60,
+        idle_timeout_s: 300,
+        ready_timeout_s: 30,
+        test_echo: true,
+        max_workers_per_key: 8,
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: Default::default(),
+        worker_registry_path: registry_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    });
+
+    let discovered = pool.discover_from_registry().await;
+    assert_eq!(discovered, 1, "expected one external registry worker");
+    assert!(
+        pool.detected_capabilities().is_some(),
+        "registry discovery should seed a live capability snapshot"
+    );
+
+    pool.shutdown().await;
+    if process_alive(external_pid) {
+        terminate_pid(external_pid);
+        wait_for_process_exit(external_pid).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn discover_from_registry_reaps_stale_foreign_server_owned_daemon() {
+    let python = require_python!();
+    let state_dir = tempfile::TempDir::new().expect("tempdir");
+    let _env = EnvVarGuard::set_path("BATCHALIGN_STATE_DIR", state_dir.path());
+    let registry_path = registry_path_for(&state_dir);
+
+    let stale_owned = WorkerConfig {
+        runtime: WorkerRuntimeConfig {
+            server_instance_id: Some("dead-owner-instance".to_string()),
+            server_process_id: Some(4_000_000),
+            ..Default::default()
+        },
+        ..test_echo_tcp_config(python.clone())
+    };
+    let (stale_pid, _stale_port) = spawn_tcp_daemon(&stale_owned, 0)
+        .await
+        .expect("spawn stale server-owned tcp daemon");
+
+    let pool = WorkerPool::new(PoolConfig {
+        python_path: python,
+        health_check_interval_s: 60,
+        idle_timeout_s: 300,
+        ready_timeout_s: 30,
+        test_echo: true,
+        max_workers_per_key: 8,
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: WorkerRuntimeConfig {
+            server_instance_id: Some("current-server-instance".to_string()),
+            server_process_id: Some(std::process::id()),
+            ..Default::default()
+        },
+        worker_registry_path: registry_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    });
+
+    let discovered = pool.discover_from_registry().await;
+    assert_eq!(
+        discovered, 0,
+        "orphaned server-owned daemons should be reaped, not reused"
+    );
+    wait_for_process_exit(stale_pid).await;
+
+    let entries = read_registry(&registry_path);
+    assert!(
+        entries.is_empty(),
+        "stale server-owned registry entries should be removed: {entries:?}"
+    );
+
+    pool.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_only_kills_current_server_owned_daemons() {
+    let python = require_python!();
+    let state_dir = tempfile::TempDir::new().expect("tempdir");
+    let _env = EnvVarGuard::set_path("BATCHALIGN_STATE_DIR", state_dir.path());
+    let registry_path = registry_path_for(&state_dir);
+
+    let external = test_echo_tcp_config(python.clone());
+    let (external_pid, _external_port) = spawn_tcp_daemon(&external, 0)
+        .await
+        .expect("spawn external tcp daemon");
+
+    let owned_runtime = WorkerRuntimeConfig {
+        server_instance_id: Some("owning-server-instance".to_string()),
+        server_process_id: Some(std::process::id()),
+        ..Default::default()
+    };
+    let owned = WorkerConfig {
+        runtime: owned_runtime.clone(),
+        ..test_echo_tcp_config(python.clone())
+    };
+    let (owned_pid, _owned_port) = spawn_tcp_daemon(&owned, 0)
+        .await
+        .expect("spawn server-owned tcp daemon");
+
+    let pool = WorkerPool::new(PoolConfig {
+        python_path: python,
+        health_check_interval_s: 60,
+        idle_timeout_s: 300,
+        ready_timeout_s: 30,
+        test_echo: true,
+        max_workers_per_key: 8,
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: owned_runtime,
+        worker_registry_path: registry_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    });
+
+    pool.shutdown().await;
+    wait_for_process_exit(owned_pid).await;
+    assert!(
+        process_alive(external_pid),
+        "shutdown should preserve external registry daemons"
+    );
+
+    let entries = read_registry(&registry_path);
+    assert_eq!(entries.len(), 1, "expected only the external daemon to remain");
+    assert_eq!(entries[0].pid, external_pid);
+    assert_eq!(entries[0].ownership, RegistryOwnership::External);
+
+    terminate_pid(external_pid);
+    wait_for_process_exit(external_pid).await;
+}
+
 #[tokio::test]
 async fn pool_pre_scale_respects_max_workers_per_key() {
     let python = require_python!();
@@ -341,8 +652,12 @@ async fn pool_pre_scale_respects_max_workers_per_key() {
         ..Default::default()
     });
 
-    pool.pre_scale(ReleasedCommand::Morphotag, WorkerLanguage::from(LanguageCode3::eng()), 4)
-        .await;
+    pool.pre_scale(
+        ReleasedCommand::Morphotag,
+        WorkerLanguage::from(LanguageCode3::eng()),
+        4,
+    )
+    .await;
     let count = pool.worker_count();
     assert!(
         count <= 2,
@@ -548,7 +863,10 @@ async fn health_check_tolerates_non_protocol_stdout_between_requests() {
 
     let mut handle = WorkerHandle::spawn(config).await.expect("spawn failed");
     let health = handle.health_check().await.expect("health check failed");
-    assert_eq!(health.status, batchalign_app::worker::WorkerHealthStatus::Ok);
+    assert_eq!(
+        health.status,
+        batchalign_app::worker::WorkerHealthStatus::Ok
+    );
     assert_eq!(health.command, "profile:stanza");
     assert_eq!(health.lang, WorkerLanguage::from(LanguageCode3::eng()));
 

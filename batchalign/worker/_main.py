@@ -170,7 +170,7 @@ def main() -> None:
         if bootstrap.profile is not None:
             label = f"profile:{bootstrap.profile.value}"
         elif bootstrap.task is not None:
-            label = bootstrap.task.value
+            label = f"infer:{bootstrap.task.value}"
         else:
             label = "test-echo"
         enable_test_echo(label, bootstrap.lang)

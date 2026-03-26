@@ -1,5 +1,6 @@
 ---
 source: crates/batchalign-app/tests/json_compat.rs
+assertion_line: 315
 expression: cfg
 ---
 {
@@ -38,5 +39,9 @@ expression: cfg
   "local_lease_ttl_s": 300,
   "audio_task_timeout_s": 0,
   "analysis_task_timeout_s": 0,
-  "worker_registry_path": ""
+  "worker_registry_path": "",
+  "memory_tier": null,
+  "gpu_startup_mb": 0,
+  "stanza_startup_mb": 0,
+  "io_startup_mb": 0
 }

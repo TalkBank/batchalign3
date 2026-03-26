@@ -185,10 +185,7 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
         "cantonese_fa",
         "corpus/",
     ]) {
-        CommandOptions::Align(options) => assert_eq!(
-            options.fa_engine,
-            FaEngineName::Wav2vecCanto
-        ),
+        CommandOptions::Align(options) => assert_eq!(options.fa_engine, FaEngineName::Wav2vecCanto),
         other => panic!("expected Align options, got {other:?}"),
     }
 
@@ -201,10 +198,9 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
         "tencent_utr",
         "corpus/",
     ]) {
-        CommandOptions::Align(options) => assert_eq!(
-            options.utr_engine,
-            Some(AppUtrEngine::HkTencent)
-        ),
+        CommandOptions::Align(options) => {
+            assert_eq!(options.utr_engine, Some(AppUtrEngine::HkTencent))
+        }
         other => panic!("expected Align options, got {other:?}"),
     }
 
@@ -217,10 +213,9 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
         "tencent",
         "audio/",
     ]) {
-        CommandOptions::Transcribe(options) => assert_eq!(
-            options.asr_engine,
-            AsrEngineName::HkTencent
-        ),
+        CommandOptions::Transcribe(options) => {
+            assert_eq!(options.asr_engine, AsrEngineName::HkTencent)
+        }
         other => panic!("expected Transcribe options, got {other:?}"),
     }
 
@@ -233,10 +228,9 @@ fn custom_engine_names_override_hidden_aliases_and_canonical_enums() {
         "funaudio",
         "audio/",
     ]) {
-        CommandOptions::Benchmark(options) => assert_eq!(
-            options.asr_engine,
-            AsrEngineName::HkFunaudio
-        ),
+        CommandOptions::Benchmark(options) => {
+            assert_eq!(options.asr_engine, AsrEngineName::HkFunaudio)
+        }
         other => panic!("expected Benchmark options, got {other:?}"),
     }
 }

@@ -5,7 +5,8 @@
     "kind": "morphosyntax",
     "lang": "eng",
     "payload_ref_id": "text-ref-0004",
-    "item_count": 2
+    "item_count": 2,
+    "retokenize": false
   },
   "attachments": [
     {

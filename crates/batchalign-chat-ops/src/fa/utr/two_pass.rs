@@ -887,7 +887,6 @@ mod tests {
     /// global results even if two-pass timed more utterances.
     #[test]
     fn test_grouping_fallback_prefers_more_groups() {
-
         // Construct a scenario where two-pass changes bullet placement enough
         // to merge FA groups. We use a file with a +< backchannel between two
         // main-speaker utterances. The ASR tokens are positioned so two-pass
@@ -989,7 +988,6 @@ mod tests {
     /// should be preferred (better backchannel placement).
     #[test]
     fn test_grouping_keeps_two_pass_when_groups_equal_or_better() {
-
         let chat_text = "\
 @UTF8
 @Begin

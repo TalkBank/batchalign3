@@ -639,10 +639,8 @@ fn is_process_alive(pid: u32) -> bool {
 fn kill_process(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        let pgid_ok =
-            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) == 0 };
-        let pid_ok =
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 };
+        let pgid_ok = unsafe { libc::killpg(pid as libc::pid_t, libc::SIGTERM) == 0 };
+        let pid_ok = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 };
 
         if !pgid_ok && !pid_ok {
             return false;

@@ -12,9 +12,10 @@ use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
 
 use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
+use crate::worker::target::task_name;
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, WorkerCapabilities,
-    WorkerHealthResponse, WorkerPid, WorkerProfile,
+    WorkerHealthResponse, WorkerPid, WorkerProfile, WorkerTarget,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,7 +29,6 @@ use crate::worker::provider_credentials::HkAsrCredentialSources;
 const STARTUP_STDERR_TAIL_CHARS: usize = 2_000;
 const MAX_READY_STDOUT_PREAMBLE_LINES: usize = 32;
 const MAX_RESPONSE_STDOUT_NOISE_LINES: usize = 8;
-
 
 /// Ready signal emitted by the Python worker on stdout.
 #[derive(Debug, Deserialize)]
@@ -63,7 +63,6 @@ enum WorkerResponse {
     Error { error: String },
 }
 
-
 fn build_worker_command(config: &WorkerConfig) -> StdCommand {
     let mut cmd = StdCommand::new(&config.python_path);
     cmd.arg("-c")
@@ -74,11 +73,14 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
 
     if config.test_echo {
         cmd.arg("--test-echo");
-        // test-echo still uses --profile so Python can identify the profile in
-        // the ready label, but no models are loaded.
-        cmd.arg("--profile").arg(config.profile.name());
-    } else {
-        cmd.arg("--profile").arg(config.profile.name());
+    }
+    match config.bootstrap_target() {
+        WorkerTarget::Profile(profile) => {
+            cmd.arg("--profile").arg(profile.name());
+        }
+        WorkerTarget::InferTask(task) => {
+            cmd.arg("--task").arg(task_name(task));
+        }
     }
 
     cmd.arg("--lang").arg(config.lang.as_worker_arg());
@@ -132,21 +134,28 @@ fn build_worker_command(config: &WorkerConfig) -> StdCommand {
     cmd
 }
 
-/// Spawn a **detached** TCP worker daemon that outlives the current process.
+/// Spawn a **detached** TCP worker daemon.
 ///
-/// Unlike [`WorkerHandle::spawn`] which creates a child process tied to the
-/// server's lifetime, this launches a standalone Python process with
+/// Unlike [`WorkerHandle::spawn`] which creates a child process tied directly
+/// to the current Rust process, this launches a standalone Python process with
 /// `--transport tcp` that:
 /// 1. Loads models, binds a TCP port
 /// 2. Registers itself in `workers.json`
 /// 3. Prints a ready signal to stderr
-/// 4. Continues running after the Rust server exits
+/// 4. Continues running until explicitly shut down
 ///
-/// The server can then discover it via [`crate::worker::registry::discover_workers`]
-/// on the next startup — zero cold start.
+/// If [`WorkerRuntimeConfig::server_instance_id`] is present, the daemon
+/// registers itself as **server-owned** and should be retired by that same
+/// server instance on shutdown. Otherwise it registers as **external** and may
+/// be reused across server restarts.
 ///
 /// Returns `(pid, port)` on success after waiting for the ready signal.
 pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, u16), WorkerError> {
+    if config.task.is_some() {
+        return Err(WorkerError::SpawnFailed(
+            "persistent TCP workers only support profile bootstrap targets".into(),
+        ));
+    }
     // Memory guard — same as WorkerHandle::spawn().
     let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(config)
         .await
@@ -199,6 +208,12 @@ pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, 
     if let Some(api_key) = config.runtime.revai_api_key.as_deref() {
         cmd.env("BATCHALIGN_REV_API_KEY", api_key);
     }
+    if let Some(server_instance_id) = config.runtime.server_instance_id.as_deref() {
+        cmd.env("BATCHALIGN_SERVER_INSTANCE_ID", server_instance_id);
+    }
+    if let Some(server_process_id) = config.runtime.server_process_id {
+        cmd.env("BATCHALIGN_SERVER_PID", server_process_id.to_string());
+    }
     for (key, value) in worker_provider_envs(config, &HkAsrCredentialSources::from_env()) {
         cmd.env(key, value);
     }
@@ -222,7 +237,7 @@ pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, 
     }
 
     info!(
-        profile = %config.profile.label(),
+        profile = %config.bootstrap_label(),
         lang = %config.lang,
         port = port,
         "Spawning TCP worker daemon"
@@ -256,7 +271,7 @@ pub async fn spawn_tcp_daemon(config: &WorkerConfig, port: u16) -> Result<(u32, 
     drop(stderr_reader);
 
     info!(
-        profile = %config.profile.label(),
+        profile = %config.bootstrap_label(),
         lang = %config.lang,
         pid = ready.0,
         port = ready.1,
@@ -367,7 +382,7 @@ impl WorkerHandle {
         // This prevents the TOCTOU race where N concurrent spawns all see "enough"
         // memory before any model is loaded, then collectively exceed physical RAM.
         // See docs/memory-safety.md for the full crash history and design rationale.
-        let startup_reservation = config.profile.startup_reservation_mb();
+        let startup_reservation = config.startup_reservation_mb();
         let _spawn_permit = crate::worker::memory_guard::acquire_spawn_permit(&config)
             .await
             .map_err(|e| WorkerError::SpawnFailed(format!("memory guard: {e}")))?;
@@ -375,7 +390,7 @@ impl WorkerHandle {
         let mut cmd: Command = build_worker_command(&config).into();
 
         info!(
-            target = %config.profile.label(),
+            target = %config.bootstrap_label(),
             lang = %config.lang,
             test_echo = config.test_echo,
             force_cpu = config.runtime.force_cpu,
@@ -454,7 +469,7 @@ impl WorkerHandle {
         let pid = WorkerPid(ready.pid);
 
         info!(
-            target = %config.profile.label(),
+            target = %config.bootstrap_label(),
             lang = %config.lang,
             pid = %pid,
             "Worker ready"
@@ -463,7 +478,7 @@ impl WorkerHandle {
         // Layer 3: record PID file for orphan reaping.
         super::pool::reaper::record_worker_pid(pid.0);
 
-        let target_label = config.profile.label();
+        let target_label = config.bootstrap_label();
         tokio::spawn(async move {
             let mut line = String::new();
             loop {
@@ -655,7 +670,7 @@ impl WorkerHandle {
                     skipped_noise_lines += 1;
                     warn!(
                         pid = %self.pid,
-                        target = %self.config.profile.label(),
+                        target = %self.config.bootstrap_label(),
                         line = trimmed,
                         skipped_noise_lines,
                         "Ignoring non-protocol stdout while waiting for worker response"
@@ -693,7 +708,8 @@ impl WorkerHandle {
 
         if !resp.status.is_ok() {
             return Err(WorkerError::HealthCheckFailed(format!(
-                "status={}", resp.status
+                "status={}",
+                resp.status
             )));
         }
 
@@ -830,7 +846,7 @@ impl WorkerHandle {
         super::pool::reaper::remove_worker_pid(self.pid.0);
 
         info!(
-            target = %self.config.profile.label(),
+            target = %self.config.bootstrap_label(),
             pid = %self.pid,
             "Shutting down worker"
         );
@@ -882,9 +898,9 @@ impl WorkerHandle {
         self.pid
     }
 
-    /// The logical bootstrap profile label this worker handles.
-    pub fn profile_label(&self) -> &'static str {
-        self.config.profile.label()
+    /// The logical bootstrap target label this worker handles.
+    pub fn profile_label(&self) -> String {
+        self.config.bootstrap_label()
     }
 
     /// The language this worker handles.
@@ -971,8 +987,8 @@ mod tests {
     use super::{WorkerConfig, WorkerRuntimeConfig, build_worker_command};
     use crate::api::{LanguageCode3, NumSpeakers, WorkerLanguage};
     use crate::host_memory::HostMemoryRuntimeConfig;
-    use crate::worker::WorkerProfile;
     use crate::worker::provider_credentials::HkAsrCredentialSources;
+    use crate::worker::{InferTask, WorkerProfile};
 
     fn command_args(config: &WorkerConfig) -> Vec<String> {
         build_worker_command(config)
@@ -1011,11 +1027,28 @@ mod tests {
                 None,
                 4,
                 HostMemoryRuntimeConfig::default(),
+                crate::types::runtime::MemoryTier::detect(),
             ),
             ..Default::default()
         });
 
         assert!(args.iter().any(|arg| arg == "--force-cpu"));
+    }
+
+    #[test]
+    fn worker_command_uses_task_arg_for_task_bootstrap() {
+        let args = command_args(&WorkerConfig {
+            python_path: "python3".to_string(),
+            profile: WorkerProfile::Stanza,
+            task: Some(InferTask::Morphosyntax),
+            ..Default::default()
+        });
+
+        assert!(
+            args.windows(2)
+                .any(|window| window[0] == "--task" && window[1] == "morphosyntax")
+        );
+        assert!(!args.iter().any(|arg| arg == "--profile"));
     }
 
     #[test]
@@ -1028,13 +1061,15 @@ mod tests {
                 None,
                 7,
                 HostMemoryRuntimeConfig::default(),
+                crate::types::runtime::MemoryTier::detect(),
             ),
             ..Default::default()
         });
 
-        assert!(args.windows(2).any(|window| {
-            window[0] == "--gpu-thread-pool-size" && window[1] == "7"
-        }));
+        assert!(
+            args.windows(2)
+                .any(|window| { window[0] == "--gpu-thread-pool-size" && window[1] == "7" })
+        );
     }
 
     #[test]
@@ -1053,6 +1088,7 @@ mod tests {
                 Some("  injected-key  ".to_string()),
                 4,
                 HostMemoryRuntimeConfig::default(),
+                crate::types::runtime::MemoryTier::detect(),
             ),
             ..Default::default()
         });
@@ -1080,6 +1116,7 @@ mod tests {
                     None,
                     4,
                     HostMemoryRuntimeConfig::default(),
+                    crate::types::runtime::MemoryTier::detect(),
                 ),
                 ..Default::default()
             },
@@ -1107,4 +1144,3 @@ mod tests {
         );
     }
 }
-

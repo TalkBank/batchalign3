@@ -13,7 +13,7 @@ use crate::common::{
     assert_ba2_parity, assert_completed_without_errors, load_ba2_golden, load_parity_fixture,
     require_live_server, submit_and_complete,
 };
-use batchalign_app::api::{ReleasedCommand, FilePayload, JobStatus};
+use batchalign_app::api::{FilePayload, JobStatus, ReleasedCommand};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CorefOptions, MorphotagOptions, TranslateOptions, UtsegOptions,
 };
@@ -245,7 +245,14 @@ async fn parity_utseg_eng_multi() {
 
 #[tokio::test]
 async fn parity_utseg_spa() {
-    run_parity_test(ReleasedCommand::Utseg, InferTask::Utseg, "spa_simple", "spa", utseg_opts()).await;
+    run_parity_test(
+        ReleasedCommand::Utseg,
+        InferTask::Utseg,
+        "spa_simple",
+        "spa",
+        utseg_opts(),
+    )
+    .await;
 }
 
 #[tokio::test]

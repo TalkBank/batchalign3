@@ -295,9 +295,9 @@ fn resolved_asr_language(opts: &TranscribeOptions, response: &AsrResponse) -> La
                     .collect::<Vec<_>>()
                     .join(" ");
                 let detected_iso3 =
-                    batchalign_chat_ops::asr_postprocess::lang_detect::detect_primary_language(
-                        &[&all_text],
-                    )
+                    batchalign_chat_ops::asr_postprocess::lang_detect::detect_primary_language(&[
+                        &all_text,
+                    ])
                     .unwrap_or_else(|| "eng".to_string());
                 LanguageCode3::try_new(&detected_iso3).unwrap_or_else(|_| LanguageCode3::eng())
             } else {

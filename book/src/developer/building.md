@@ -1,7 +1,7 @@
 # Building & Development
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-26 14:05 EDT
 
 Development is supported on **Windows, macOS, and Linux**. The instructions below use Unix shell syntax; on Windows, use PowerShell or Git Bash equivalently.
 
@@ -90,7 +90,7 @@ crate, and the `batchalign_core` extension stay in sync:
 | Python code only (`batchalign/`) | Nothing; the next worker process picks up the change |
 | Rust CLI / server (`crates/batchalign-cli/`, `crates/batchalign-app/`) | `cargo build -p batchalign-cli` or `make build-rust` |
 | Shared chat logic (`crates/batchalign-chat-ops/`) or PyO3 bridge (`pyo3/`) | `make build-python`; for the fastest CLI loop in a source checkout, also build the CLI once (`cargo build -p batchalign-cli` or `make build-rust`) so the wrapper can fall back to `target/debug/batchalign3` |
-| Workflow-layer changes (`crates/batchalign-app/src/workflow/`) | `make build-rust` and usually `make build-python` if the CLI bridge surface changed |
+| Command/orchestrator changes (`crates/batchalign-app/src/commands/`, `compare.rs`, `benchmark.rs`, `transcribe/`, `fa/`, `morphosyntax/`, `command_family.rs`, `text_batch.rs`) | `make build-rust` and usually `make build-python` if the CLI bridge surface changed |
 | Cross-cutting or dashboard changes | `make build` (requires Node.js + npm because it rebuilds the embedded dashboard) |
 
 ## Rebuilding the Rust Extension
@@ -119,11 +119,19 @@ experience locally.
 
 ## Where Command Logic Should Live
 
-If you are changing command behavior, the first stop should be
-`crates/batchalign-app/src/workflow/`.
+If you are changing command behavior, the first stop should be the owning
+command module in `crates/batchalign-app/src/commands/` and then the module
+that actually owns the algorithmic or orchestration semantics (`compare.rs`,
+`benchmark.rs`, `transcribe/`, `fa/`, `morphosyntax/`, etc.).
 
-- Workflow families own command semantics and typed intermediate bundles.
-- `crates/batchalign-app/src/runner/` owns job lifecycle and queueing.
+- `crates/batchalign-app/src/commands/` owns released-command identity, specs,
+  and the top-level contributor-facing entrypoints.
+- `crates/batchalign-app/src/command_family.rs` keeps the small command-shape
+  enum used by command metadata.
+- `crates/batchalign-app/src/text_batch.rs` keeps reusable text-batch helper
+  types for commands such as `utseg`, `translate`, and `coref`.
+- `crates/batchalign-app/src/runner/` owns job lifecycle, queueing, and shared
+  dispatch machinery.
 - `crates/batchalign-cli/src/dispatch/` should stay thin and focus on
   argument parsing, capability gating, and whether a command runs locally or
   through the server.

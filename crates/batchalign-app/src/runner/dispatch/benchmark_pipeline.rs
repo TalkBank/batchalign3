@@ -1,26 +1,30 @@
 //! Benchmark dispatch built on the Rust-owned transcribe and compare pipelines.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use batchalign_chat_ops::morphosyntax::MwtDict;
 use tracing::warn;
 
-use crate::api::{ContentType, EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
-use crate::benchmark::{BenchmarkRequest, gold_chat_path_for_audio, process_benchmark};
+use crate::api::{EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
+use crate::benchmark::{BenchmarkRequest, process_benchmark};
 use crate::cache::UtteranceCache;
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
+use crate::recipe_runner::runtime::{
+    output_write_path, plan_work_units_for_job, primary_output_artifact, sidecar_output_artifacts,
+};
+use crate::recipe_runner::work_unit::{BenchmarkWorkUnit, PlannedWorkUnit};
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 use crate::transcribe::TranscribeOptions;
 use crate::worker::pool::WorkerPool;
 
 use super::super::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_server_error,
-    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_progress_forwarder,
-    spawn_supervised_file_task, user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, classify_server_error, drain_supervised_file_tasks,
+    is_retryable_worker_failure, spawn_progress_forwarder, spawn_supervised_file_task,
+    user_facing_error,
 };
 use super::BenchmarkDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -29,7 +33,7 @@ use super::infer_batched::apply_merge_abbrev;
 ///
 /// Benchmark reuses the transcribe and compare stacks, so the runtime bundle is
 /// the same worker/cache context plus the file-level concurrency cap.
-pub(in crate::runner) struct BenchmarkDispatchRuntime {
+pub(crate) struct BenchmarkDispatchRuntime {
     /// Worker pool used for the benchmark's ASR requests.
     pub pool: Arc<WorkerPool>,
     /// Shared utterance cache used by the compare-side morphosyntax phase.
@@ -60,25 +64,59 @@ struct BenchmarkFileContext<'a> {
     cache_policy: CachePolicy,
     /// MWT dictionary shared with the compare pipeline.
     mwt: &'a MwtDict,
+    /// Planned benchmark pairs keyed by main audio display path.
+    planned_units: &'a HashMap<String, BenchmarkWorkUnit>,
     /// Whether output should pass through merge-abbrev before persistence.
     should_merge_abbrev: bool,
 }
 
 /// Dispatch benchmark through the Rust-owned benchmark pipeline.
-pub(in crate::runner) async fn dispatch_benchmark_infer(
+pub(crate) async fn dispatch_benchmark_infer(
     job: &RunnerJobSnapshot,
     store: &Arc<JobStore>,
     runtime: BenchmarkDispatchRuntime,
     plan: BenchmarkDispatchPlan,
 ) {
     let BenchmarkDispatchPlan {
+        kernel_plan,
         base_options,
         cache_policy,
         mwt,
         should_merge_abbrev,
     } = plan;
+    let planned_units: Arc<HashMap<String, BenchmarkWorkUnit>> =
+        match plan_work_units_for_job(crate::api::ReleasedCommand::Benchmark, job) {
+            Ok(units) => Arc::new(
+                units
+                    .into_iter()
+                    .filter_map(|unit| match unit {
+                        PlannedWorkUnit::Benchmark(benchmark) => {
+                            Some((benchmark.audio.display_path.to_string(), benchmark))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            Err(error) => {
+                for file in &job.pending_files {
+                    FileRunTracker::new(store, &job.identity.job_id, file.filename.as_ref())
+                        .fail(
+                            &format!("Benchmark planning failed: {error}"),
+                            FailureCategory::Validation,
+                            unix_now(),
+                        )
+                        .await;
+                }
+                return;
+            }
+        };
 
-    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.0.max(1)));
+    let file_parallelism = runtime
+        .num_workers
+        .0
+        .max(1)
+        .min(kernel_plan.file_parallelism_hint.max(1));
+    let file_sem = Arc::new(tokio::sync::Semaphore::new(file_parallelism));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -86,7 +124,10 @@ pub(in crate::runner) async fn dispatch_benchmark_infer(
             break;
         }
 
-        let Ok(permit) = file_sem.clone().acquire_owned().await else { tracing::warn!("file semaphore closed during shutdown"); break; };
+        let Ok(permit) = file_sem.clone().acquire_owned().await else {
+            tracing::warn!("file semaphore closed during shutdown");
+            break;
+        };
         let store = store.clone();
         let pool = runtime.pool.clone();
         let cache = runtime.cache.clone();
@@ -96,6 +137,7 @@ pub(in crate::runner) async fn dispatch_benchmark_infer(
         let file = file.clone();
         let mwt = mwt.clone();
         let rev_job_ids = runtime.rev_job_ids.clone();
+        let planned_units = planned_units.clone();
         let filename = file.filename.clone();
 
         tasks.push(spawn_supervised_file_task(
@@ -111,6 +153,7 @@ pub(in crate::runner) async fn dispatch_benchmark_infer(
                     rev_job_ids: rev_job_ids.as_ref(),
                     cache_policy,
                     mwt: &mwt,
+                    planned_units: planned_units.as_ref(),
                     should_merge_abbrev,
                 };
                 process_one_benchmark_file(&file, &mut opts, context).await
@@ -145,6 +188,7 @@ async fn process_one_benchmark_file(
         rev_job_ids,
         cache_policy,
         mwt,
+        planned_units,
         should_merge_abbrev,
     } = context;
     let job_id = &job.identity.job_id;
@@ -167,12 +211,24 @@ async fn process_one_benchmark_file(
 
     opts.rev_job_id = rev_job_ids.get(&original_audio_path).cloned();
 
-    let gold_path = gold_chat_path_for_audio(&original_audio_path.to_string_lossy());
-    let gold_text = match tokio::fs::read_to_string(&gold_path).await {
+    let Some(planned_unit) = planned_units.get(filename) else {
+        lifecycle
+            .fail(
+                &format!("Benchmark planning produced no work unit for {filename}"),
+                FailureCategory::Validation,
+                unix_now(),
+            )
+            .await;
+        return FileTaskOutcome::TerminalStateRecorded;
+    };
+
+    let gold_text = match tokio::fs::read_to_string(&planned_unit.gold_chat.source_path).await {
         Ok(text) => text,
         Err(err) => {
-            let err_msg =
-                format!("Failed to read benchmark reference transcript {gold_path}: {err}");
+            let err_msg = format!(
+                "Failed to read benchmark reference transcript {}: {err}",
+                planned_unit.gold_chat.display_path
+            );
             lifecycle
                 .fail(&err_msg, FailureCategory::InputMissing, unix_now())
                 .await;
@@ -229,47 +285,47 @@ async fn process_one_benchmark_file(
                 let finished_at = unix_now();
 
                 if should_merge_abbrev {
-                    outputs.annotated_main_chat =
-                        apply_merge_abbrev(&outputs.annotated_main_chat);
+                    outputs.annotated_main_chat = apply_merge_abbrev(&outputs.annotated_main_chat);
                 }
 
-                let output_filename = Path::new(filename)
-                    .with_extension("cha")
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
+                let primary_output = primary_output_artifact(
+                    crate::api::ReleasedCommand::Benchmark,
+                    &planned_unit.audio.display_path,
+                );
+                let csv_output_artifact = sidecar_output_artifacts(
+                    crate::api::ReleasedCommand::Benchmark,
+                    &planned_unit.audio.display_path,
+                )
+                .into_iter()
+                .find(|artifact| artifact.display_path.as_ref().ends_with(".compare.csv"))
+                .expect("benchmark command must emit a compare.csv sidecar");
 
-                let write_path = if job.filesystem.paths_mode
-                    && file_index < job.filesystem.output_paths.len()
-                {
-                    apply_result_filename(
-                        &job.filesystem.output_paths[file_index],
-                        &output_filename,
-                    )
-                } else {
-                    job.filesystem
-                        .staging_dir
-                        .join("output")
-                        .join(&output_filename)
-                };
+                let write_path =
+                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
-                if let Err(err) =
-                    tokio::fs::write(&write_path, &outputs.annotated_main_chat).await
+                if let Err(err) = tokio::fs::write(&write_path, &outputs.annotated_main_chat).await
                 {
                     warn!(error = %err, "Failed to write benchmark CHAT output");
                 }
 
-                let csv_path = write_path.with_extension("compare.csv");
+                let csv_path = output_write_path(
+                    &job.filesystem,
+                    file_index,
+                    &csv_output_artifact.display_path,
+                );
                 if let Err(err) = tokio::fs::write(&csv_path, &outputs.metrics_csv).await {
                     warn!(error = %err, "Failed to write benchmark CSV output");
                 }
 
                 lifecycle
-                    .complete_with_result(output_filename.into(), ContentType::Chat, finished_at)
+                    .complete_with_result(
+                        primary_output.display_path.clone(),
+                        primary_output.content_type,
+                        finished_at,
+                    )
                     .await;
                 return FileTaskOutcome::TerminalStateRecorded;
             }

@@ -1,7 +1,7 @@
 # Rust CLI and Server
 
 **Status:** Current
-**Last modified:** 2026-03-24 21:21 EDT
+**Last updated:** 2026-03-26 16:08 EDT
 
 This page covers the Rust control plane that powers `batchalign3`: the CLI
 client, the HTTP server, and how to extend them.
@@ -15,9 +15,9 @@ for replacing the legacy stdio JSON-lines worker contract.
 | Crate | Role |
 |-------|------|
 | `crates/batchalign-cli` | Clap CLI, dispatch router, daemon lifecycle, output writing |
-| `crates/batchalign-app` | Axum HTTP server, job store, worker pool, cache, workflow orchestration |
+| `crates/batchalign-app` | Axum HTTP server, job store, worker pool, cache, command-owned orchestration |
 | `crates/batchalign-chat-ops` | CHAT extraction, injection, validation, ASR post-processing, DP alignment |
-| `crates/batchalign-app/src/workflow/` | typed workflow families, bundles, and materializers |
+| `crates/batchalign-app/src/commands/` | released-command wrappers, specs, and command-owned entrypoints |
 | `pyo3/` | PyO3 bridge (`batchalign_core`) — separate single-crate project, not in the workspace |
 
 ## Common Developer Commands
@@ -61,8 +61,8 @@ The CLI layer now exposes two contributor-facing named seams:
   one named boundary object.
 
 The dispatcher also consults
-`batchalign_app::released_command_uses_local_audio()` and the shared workflow
-registry to decide whether a requested command can stay on an explicit
+`batchalign_app::released_command_uses_local_audio()` and the shared released
+command catalog to decide whether a requested command can stay on an explicit
 `--server` path or must fall back to a local daemon because it needs
 client-side audio files.
 
@@ -72,8 +72,10 @@ named record instead of spreading filename/message pairs through the progress
 code.
 
 The command-specific logic now starts in
-`crates/batchalign-app/src/workflow/`. That layer owns the typed workflow
-families and their intermediate artifacts. `crates/batchalign-app/src/runner/`
+`crates/batchalign-app/src/commands/`. That layer owns the command-visible
+entrypoints and specs. `command_family.rs` keeps the small family enum used by
+command metadata, `text_batch.rs` keeps reusable text-family helpers, and
+`runner/dispatch/` keeps shared execution helpers. `crates/batchalign-app/src/runner/`
 should stay focused on job lifecycle, queueing, and policy.
 
 One dependency-graph cleanup already landed here: the standalone binary's OTLP
@@ -85,12 +87,12 @@ The embedded CLI bootstrap path now also lives in `batchalign-cli`
 (`run_embedded_cli_from_argv()`), so `pyo3` no longer owns its own `clap`
 parsing or Tokio runtime setup.
 
-For day-to-day command work, prefer the workflow layer first:
+For day-to-day command work, prefer the command layer first:
 
-1. decide the workflow family
-2. add the typed bundle/materializer in `crates/batchalign-app/src/workflow/`
+1. add or extend `crates/batchalign-app/src/commands/<name>.rs`
+2. choose the existing runner family it should reuse
 3. keep the CLI argument plumbing thin
-4. let runner/dispatch handle lifecycle, not semantics
+4. let runner/dispatch handle lifecycle and resource policy, not semantics
 
 ## Adding a New CLI Command
 
@@ -123,17 +125,58 @@ wire format between CLI and server.
 
 ### 4. Server-side task routing and capability gate
 
-**`crates/batchalign-app/src/workflow/registry.rs`** — Register a
-`WorkflowDescriptor` for the new command. This drives both
-`infer_task_for_command()` and `command_requires_infer()` in
-`crates/batchalign-app/src/runner/policy.rs`.
+**`crates/batchalign-app/src/commands/<name>.rs`** — Add the command's
+`CommandModuleSpec`.
+
+**`crates/batchalign-app/src/commands/catalog.rs`** — Register/export that spec
+in the released-command catalog.
+
+Compatibility helpers in `crates/batchalign-app/src/runner/policy.rs` still
+answer `infer_task_for_command()` and `command_requires_infer()`, but they now
+derive directly from the command-owned catalog.
 
 The server's capability gate (`validate_infer_capability_gate()` in
 `crates/batchalign-app/src/state.rs`) cross-checks the worker's
-advertised `infer_tasks` against the workflow registry — commands whose
-workflow descriptor requires an infer task must have a matching worker
-capability. Capabilities are detected lazily from the first real worker
-spawn rather than from a dedicated probe worker at startup.
+advertised `infer_tasks` against the released-command descriptors in the
+command-owned catalog — commands whose descriptor requires an infer task must
+have a matching worker capability.
+
+The critical implementation rule is that **startup capability state is not
+authoritative for execution**. The current server intentionally allows an
+optimistic cold-start snapshot so app creation does not have to spawn a
+dedicated probe worker. Execution then resolves a **live capability snapshot**
+before it trusts infer-task gating:
+
+- `resolve_worker_capability_snapshot()` in `crates/batchalign-app/src/state.rs`
+  prefers worker-pool detected capabilities over the startup placeholder
+- `run_job()` in `crates/batchalign-app/src/runner/mod.rs` now forces a
+  command-appropriate live probe through
+  `WorkerPool::ensure_command_capabilities_with_overrides()` before rejecting an
+  infer-only command
+- `WorkerPool::discover_from_registry()` now also publishes a detected snapshot
+  when startup finds healthy TCP registry daemons, so registry-only deployments
+  do not start with `infer_tasks = []`
+- warmup paths also publish detected capabilities so prepared worker backends
+  and reused app instances do not carry stale `infer_tasks = []` snapshots
+
+This split is deliberate. It avoids the old failure mode where lazy startup said
+"we will discover capabilities later" but the first real `morphotag` or
+`compare` job was still judged by an empty startup snapshot.
+
+One implementation detail matters here: sequential TCP daemons accept one
+connection at a time. Registry discovery therefore probes capabilities on the
+same `TcpWorkerHandle` it already opened for the discovery health check, instead
+of trying to race a second connection.
+
+The registry layer now also carries explicit daemon ownership metadata:
+
+- `external` daemons are preserved on routine shutdown
+- `server_owned` daemons are tagged with `server_instance_id` and `server_pid`
+- shutdown only retires daemons owned by the current server instance
+- discovery skips foreign live owners and reaps stale foreign owned daemons
+
+That ownership model is the durable fix for the old orphan-daemon/kill-all
+whackamole around warmup-spawned TCP workers.
 
 On the Python side, you must also add the `InferTask` to `_INFER_TASK_PROBES` in
 `batchalign/worker/_handlers.py`. See
@@ -153,16 +196,16 @@ Route the command to its orchestrator in the appropriate dispatch module under
 
 ### 6. Orchestrator module
 
-**`crates/batchalign-app/src/workflow/foo.rs`** — The typed workflow
-implementation that owns the command's semantic shape, typed bundles, and
-materialization strategy.
+**`crates/batchalign-app/src/commands/foo.rs`** — The command-owned wrapper that
+owns the command's semantic shape, shared plan selection, and materialization
+policy.
 
-**`crates/batchalign-app/src/foo.rs`** — If a compatibility orchestrator is
-still needed, keep it thin and delegate into `workflow/foo.rs`. The old
-"all logic lives in the orchestrator" model is no longer the preferred one.
+**`crates/batchalign-app/src/foo.rs`** or `runner/dispatch/*` — Keep shared
+algorithmic code and reusable runner families here when it improves clarity, but
+do not make them the only obvious home of the released command.
 
 For batch text workflows, prefer the named wrappers in
-`crates/batchalign-app/src/workflow/text_batch.rs` over raw tuples:
+`crates/batchalign-app/src/text_batch.rs` over raw tuples:
 
 - `TextBatchFileInput` keeps one file name and one owned CHAT payload together.
 - `TextBatchFileResults` keeps the per-file outcome shape explicit.

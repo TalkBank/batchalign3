@@ -223,10 +223,7 @@ async fn submit_and_get_job() {
 
     let info: JobInfo = resp.json().await.expect("parse job info");
     assert_eq!(info.command, ReleasedCommand::Transcribe);
-    assert_eq!(
-        info.lang,
-        LanguageSpec::Resolved(LanguageCode3::eng())
-    );
+    assert_eq!(info.lang, LanguageSpec::Resolved(LanguageCode3::eng()));
     assert_eq!(info.total_files, 1);
     let job_id = info.job_id.clone();
 

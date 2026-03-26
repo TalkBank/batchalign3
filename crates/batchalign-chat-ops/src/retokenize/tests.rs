@@ -2,9 +2,9 @@ use super::*;
 use crate::extract;
 use mapping::{build_word_token_mapping, try_deterministic_word_token_mapping};
 use parse_helpers::{handle_ending_punct_skip, try_parse_token_as_word};
-use talkbank_parser::TreeSitterParser;
 use talkbank_model::alignment::helpers::TierDomain;
 use talkbank_model::model::{ChatFile, GrammaticalRelation, Line, Mor, WriteChat};
+use talkbank_parser::TreeSitterParser;
 
 fn parse_chat(text: &str) -> ChatFile {
     let parser = TreeSitterParser::new().unwrap();
@@ -68,7 +68,11 @@ fn mor(spec: &str) -> Mor {
 /// Construct a `GrammaticalRelation` from `"index|head|RELATION"`.
 fn gra(spec: &str) -> GrammaticalRelation {
     let parts: Vec<&str> = spec.split('|').collect();
-    assert_eq!(parts.len(), 3, "GRA spec must be 'index|head|RELATION': {spec}");
+    assert_eq!(
+        parts.len(),
+        3,
+        "GRA spec must be 'index|head|RELATION': {spec}"
+    );
     GrammaticalRelation::new(
         parts[0].parse::<usize>().unwrap(),
         parts[1].parse::<usize>().unwrap(),
@@ -189,7 +193,16 @@ fn test_same_tokenization() {
     let gra_rels = build_gra("1|2|SUBJ 2|0|ROOT 3|2|PUNCT");
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     assert!(
@@ -216,7 +229,16 @@ fn test_different_text_1_to_1() {
     let gra_rels = build_gra("1|2|AUX 2|0|ROOT 3|2|PUNCT");
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     assert!(
@@ -246,7 +268,16 @@ fn test_clitic_split_1_to_n() {
     let gra_rels = build_gra("1|2|SUBJ 2|0|ROOT 3|2|NEG 4|2|XCOMP 5|4|PUNCT");
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     // After retokenization, "don't" should be split into "do" and "n't"
@@ -273,7 +304,16 @@ fn test_preserves_non_word_content() {
     let gra_rels = build_gra("1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT");
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     // Retrace group still present
@@ -306,7 +346,16 @@ fn test_xbxxx_restoration() {
     let gra_rels = build_gra("1|2|FLAT 2|0|ROOT 3|2|XCOMP 4|2|PUNCT");
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     // xbxxx should NOT appear in output -- restored to "gumma"
@@ -342,7 +391,16 @@ fn test_round_trip_serialization() {
     let gra_rels = build_gra(gra_str);
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     // The output should be valid CHAT -- verify it re-parses
@@ -393,7 +451,16 @@ fn test_comma_separator_preserves_words() {
     let gra_rels = build_gra(gra_str);
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
 
@@ -436,7 +503,16 @@ fn test_non_nlp_words_preserved() {
     let gra_rels = build_gra(gra_str);
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
 
@@ -486,7 +562,16 @@ fn test_xxx_preserved_in_utterance() {
     let gra_rels = build_gra(gra_str);
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
 
@@ -552,7 +637,16 @@ fn test_whitespace_in_stanza_token_stripped() {
     let gra_rels = build_gra(gra_str);
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     // The merged word "ふす" should appear exactly once on the main tier
@@ -595,7 +689,16 @@ fn test_n_to_1_merge_no_duplication() {
     let gra_rels = build_gra(gra_str);
 
     let parser = TreeSitterParser::new().unwrap();
-    retokenize_utterance(&parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels).unwrap();
+    retokenize_utterance(
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
+    )
+    .unwrap();
 
     let output = chat.to_chat_string();
     let main_line = output
@@ -637,10 +740,7 @@ fn test_cjk_retokenize_with_retrace() {
     // MOR domain extraction should skip the retraced <下 次> [/]
     // Non-retraced words only
     let non_retrace_count = original_words.len();
-    assert!(
-        non_retrace_count > 0,
-        "Should have non-retraced words"
-    );
+    assert!(non_retrace_count > 0, "Should have non-retraced words");
 
     // Stanza tokens match non-retraced words (1:1, no merging for this test)
     let stanza_tokens: Vec<String> = original_words
@@ -661,7 +761,13 @@ fn test_cjk_retokenize_with_retrace() {
 
     let parser = TreeSitterParser::new().unwrap();
     let result = retokenize_utterance(
-        &parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels,
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
     );
     assert!(
         result.is_ok(),
@@ -702,8 +808,8 @@ fn test_cjk_retokenize_retrace_with_n1_merges() {
     let stanza_tokens = vec![
         "呢".to_string(),
         "度".to_string(),
-        "下次".to_string(),   // N:1 merge: 下+次
-        "食飯".to_string(),   // N:1 merge: 食+飯
+        "下次".to_string(), // N:1 merge: 下+次
+        "食飯".to_string(), // N:1 merge: 食+飯
         "啦".to_string(),
     ];
 
@@ -711,19 +817,33 @@ fn test_cjk_retokenize_retrace_with_n1_merges() {
     let (mors, term) = build_mor("noun|呢 noun|度 noun|下次 verb|食飯 part|啦 .");
     let gra_rels = build_gra("1|5|CASE 2|5|NMOD 3|5|NMOD 4|5|COMPOUND 5|0|ROOT");
 
-    eprintln!("Stanza tokens: {:?} (count: {})", stanza_tokens, stanza_tokens.len());
+    eprintln!(
+        "Stanza tokens: {:?} (count: {})",
+        stanza_tokens,
+        stanza_tokens.len()
+    );
     eprintln!("MOR count: {}, GRA count: {}", mors.len(), gra_rels.len());
 
     // Debug: show the word-token mapping
     let mapping = mapping::build_word_token_mapping(&original_words, &stanza_tokens);
     for i in 0..original_words.len() {
         let tokens = mapping.tokens_for_word(i);
-        eprintln!("  word[{i}] '{}' → tokens {:?}", original_words[i].text.as_ref(), tokens);
+        eprintln!(
+            "  word[{i}] '{}' → tokens {:?}",
+            original_words[i].text.as_ref(),
+            tokens
+        );
     }
 
     let parser = TreeSitterParser::new().unwrap();
     let result = retokenize_utterance(
-        &parser, utt, &original_words, &stanza_tokens, mors, term, gra_rels,
+        &parser,
+        utt,
+        &original_words,
+        &stanza_tokens,
+        mors,
+        term,
+        gra_rels,
     );
 
     if let Err(ref e) = result {
@@ -741,7 +861,13 @@ fn test_cjk_retokenize_retrace_with_n1_merges() {
 
     let output = chat.to_chat_string();
     assert!(output.contains("[/]"), "Retrace preserved: {output}");
-    assert!(output.contains("下次"), "Merged 下次 should appear: {output}");
-    assert!(output.contains("食飯"), "Merged 食飯 should appear: {output}");
+    assert!(
+        output.contains("下次"),
+        "Merged 下次 should appear: {output}"
+    );
+    assert!(
+        output.contains("食飯"),
+        "Merged 食飯 should appear: {output}"
+    );
     assert!(output.contains("%mor:"), "Has %mor tier: {output}");
 }

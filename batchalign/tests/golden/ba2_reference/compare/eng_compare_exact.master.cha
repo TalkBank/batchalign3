@@ -1,0 +1,11 @@
+@UTF8
+@Begin
+@Languages:	eng
+@Participants:	PAR Participant
+@ID:	eng|test|PAR|||||Participant|||
+*PAR:	hello world .
+%mor:	intj|hello noun|world
+%gra:	1|2|DISCOURSE 2|2|ROOT
+%xsrep:	hello world .
+%xsmor:	INTJ NOUN PUNCT
+@End

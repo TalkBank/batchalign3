@@ -1,4 +1,3 @@
-use std::path::{Path, PathBuf};
 use super::*;
 use batchalign_app::api::ReleasedCommand;
 use batchalign_app::options::{
@@ -6,6 +5,7 @@ use batchalign_app::options::{
 };
 use clap::Parser;
 use rstest::rstest;
+use std::path::{Path, PathBuf};
 
 fn typed_options_for(args: &[&str]) -> CommandOptions {
     let cli = Cli::parse_from(args);
@@ -660,20 +660,46 @@ fn build_options_align_defaults() {
 fn build_options_align_single_flags() {
     // Each flag's effect on the Align options struct.
     let cases: Vec<(&[&str], Box<dyn Fn(&batchalign_app::options::AlignOptions)>)> = vec![
-        (&["batchalign3", "align", "--whisper-fa", "corpus/"] as &[&str],
-         Box::new(|a| assert_eq!(a.fa_engine, FaEngineName::Whisper))),
-        (&["batchalign3", "align", "--fa-engine-custom", "wav2vec_fa_canto", "corpus/"],
-         Box::new(|a| assert_eq!(a.fa_engine, FaEngineName::Wav2vecCanto))),
-        (&["batchalign3", "align", "--utr-engine-custom", "tencent_utr", "corpus/"],
-         Box::new(|a| assert_eq!(a.utr_engine, Some(AppUtrEngine::HkTencent)))),
-        (&["batchalign3", "align", "--no-utr", "corpus/"],
-         Box::new(|a| assert!(a.utr_engine.is_none()))),
-        (&["batchalign3", "align", "--nowor", "corpus/"],
-         Box::new(|a| assert!(!a.wor.should_write()))),
-        (&["batchalign3", "align", "--pauses", "corpus/"],
-         Box::new(|a| assert!(a.pauses))),
-        (&["batchalign3", "align", "--merge-abbrev", "corpus/"],
-         Box::new(|a| assert!(a.merge_abbrev.should_merge()))),
+        (
+            &["batchalign3", "align", "--whisper-fa", "corpus/"] as &[&str],
+            Box::new(|a| assert_eq!(a.fa_engine, FaEngineName::Whisper)),
+        ),
+        (
+            &[
+                "batchalign3",
+                "align",
+                "--fa-engine-custom",
+                "wav2vec_fa_canto",
+                "corpus/",
+            ],
+            Box::new(|a| assert_eq!(a.fa_engine, FaEngineName::Wav2vecCanto)),
+        ),
+        (
+            &[
+                "batchalign3",
+                "align",
+                "--utr-engine-custom",
+                "tencent_utr",
+                "corpus/",
+            ],
+            Box::new(|a| assert_eq!(a.utr_engine, Some(AppUtrEngine::HkTencent))),
+        ),
+        (
+            &["batchalign3", "align", "--no-utr", "corpus/"],
+            Box::new(|a| assert!(a.utr_engine.is_none())),
+        ),
+        (
+            &["batchalign3", "align", "--nowor", "corpus/"],
+            Box::new(|a| assert!(!a.wor.should_write())),
+        ),
+        (
+            &["batchalign3", "align", "--pauses", "corpus/"],
+            Box::new(|a| assert!(a.pauses)),
+        ),
+        (
+            &["batchalign3", "align", "--merge-abbrev", "corpus/"],
+            Box::new(|a| assert!(a.merge_abbrev.should_merge())),
+        ),
     ];
     for (args, check) in cases {
         let opts = typed_options_for(args);
@@ -1383,10 +1409,19 @@ fn command_profile_matches_expected(
 ) {
     let cli = Cli::parse_from(args);
     let profile = CommonOpts::command_profile(&cli.command);
-    assert_eq!(profile.command, expected_cmd, "command mismatch for {args:?}");
+    assert_eq!(
+        profile.command, expected_cmd,
+        "command mismatch for {args:?}"
+    );
     assert_eq!(profile.lang, expected_lang, "lang mismatch for {args:?}");
-    assert_eq!(profile.num_speakers, expected_speakers, "num_speakers mismatch for {args:?}");
-    assert_eq!(profile.extensions, expected_exts, "extensions mismatch for {args:?}");
+    assert_eq!(
+        profile.num_speakers, expected_speakers,
+        "num_speakers mismatch for {args:?}"
+    );
+    assert_eq!(
+        profile.extensions, expected_exts,
+        "extensions mismatch for {args:?}"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -1505,7 +1540,13 @@ fn build_options_engine_overrides_empty_by_default() {
 #[case(r#"{"asr":{"name":"whisper"}}"#)]
 fn build_options_engine_overrides_invalid_values_are_rejected(#[case] overrides: &str) {
     assert_parse_error_contains(
-        &["batchalign3", "--engine-overrides", overrides, "morphotag", "corpus/"],
+        &[
+            "batchalign3",
+            "--engine-overrides",
+            overrides,
+            "morphotag",
+            "corpus/",
+        ],
         &["invalid --engine-overrides JSON"],
     );
 }

@@ -247,7 +247,9 @@ mod tests {
     use super::*;
     use talkbank_parser::TreeSitterParser;
 
-    fn parse_chat_file(text: &str) -> Result<talkbank_model::ChatFile, talkbank_model::ParseErrors> {
+    fn parse_chat_file(
+        text: &str,
+    ) -> Result<talkbank_model::ChatFile, talkbank_model::ParseErrors> {
         let parser = TreeSitterParser::new().expect("grammar loads");
         parser.parse_chat_file(text)
     }

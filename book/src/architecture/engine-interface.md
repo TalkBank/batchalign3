@@ -1,7 +1,7 @@
 # Worker Interface
 
 **Status:** Current
-**Last modified:** 2026-03-24 21:21 EDT
+**Last modified:** 2026-03-26 14:05 EDT
 
 ## Architecture
 
@@ -10,18 +10,19 @@ extraction, result injection, validation, and serialization. Python workers are
 stateless ML inference endpoints spawned via stdio IPC. They load pre-trained
 neural models, receive typed prepared-audio or prepared-text requests, call ML
 libraries, and return raw model output. The intended steady state is that
-Python remains a thin inference host while workflow policy and document
+Python remains a thin inference host while command policy and document
 semantics stay Rust-owned.
 
-`compare` is the clearest Rust-owned reference-projection workflow in this
-model, and `benchmark` is a Rust-owned composite workflow that runs transcribe
+`compare` is the clearest Rust-owned reference-projection command in this
+model, and `benchmark` is a Rust-owned composite command that runs transcribe
 then compare before materializing its outputs. The Python `benchmark.py`
 module remains only a convenience wrapper over Rust WER helpers.
 
-New command semantics should not be invented here. The workflow layer under
-`crates/batchalign-app/src/workflow/` owns command shape, typed bundles, and
-materialization. This page only describes the worker/provider boundary that
-those workflows consume.
+New command semantics should not be invented here. The command-owned Rust layer
+under `crates/batchalign-app/src/commands/`, together with owning modules like
+`compare.rs`, `benchmark.rs`, `transcribe/`, `fa/`, `morphosyntax/`, and
+`text_batch.rs`, owns command shape and materialization. This page only
+describes the worker/provider boundary those Rust entrypoints consume.
 
 ```mermaid
 sequenceDiagram

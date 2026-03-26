@@ -40,7 +40,7 @@ pub use types::{DiffSummary, UtteranceDelta};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     /// Build a minimal valid CHAT file from utterance lines.
     fn make_chat(utterances: &[(&str, &str)]) -> String {

@@ -14,17 +14,16 @@ mod infer;
 pub mod types;
 
 // Re-export the public API so callers don't need to know about the split.
-pub use types::*;
 pub(crate) use asr_output::*;
 pub(crate) use infer::*;
+pub use types::*;
 
 use std::path::Path;
 
 use crate::error::ServerError;
 use crate::pipeline::PipelineServices;
+use crate::pipeline::transcribe::run_transcribe_pipeline;
 use crate::runner::util::ProgressSender;
-use crate::workflow::PerFileWorkflow;
-use crate::workflow::transcribe::{TranscribeWorkflow, TranscribeWorkflowRequest};
 
 // ---------------------------------------------------------------------------
 // Orchestrator
@@ -48,17 +47,8 @@ pub(crate) async fn process_transcribe(
     progress: Option<&ProgressSender>,
     debug_dir: Option<&Path>,
 ) -> Result<String, ServerError> {
-    TranscribeWorkflow
-        .run(TranscribeWorkflowRequest {
-            audio_path,
-            services,
-            options: opts,
-            progress,
-            debug_dir,
-        })
-        .await
+    run_transcribe_pipeline(audio_path, services, opts, progress, debug_dir).await
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -67,9 +57,7 @@ pub(crate) async fn process_transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{
-        DurationSeconds, LanguageCode3, LanguageSpec, WorkerLanguage,
-    };
+    use crate::api::{DurationSeconds, LanguageCode3, LanguageSpec, WorkerLanguage};
     use batchalign_chat_ops::asr_postprocess::{self, SpeakerIndex};
     use batchalign_chat_ops::build_chat::{self, TranscriptDescription};
     use batchalign_chat_ops::serialize::to_chat_string;

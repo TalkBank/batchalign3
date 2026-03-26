@@ -219,7 +219,8 @@ impl TcpWorkerHandle {
             WorkerResponse::Health { response } => {
                 if !response.status.is_ok() {
                     return Err(WorkerError::HealthCheckFailed(format!(
-                        "status={}", response.status
+                        "status={}",
+                        response.status
                     )));
                 }
                 Ok(response)

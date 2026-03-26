@@ -1,13 +1,15 @@
 # Batchalign Command I/O Parity: Local CLI vs Server
 
 **Status:** Current
-**Last updated:** 2026-03-24 15:37 EDT
+**Last updated:** 2026-03-26 14:05 EDT
 
 This document describes the input/output flow for every batchalign command,
 comparing local CLI dispatch with the server-based (`--server`) dispatch.
-For implementation details, treat the typed workflow layer under
-`crates/batchalign-app/src/workflow/` as the source of truth for command
-semantics. The CLI and runner layers should stay thin.
+For implementation details, treat the command-owned entrypoints under
+`crates/batchalign-app/src/commands/` plus the owning orchestrator modules
+(`compare.rs`, `benchmark.rs`, `transcribe/`, `fa/`, and `morphosyntax/`) as
+the source of truth for command semantics. The CLI and runner layers should
+stay thin.
 
 For each command: what goes in, where it comes from, what gets written, and
 whether files are mutated in place.
@@ -39,10 +41,14 @@ When you are adding a new command or changing an existing one, remember the
 current architecture split:
 
 - CLI args live in `crates/batchalign-cli`
-- workflow semantics live in `crates/batchalign-app/src/workflow/`
+- released-command identity and top-level orchestration live in
+  `crates/batchalign-app/src/commands/`
+- shared command-shape metadata lives in
+  `crates/batchalign-app/src/command_family.rs`
+- reusable text-batch helper types live in
+  `crates/batchalign-app/src/text_batch.rs`
 - job lifecycle / queueing live in `crates/batchalign-app/src/runner/`
-- output materialization belongs with the workflow family that owns the
-  command shape
+- output materialization belongs with the owning command or orchestrator module
 
 When output resolves to the same path as input, mutating commands overwrite the
 original `.cha` file (no automatic backup).
@@ -209,40 +215,52 @@ re-running morphotag afterwards).
 ### 8. compare
 
 **Purpose:** Compare CHAT transcripts against gold-standard references to compute
-word error rate (WER) and inject per-utterance alignment annotations.
+word error rate (WER) and inject per-utterance comparison annotations.
 
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
 | **Input files** | `.cha` files in `IN_DIR` | `.cha` content sent as text |
 | **Gold files** | `FILE.gold.cha` in same directory as `FILE.cha` | Gold files sent alongside main files, or read from server filesystem in paths mode |
 | **Extensions filter** | `["cha"]` | Same |
-| **Output** | `.cha` with `%xsrep` tiers + `.compare.csv` metrics | Same — client writes both files to `OUT_DIR` |
+| **Output** | `.cha` with `%xsrep` / `%xsmor` tiers + `.compare.csv` metrics | Same — client writes both files to `OUT_DIR` |
 | **Mutation** | If `OUT_DIR = IN_DIR`: **overwrites original `.cha` in place**. Gold files are never modified. | Same |
-| **Key options** | `--merge-abbrev`, `--override-cache` | All passed through typed command options |
+| **Key options** | `--lang`, `--merge-abbrev`, `--override-cache` | All passed through typed command options |
 
-**What changes in the `.cha`:** Morphosyntax (`%mor`/`%gra`) is run first, then
-`%xsrep` user-defined dependent tiers are injected showing per-utterance word
-alignment: matches, insertions (`[+ main]word`), and deletions (`[- gold]word`).
+**What changes in the `.cha`:** The released output is the projected
+gold/reference transcript written at the main file's output path. BA3
+morphotags the main transcript, keeps the gold transcript raw during artifact
+construction, projects structurally safe `%mor` / `%gra` / `%wor` information
+onto the gold AST, and injects `%xsrep` / `%xsmor` on that projected reference
+output. `%xsrep` uses `word`, `+word`, and `-word`; `%xsmor` mirrors the same
+alignment with POS tags such as `NOUN`, `+ADJ`, and `-?`. Those tiers are now
+materialized from typed compare-tier models and lowered once at the final CHAT
+serialization boundary.
 
 **Additional output:** A companion `.compare.csv` file is written alongside each
 `.cha` output with aggregate metrics (WER, accuracy, match/insertion/deletion
-counts, total word counts).
+counts, total word counts) plus per-POS rows. The CSV is emitted from a typed
+metrics table model via the Rust `csv` crate, not by assembling row strings by
+hand.
 
 **Gold file convention:** For each `FILE.cha`, the gold companion is
 `FILE.gold.cha` in the same directory. Files ending in `.gold.cha` are
 automatically skipped as inputs (they are companions). If no gold file is
 found, the file is marked as failed with an error message.
 
-**Pipeline:** morphosyntax → local projection/alignment bundle construction →
-materialization. The workflow layer now models compare as a reference
-projection workflow rather than "just another per-file mutator." The
-implementation may still call into morphosyntax and DP alignment helpers, but
-the semantic unit is the comparison bundle, not a flat text rewrite.
+**Pipeline:** pair main + gold → morphosyntax on main only → parse raw gold →
+BA2-style per-gold-utterance local-window alignment → `ComparisonBundle`
+(main view, gold view, structural word matches, metrics) → materialization. The
+command-owned compare layer now models compare as a reference-projection
+command rather than "just another per-file mutator." The semantic unit is the
+comparison bundle, not a flat text rewrite.
 
 **Output shapes:** compare can materialize more than one view of the same
-comparison bundle. The current default is main-shaped output with `%xsrep`
-injection, but the architecture also supports gold-shaped projection output as a
-first-class materializer path.
+comparison bundle. The released command now emits the projected reference view.
+Benchmark-style flows can still materialize a main-annotated view internally.
+The projection path works over the CHAT AST: exact structural matches can copy
+`%mor` / `%gra` / `%wor`, while partial matches stay conservative instead of
+reconstructing tiers from strings. Compare parity is semantic — the workflow
+matches BA2 behavior without copying BA2's string/document shell.
 
 **No media involved.** This is a text-only operation.
 
@@ -264,9 +282,11 @@ first-class materializer path.
 extension renamed. Additionally includes evaluation metrics from comparing
 ASR output against reference transcripts.
 
-`benchmark` is a composite workflow: it runs transcribe and then compare via
-typed workflow composition. If you are changing benchmark behavior, look at
-the workflow layer first rather than adding logic in CLI dispatch.
+`benchmark` is a composite command: it runs transcribe first and then calls a
+main-annotated compare path internally. It deliberately shares compare-side
+internals, but it does **not** share compare's released projected-reference
+contract. If you are changing benchmark behavior, look at the command-owned
+Rust layer first rather than adding logic in CLI dispatch.
 
 ---
 
@@ -323,7 +343,7 @@ batchalign3 avqi INPUT_DIR OUTPUT_DIR
 | **utseg** | Existing `.cha` | Recomputes utterance boundaries |
 | **translate** | Existing `.cha` | Adds translation tier |
 | **coref** | Existing `.cha` | Adds coreference annotations |
-| **compare** | Existing `.cha` + gold `.cha` | Adds `%xsrep` tiers, writes `.compare.csv` |
+| **compare** | Existing `.cha` + gold `.cha` | Writes projected reference `.cha` with `%xsrep` / `%xsmor`, plus `.compare.csv` |
 
 These commands read `.cha`, process the `Document`, and write the result
 back. When `OUT_DIR = IN_DIR`, the original file is **overwritten**. The

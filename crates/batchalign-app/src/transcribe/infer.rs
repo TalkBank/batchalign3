@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use super::types::{AsrBackend, AsrResponse, AsrWorkerMode};
 use crate::api::{LanguageCode3, LanguageSpec, NumSpeakers, WorkerLanguage};
 use crate::error::ServerError;
 use crate::revai::infer_revai_asr;
@@ -16,7 +17,6 @@ use crate::worker::speaker_request_v2::{
     PreparedSpeakerRequestIdsV2, SpeakerBuildInputV2, build_speaker_request_v2,
 };
 use crate::worker::speaker_result_v2::parse_speaker_result_v2;
-use super::types::{AsrBackend, AsrResponse, AsrWorkerMode};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -178,4 +178,3 @@ pub(crate) async fn infer_speaker(
             ServerError::Validation(format!("speaker V2 response parse failed: {error}"))
         })
 }
-

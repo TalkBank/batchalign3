@@ -2,6 +2,8 @@
 //!
 //! These are re-exported from [`super::api`] for backward compatibility.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -141,7 +143,6 @@ impl TryFrom<&str> for ReleasedCommand {
     }
 }
 
-
 /// Borrowed CHAT document text at a contributor-facing boundary.
 ///
 /// This wrapper is intentionally lightweight: it prevents workflow/request
@@ -212,17 +213,29 @@ impl LanguageCode3 {
     // -- Well-known language codes (use these instead of string literals) --
 
     /// English (`"eng"`).
-    pub fn eng() -> Self { Self("eng".to_owned()) }
+    pub fn eng() -> Self {
+        Self("eng".to_owned())
+    }
     /// Spanish (`"spa"`).
-    pub fn spa() -> Self { Self("spa".to_owned()) }
+    pub fn spa() -> Self {
+        Self("spa".to_owned())
+    }
     /// French (`"fra"`).
-    pub fn fra() -> Self { Self("fra".to_owned()) }
+    pub fn fra() -> Self {
+        Self("fra".to_owned())
+    }
     /// Chinese / Mandarin (`"zho"`).
-    pub fn zho() -> Self { Self("zho".to_owned()) }
+    pub fn zho() -> Self {
+        Self("zho".to_owned())
+    }
     /// Cantonese (`"yue"`).
-    pub fn yue() -> Self { Self("yue".to_owned()) }
+    pub fn yue() -> Self {
+        Self("yue".to_owned())
+    }
     /// Japanese (`"jpn"`).
-    pub fn jpn() -> Self { Self("jpn".to_owned()) }
+    pub fn jpn() -> Self {
+        Self("jpn".to_owned())
+    }
 
     // -- Construction --
 
@@ -440,7 +453,7 @@ impl<'de> serde::Deserialize<'de> for WorkerLanguage {
 }
 
 impl schemars::JsonSchema for WorkerLanguage {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
+    fn schema_name() -> Cow<'static, str> {
         "WorkerLanguage".into()
     }
 
@@ -573,7 +586,7 @@ impl<'de> Deserialize<'de> for LanguageSpec {
 }
 
 impl schemars::JsonSchema for LanguageSpec {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
+    fn schema_name() -> Cow<'static, str> {
         "LanguageSpec".into()
     }
 
@@ -598,10 +611,7 @@ impl schemars::JsonSchema for LanguageSpec {
 /// separators during deserialization even though the system routinely carries
 /// relative paths.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash,
-    serde::Serialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
+    Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, utoipa::ToSchema, schemars::JsonSchema,
 )]
 #[serde(transparent)]
 pub struct DisplayPath(pub String);
@@ -698,7 +708,6 @@ impl<'de> serde::Deserialize<'de> for DisplayPath {
         Ok(Self(normalize_backslashes(&s)))
     }
 }
-
 
 string_id!(
     /// Identifier of a server/fleet node.
@@ -939,8 +948,7 @@ mod tests {
 
     #[test]
     fn language_spec_serializes_resolved() {
-        let json =
-            serde_json::to_string(&LanguageSpec::Resolved(LanguageCode3::spa())).unwrap();
+        let json = serde_json::to_string(&LanguageSpec::Resolved(LanguageCode3::spa())).unwrap();
         assert_eq!(json, "\"spa\"");
     }
 

@@ -5,11 +5,11 @@
 //! conventions.
 
 use crate::api::ReleasedCommand;
-use crate::worker::InferTask;
-use crate::workflow::{
+use crate::commands::{
     RunnerDispatchKind, command_runner_dispatch_kind, command_workflow_descriptor,
-    result_filename_for_command_name,
 };
+use crate::recipe_runner::runtime::result_display_path_for_command;
+use crate::worker::InferTask;
 
 /// Return the primary infer task backing one released command.
 pub(crate) fn infer_task_for_command(command: ReleasedCommand) -> Option<InferTask> {
@@ -31,5 +31,5 @@ pub(crate) fn command_requires_infer(command: ReleasedCommand) -> bool {
 
 /// Derive the result filename for one released command.
 pub(crate) fn result_filename_for_command(command: ReleasedCommand, filename: &str) -> String {
-    result_filename_for_command_name(command.as_ref(), filename)
+    result_display_path_for_command(command, filename).to_string()
 }

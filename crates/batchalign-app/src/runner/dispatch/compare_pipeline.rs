@@ -1,24 +1,30 @@
 //! Compare dispatch: per-file morphosyntax + DP alignment against gold.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::api::{ContentType, DisplayPath, LanguageCode3};
+use crate::api::{LanguageCode3, ReleasedCommand};
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
+use crate::recipe_runner::runtime::{
+    output_write_path, plan_work_units_for_job, primary_output_artifact, sidecar_output_artifacts,
+};
+use crate::recipe_runner::work_unit::{CompareWorkUnit, PlannedWorkUnit};
 use crate::scheduling::FailureCategory;
-use crate::workflow::text_batch::TextBatchFileInput;
+use crate::text_batch::TextBatchFileInput;
 use tracing::{info, warn};
 
 use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 
-use super::super::util::{FileRunTracker, apply_result_filename, classify_server_error};
+use super::super::util::{FileRunTracker, classify_server_error};
 use super::infer_batched::apply_merge_abbrev;
 
 /// Dispatch compare: per-file morphosyntax + DP alignment against gold.
 ///
 /// Each file is processed individually because it needs its own gold companion.
 /// The compare orchestrator runs morphosyntax first, then DP-aligns against the
-/// gold transcript and produces `%xsrep` tiers + a `.compare.csv` metrics file.
+/// gold transcript and produces `%xsrep`/`%xsmor` tiers + a `.compare.csv`
+/// metrics file.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::runner) async fn dispatch_compare(
     job: &RunnerJobSnapshot,
@@ -34,6 +40,34 @@ pub(in crate::runner) async fn dispatch_compare(
     let file_list = &job.pending_files;
     let fallback_lang = crate::api::LanguageCode3::eng();
     let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
+    let compare_units: HashMap<String, CompareWorkUnit> =
+        match plan_work_units_for_job(ReleasedCommand::Compare, job) {
+            Ok(units) => units
+                .into_iter()
+                .filter_map(|unit| match unit {
+                    PlannedWorkUnit::Compare(pair) => {
+                        Some((pair.main.display_path.to_string(), pair))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            Err(error) => {
+                for file in file_texts {
+                    let filename = file.filename.as_ref();
+                    if crate::compare::is_gold_file(filename) {
+                        continue;
+                    }
+                    FileRunTracker::new(store, job_id, filename)
+                        .fail(
+                            &format!("Compare planning failed: {error}"),
+                            FailureCategory::Validation,
+                            unix_now(),
+                        )
+                        .await;
+                }
+                return;
+            }
+        };
 
     for file in file_texts {
         let filename = file.filename.as_ref();
@@ -46,8 +80,17 @@ pub(in crate::runner) async fn dispatch_compare(
             continue;
         }
 
-        // Find the gold file companion
-        let gold_filename = crate::compare::gold_path_for(filename);
+        let Some(pair) = compare_units.get(filename) else {
+            lifecycle
+                .fail(
+                    &format!("Compare planning produced no pair for {filename}"),
+                    FailureCategory::Validation,
+                    unix_now(),
+                )
+                .await;
+            continue;
+        };
+        let gold_filename = pair.gold.display_path.as_ref();
 
         // Read gold file: check if it's in the same batch, or read from disk
         let gold_text = file_texts
@@ -57,44 +100,22 @@ pub(in crate::runner) async fn dispatch_compare(
 
         let gold_text = match gold_text {
             Some(text) => text,
-            None => {
-                // Try to read from the filesystem
-                let file_index = file_list
-                    .iter()
-                    .find(|file| file.filename.as_ref() == filename)
-                    .map(|file| file.file_index)
-                    .unwrap_or(0);
-                let gold_read_path = if job.filesystem.paths_mode {
-                    if file_index < job.filesystem.source_paths.len() {
-                        crate::compare::gold_path_for(
-                            &job.filesystem.source_paths[file_index].to_string_lossy(),
-                        )
-                    } else {
-                        crate::compare::gold_path_for(filename)
-                    }
-                } else {
-                    format!(
-                        "{}/input/{gold_filename}",
-                        job.filesystem.staging_dir.display()
-                    )
-                };
-                match tokio::fs::read_to_string(&gold_read_path).await {
-                    Ok(text) => text,
-                    Err(_) => {
-                        lifecycle
-                            .fail(
-                                &format!(
-                                    "No gold .cha file found for comparison. \
+            None => match tokio::fs::read_to_string(&pair.gold.source_path).await {
+                Ok(text) => text,
+                Err(_) => {
+                    lifecycle
+                        .fail(
+                            &format!(
+                                "No gold .cha file found for comparison. \
                                      main: {filename}, expected: {gold_filename}"
-                                ),
-                                FailureCategory::InputMissing,
-                                unix_now(),
-                            )
-                            .await;
-                        continue;
-                    }
+                            ),
+                            FailureCategory::InputMissing,
+                            unix_now(),
+                        )
+                        .await;
+                    continue;
                 }
-            }
+            },
         };
 
         info!(job_id = %job_id, filename = %filename, "Running compare pipeline");
@@ -110,7 +131,7 @@ pub(in crate::runner) async fn dispatch_compare(
         .await
         {
             Ok(outputs) => {
-                let mut chat_output = outputs.annotated_main_chat;
+                let mut chat_output = outputs.chat_output;
                 let csv_output = outputs.metrics_csv;
                 if should_merge_abbrev {
                     chat_output = apply_merge_abbrev(&chat_output);
@@ -122,14 +143,16 @@ pub(in crate::runner) async fn dispatch_compare(
                     .find(|file| file.filename.as_ref() == filename)
                     .map(|file| file.file_index)
                     .unwrap_or(0);
+                let primary_output =
+                    primary_output_artifact(ReleasedCommand::Compare, &pair.main.display_path);
+                let csv_output_artifact =
+                    sidecar_output_artifacts(ReleasedCommand::Compare, &pair.main.display_path)
+                        .into_iter()
+                        .find(|artifact| artifact.display_path.as_ref().ends_with(".compare.csv"))
+                        .expect("compare command must emit a compare.csv sidecar");
 
-                let write_path = if job.filesystem.paths_mode
-                    && file_index < job.filesystem.output_paths.len()
-                {
-                    apply_result_filename(&job.filesystem.output_paths[file_index], filename)
-                } else {
-                    job.filesystem.staging_dir.join("output").join(filename)
-                };
+                let write_path =
+                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -139,15 +162,19 @@ pub(in crate::runner) async fn dispatch_compare(
                 }
 
                 // Write CSV metrics alongside the CHAT output
-                let csv_path = write_path.with_extension("compare.csv");
+                let csv_path = output_write_path(
+                    &job.filesystem,
+                    file_index,
+                    &csv_output_artifact.display_path,
+                );
                 if let Err(e) = tokio::fs::write(&csv_path, &csv_output).await {
                     warn!(error = %e, "Failed to write compare CSV");
                 }
 
                 lifecycle
                     .complete_with_result(
-                        DisplayPath::from(filename),
-                        ContentType::Chat,
+                        primary_output.display_path.clone(),
+                        primary_output.content_type,
                         finished_at,
                     )
                     .await;
@@ -172,11 +199,11 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{
-        EngineVersion, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+        DisplayPath, EngineVersion, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
         UnixTimestamp,
     };
+    use crate::api::{LanguageCode3, LanguageSpec};
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
     use crate::options::{CommandOptions, CommonOptions, CompareOptions};

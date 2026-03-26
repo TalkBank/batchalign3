@@ -9,16 +9,18 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::cache::UtteranceCache;
+use crate::commands::{command_performance_profile, released_command_workflows};
 use crate::config::{RuntimeLayout, ServerConfig};
 use crate::db::JobDB;
 use crate::error;
+use crate::host_policy::HostExecutionPolicy;
 use crate::media::MediaResolver;
 use crate::queue::{LocalQueueBackend, QueueBackend, QueueDispatcher};
 use crate::runner::RunnerContext;
 use crate::runtime_supervisor::RuntimeSupervisor;
 use crate::state::{
     AppBuildInfo, AppControlPlane, AppEnvironment, AppPaths, AppState, WorkerSubsystem,
-    validate_infer_capability_gate,
+    resolve_worker_capability_snapshot, validate_infer_capability_gate,
 };
 use crate::store::JobStore;
 use crate::worker::InferTask;
@@ -67,6 +69,19 @@ impl PreparedWorkers {
     /// Return the infer-task set reported by the prepared worker subsystem.
     pub fn infer_tasks(&self) -> &[InferTask] {
         &self.infer_tasks
+    }
+
+    /// Return the latest infer-task view, preferring live worker detection
+    /// over the startup placeholder snapshot when available.
+    pub fn current_infer_tasks(&self) -> Result<Vec<InferTask>, error::ServerError> {
+        Ok(resolve_worker_capability_snapshot(
+            &self.capabilities,
+            &self.infer_tasks,
+            &self.engine_versions,
+            self.test_echo_mode,
+            self.pool.detected_capabilities(),
+        )?
+        .infer_tasks)
     }
 }
 
@@ -169,6 +184,7 @@ async fn probe_workers(
     pool_config: PoolConfig,
 ) -> Result<(PreparedWorkers, Vec<WarmupTarget>), error::ServerError> {
     let test_echo_mode = pool_config.test_echo;
+    let host_policy = HostExecutionPolicy::from_server_config(config);
     let pool = Arc::new(WorkerPool::new(pool_config));
     pool.start_background_tasks();
 
@@ -181,7 +197,7 @@ async fn probe_workers(
     // Optimistic capabilities: accept all released commands.
     // Real capabilities are detected lazily on first worker spawn.
     let (capabilities, infer_tasks, engine_versions) = if test_echo_mode {
-        let all_tasks: Vec<InferTask> = crate::workflow::released_command_workflows()
+        let all_tasks: Vec<InferTask> = released_command_workflows()
             .iter()
             .map(|d| d.infer_task)
             .collect::<std::collections::BTreeSet<_>>()
@@ -213,7 +229,7 @@ async fn probe_workers(
 
     // No warmup targets — workers spawn on demand.
     let warmup_cmds = config.resolved_warmup_commands();
-    let targets = if warmup_cmds.is_empty() || !test_echo_mode {
+    let targets = if warmup_cmds.is_empty() {
         // Skip warmup in production — workers spawn lazily.
         // Test-echo mode can still warmup if configured.
         Vec::new()
@@ -225,9 +241,14 @@ async fn probe_workers(
             .filter_map(|cmd| {
                 crate::api::ReleasedCommand::try_from(cmd.as_str())
                     .ok()
-                    .map(|command| WarmupTarget {
-                        command,
-                        lang: default_lang.clone(),
+                    .and_then(|command| {
+                        let performance = command_performance_profile(command);
+                        host_policy
+                            .allows_command_warmup(performance.warmup, test_echo_mode)
+                            .then(|| WarmupTarget {
+                                command,
+                                lang: default_lang.clone(),
+                            })
                     })
             })
             .collect()
@@ -254,7 +275,7 @@ async fn probe_workers(
 /// All released commands — used as the optimistic capability set before
 /// the first real worker spawn confirms what's actually installed.
 fn optimistic_capabilities() -> Vec<String> {
-    crate::workflow::released_command_workflows()
+    released_command_workflows()
         .iter()
         .map(|d| d.command.to_string())
         .collect::<std::collections::BTreeSet<_>>()
@@ -306,9 +327,16 @@ pub async fn create_app_with_prepared_workers(
         info!(loaded = loaded, "Jobs loaded from DB");
     }
 
-    let capabilities = workers.capabilities.clone();
-    let infer_tasks = workers.infer_tasks.clone();
-    let engine_versions = workers.engine_versions.clone();
+    let capability_snapshot = resolve_worker_capability_snapshot(
+        &workers.capabilities,
+        &workers.infer_tasks,
+        &workers.engine_versions,
+        workers.test_echo_mode,
+        workers.pool.detected_capabilities(),
+    )?;
+    let capabilities = capability_snapshot.capabilities;
+    let infer_tasks = capability_snapshot.infer_tasks;
+    let engine_versions = capability_snapshot.engine_versions;
     let test_echo_mode = workers.test_echo_mode;
     let pool = workers.pool.clone();
 

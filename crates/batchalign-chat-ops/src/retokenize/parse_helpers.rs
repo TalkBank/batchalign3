@@ -130,7 +130,11 @@ pub(super) fn handle_ending_punct_skip(
 ///
 /// Emits `tracing::warn!` when a token fails to parse, making these events
 /// visible in `-vv` output for debugging retokenization issues.
-pub(super) fn try_parse_token_as_word(parser: &talkbank_parser::TreeSitterParser, text: &str, diagnostics: &mut Vec<String>) -> Option<Word> {
+pub(super) fn try_parse_token_as_word(
+    parser: &talkbank_parser::TreeSitterParser,
+    text: &str,
+    diagnostics: &mut Vec<String>,
+) -> Option<Word> {
     let errors = NullErrorSink;
     match parser.parse_word_fragment(text, 0, &errors).into_option() {
         Some(word) => Some(word),

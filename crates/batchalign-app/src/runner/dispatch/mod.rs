@@ -45,9 +45,9 @@ mod plan;
 mod transcribe_pipeline;
 mod utr;
 
-pub(super) use benchmark_pipeline::{BenchmarkDispatchRuntime, dispatch_benchmark_infer};
-pub(super) use fa_pipeline::*;
-pub(super) use infer_batched::dispatch_batched_infer;
-pub(super) use media_analysis_v2::{MediaAnalysisDispatchRuntime, dispatch_media_analysis_v2};
-pub(super) use plan::*;
-pub(super) use transcribe_pipeline::*;
+pub(crate) use benchmark_pipeline::{BenchmarkDispatchRuntime, dispatch_benchmark_infer};
+pub(crate) use fa_pipeline::*;
+pub(crate) use infer_batched::dispatch_batched_infer;
+pub(crate) use media_analysis_v2::{MediaAnalysisDispatchRuntime, dispatch_media_analysis_v2};
+pub(crate) use plan::*;
+pub(crate) use transcribe_pipeline::{TranscribeDispatchRuntime, dispatch_transcribe_infer};

@@ -340,14 +340,12 @@ impl<'de> Deserialize<'de> for EngineOverrides {
             match key.as_str() {
                 "asr" => {
                     overrides.asr = Some(
-                        AsrEngineName::from_wire_name(value)
-                            .map_err(serde::de::Error::custom)?,
+                        AsrEngineName::from_wire_name(value).map_err(serde::de::Error::custom)?,
                     );
                 }
                 "fa" => {
                     overrides.fa = Some(
-                        FaEngineName::from_wire_name(value)
-                            .map_err(serde::de::Error::custom)?,
+                        FaEngineName::from_wire_name(value).map_err(serde::de::Error::custom)?,
                     );
                 }
                 other => {
@@ -360,4 +358,3 @@ impl<'de> Deserialize<'de> for EngineOverrides {
         Ok(overrides)
     }
 }
-

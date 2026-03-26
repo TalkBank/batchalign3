@@ -31,23 +31,14 @@ mod worker;
 
 use std::collections::HashMap;
 
-use crate::api::ChatText;
 use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::pipeline::morphosyntax::run_morphosyntax_pipeline;
-use crate::workflow::text_batch::{
-    TextBatchFileInput, TextBatchFileResults, TextWorkflowFileError,
-};
-use crate::workflow::morphosyntax::{
-    MorphosyntaxBatchWorkflow, MorphosyntaxBatchWorkflowRequest, MorphosyntaxWorkflow,
-    MorphosyntaxWorkflowRequest,
-};
-use crate::workflow::{CrossFileBatchWorkflow, PerFileWorkflow};
+use crate::text_batch::{TextBatchFileInput, TextBatchFileResults};
 use batchalign_chat_ops::morphosyntax::{
     BatchItemWithPosition, TokenizationMode, cache_key, clear_morphosyntax_selective,
-    collect_payloads, declared_languages, extract_strings, inject_results,
-    validate_mor_alignment,
+    collect_payloads, declared_languages, extract_strings, inject_results, validate_mor_alignment,
 };
 use batchalign_chat_ops::parse::{is_dummy, parse_lenient};
 use batchalign_chat_ops::serialize::to_chat_string;
@@ -82,13 +73,7 @@ pub(crate) async fn process_morphosyntax(
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
 ) -> Result<String, ServerError> {
-    MorphosyntaxWorkflow
-        .run(MorphosyntaxWorkflowRequest {
-            chat_text: ChatText::from(chat_text),
-            services,
-            params,
-        })
-        .await
+    run_morphosyntax_impl(chat_text, services, params).await
 }
 
 pub(crate) async fn run_morphosyntax_impl(
@@ -114,24 +99,7 @@ pub(crate) async fn process_morphosyntax_batch(
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
 ) -> TextBatchFileResults {
-    MorphosyntaxBatchWorkflow
-        .run(MorphosyntaxBatchWorkflowRequest {
-            files,
-            services,
-            params,
-        })
-        .await
-        .unwrap_or_else(|error| {
-            files
-                .iter()
-                .map(|file| {
-                    crate::workflow::text_batch::TextBatchFileResult::err(
-                        file.filename.clone(),
-                        TextWorkflowFileError::new(error.to_string()),
-                    )
-                })
-                .collect()
-        })
+    run_morphosyntax_batch_impl(files, services, params).await
 }
 
 // ---------------------------------------------------------------------------

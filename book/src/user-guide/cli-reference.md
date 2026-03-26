@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Current
-**Last updated:** 2026-03-24 16:17 EDT
+**Last updated:** 2026-03-26 01:21 EDT
 
 This page documents the current public `batchalign3` CLI surface. For anything
 you are scripting against, confirm with `batchalign3 <command> --help`.
@@ -396,8 +396,12 @@ batchalign3 compare corpus/ -o compared/
 ```
 
 Compares transcripts against gold references (`FILE.gold.cha` in the same
-directory) to compute WER and inject per-utterance `%xsrep` alignment
-tiers. Also writes a `.compare.csv` metrics file alongside each output.
+directory) to compute WER and write a projected reference-side `.cha` output
+plus per-utterance `%xsrep` / `%xsmor` tiers and a `.compare.csv` sidecar with
+aggregate and per-POS metrics. Files ending in `.gold.cha` are treated as
+reference companions and skipped as primary inputs; the output path still follows
+the main file name, but the serialized CHAT content is the projected reference
+transcript.
 
 Key options:
 
@@ -406,6 +410,9 @@ Key options:
 | `--lang CODE` | 3-letter ISO language code (default: `eng`) |
 | `-n`, `--num-speakers N` | Number of speakers (default: `2`) |
 | `--merge-abbrev` | Merge abbreviations in output |
+
+Use global `--override-cache` when you need to force fresh main-side
+morphosyntax before scoring.
 
 ### `avqi`
 

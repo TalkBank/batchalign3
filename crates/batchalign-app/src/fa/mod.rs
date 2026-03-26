@@ -45,13 +45,11 @@ use batchalign_chat_ops::validate::{ValidityLevel, validate_output, validate_to_
 use batchalign_chat_ops::{CacheKey, CacheTaskName};
 use tracing::{info, warn};
 
-use crate::api::{ChatText, DurationMs};
+use crate::api::DurationMs;
 use crate::error::ServerError;
 use crate::runner::util::{FileStage, ProgressSender, ProgressUpdate};
 use crate::types::results::FaResult;
 use crate::types::traces::{FaGroupTrace, TimingTrace, ViolationTrace};
-use crate::workflow::PerFileWorkflow;
-use crate::workflow::fa::{ForcedAlignmentWorkflow, ForcedAlignmentWorkflowRequest};
 use transport::{FaWorkerBatch, FaWorkerTransport};
 
 /// Cache task name for FA results.
@@ -103,16 +101,7 @@ pub(crate) async fn process_fa(
     fa_params: &FaParams,
     progress: Option<&ProgressSender>,
 ) -> Result<FaResult, ServerError> {
-    ForcedAlignmentWorkflow
-        .run(ForcedAlignmentWorkflowRequest {
-            chat_text: ChatText::from(chat_text),
-            audio,
-            worker_lang,
-            services,
-            params: fa_params,
-            progress,
-        })
-        .await
+    run_fa_impl(chat_text, audio, worker_lang, services, fa_params, progress).await
 }
 
 pub(crate) async fn run_fa_impl(

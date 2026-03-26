@@ -201,7 +201,7 @@ serialization behavior. That makes it harder to reuse the model as a pure IR.
 
 ## Later Compare Redesign As A Harbinger
 
-Houjun's later `compare` redesign on `batchalign2-master`
+The later `compare` redesign on `batchalign2-master`
 (`1f224df346c2ec590d45afa31136a3b878db622b`) is valuable not because it is part
 of the frozen Jan 9 baseline, but because it shows what future architectural
 pressure looks like.

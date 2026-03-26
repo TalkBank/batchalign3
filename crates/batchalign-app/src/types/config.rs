@@ -139,9 +139,8 @@ pub struct ServerConfig {
     #[serde(default = "default_lang")]
     pub default_lang: LanguageCode3,
     /// Maximum number of jobs processed in parallel.  `0` (default) means
-    /// auto-tune based on available RAM and GIL mode — roughly 1 slot per
-    /// 25 GB of effective capacity.  Must be >= 0; negative values are
-    /// clamped to 0 by `validate()`.
+    /// auto-tune from the resolved memory tier plus CPU availability.
+    /// Must be >= 0; negative values are clamped to 0 by `validate()`.
     #[serde(default)]
     pub max_concurrent_jobs: i32,
     /// TCP port for the HTTP server.  Must be 1..=65535; 0 is clamped to
@@ -418,6 +417,32 @@ impl ServerConfig {
             };
         }
         tier
+    }
+
+    /// Resolve host-memory headroom, honoring a memory-tier override when the
+    /// stored field still matches the machine-detected default.
+    pub fn resolved_memory_gate_mb(&self) -> crate::api::MemoryMb {
+        let detected_default = crate::types::runtime::MemoryTier::detect().headroom_mb;
+        if self.memory_gate_mb.0 == 0 {
+            return self.resolved_memory_tier().headroom_mb;
+        }
+        if self.memory_tier.is_some() && self.memory_gate_mb == detected_default {
+            return self.resolved_memory_tier().headroom_mb;
+        }
+        self.memory_gate_mb
+    }
+
+    /// Resolve worker idle timeout, honoring a memory-tier override when the
+    /// stored field still matches the machine-detected default.
+    pub fn resolved_worker_idle_timeout_s(&self) -> u64 {
+        let detected_default = crate::types::runtime::MemoryTier::detect().idle_timeout_s;
+        if self.worker_idle_timeout_s == 0 {
+            return self.resolved_memory_tier().idle_timeout_s;
+        }
+        if self.memory_tier.is_some() && self.worker_idle_timeout_s == detected_default {
+            return self.resolved_memory_tier().idle_timeout_s;
+        }
+        self.worker_idle_timeout_s
     }
 
     /// Resolve warmup commands before server-side capability filtering.
@@ -778,5 +803,35 @@ stanza_startup_mb: 4000
         assert_eq!(tier.stanza_startup_mb.0, 4_000);
         // GPU stays at small default
         assert_eq!(tier.gpu_startup_mb.0, 6_000);
+    }
+
+    #[test]
+    fn resolved_memory_gate_uses_tier_override_when_headroom_is_default() {
+        let cfg = ServerConfig {
+            memory_tier: Some("small".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolved_memory_gate_mb().0, 2_000);
+    }
+
+    #[test]
+    fn resolved_worker_idle_timeout_uses_tier_override_when_default_matches_detected() {
+        let cfg = ServerConfig {
+            memory_tier: Some("small".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolved_worker_idle_timeout_s(), 60);
+    }
+
+    #[test]
+    fn explicit_headroom_and_idle_timeout_override_memory_tier_defaults() {
+        let cfg = ServerConfig {
+            memory_tier: Some("small".to_string()),
+            memory_gate_mb: crate::api::MemoryMb(9_999),
+            worker_idle_timeout_s: 777,
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolved_memory_gate_mb().0, 9_999);
+        assert_eq!(cfg.resolved_worker_idle_timeout_s(), 777);
     }
 }

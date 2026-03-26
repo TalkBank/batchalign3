@@ -1,9 +1,9 @@
-//! Generic workflow harness for Rust-owned text commands that can run either
-//! per-file or as one cross-file batch.
+//! Generic helpers for Rust-owned text commands that can run either per-file or
+//! as one cross-file batch.
 //!
-//! This keeps the contributor-facing request/output shape consistent across
-//! commands like utseg, translate, and coref while still allowing each command
-//! to keep its own orchestration internals.
+//! This keeps the command-facing request/output shape consistent across commands
+//! like `utseg`, `translate`, and `coref` while still allowing each command to
+//! keep its own orchestration internals.
 
 use std::marker::PhantomData;
 
@@ -11,7 +11,6 @@ use async_trait::async_trait;
 
 use crate::api::{ChatText, DisplayPath, LanguageCode3};
 use crate::error::ServerError;
-use super::{CrossFileBatchWorkflow, PerFileWorkflow};
 
 /// Owned serialized CHAT text produced by a text workflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,9 +140,7 @@ impl TextBatchFileInput {
             chat_text: chat_text.into(),
         }
     }
-
 }
-
 
 /// Borrowed request bundle for one per-file text workflow execution.
 pub(crate) struct TextPerFileWorkflowRequest<'a, Shared, Params> {
@@ -199,7 +196,7 @@ pub(crate) trait TextBatchOperation {
     ) -> TextBatchFileResults;
 }
 
-/// Generic workflow wrapper around one [`TextBatchOperation`] implementation.
+/// Generic wrapper around one [`TextBatchOperation`] implementation.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TextBatchWorkflow<O>(PhantomData<O>);
 
@@ -214,8 +211,7 @@ impl<O> TextBatchWorkflow<O>
 where
     O: TextBatchOperation + Send + Sync + 'static,
 {
-    /// Run one per-file text workflow without forcing call sites to disambiguate
-    /// between the per-file and batch trait impls.
+    /// Run one per-file text workflow.
     pub(crate) async fn run_per_file<'a>(
         &self,
         request: TextPerFileWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>,
@@ -229,56 +225,11 @@ where
         .await
     }
 
-    /// Run one cross-file text workflow without wrapping the naturally
-    /// infallible batch adapter in a `Result` and then unwrapping it.
+    /// Run one cross-file text workflow.
     pub(crate) async fn run_batch_files<'a>(
         &self,
         request: TextBatchWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>,
     ) -> TextBatchFileResults {
         O::run_batch(request.files, request.lang, request.shared, request.params).await
-    }
-}
-
-#[async_trait]
-impl<O> PerFileWorkflow for TextBatchWorkflow<O>
-where
-    O: TextBatchOperation + Send + Sync + 'static,
-{
-    type Output = String;
-    type Request<'a>
-        = TextPerFileWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>
-    where
-        Self: 'a;
-
-    async fn run(&self, request: Self::Request<'_>) -> Result<Self::Output, ServerError> {
-        O::run_single(
-            request.chat_text,
-            request.lang,
-            request.shared,
-            request.params,
-        )
-        .await
-    }
-}
-
-#[async_trait]
-impl<O> CrossFileBatchWorkflow for TextBatchWorkflow<O>
-where
-    O: TextBatchOperation + Send + Sync + 'static,
-{
-    type Output = TextBatchFileResults;
-    type Request<'a>
-        = TextBatchWorkflowRequest<'a, O::Shared<'a>, O::Params<'a>>
-    where
-        Self: 'a;
-
-    async fn run(&self, request: Self::Request<'_>) -> Result<Self::Output, ServerError> {
-        Ok(O::run_batch(
-            request.files,
-            request.lang,
-            request.shared,
-            request.params,
-        )
-        .await)
     }
 }

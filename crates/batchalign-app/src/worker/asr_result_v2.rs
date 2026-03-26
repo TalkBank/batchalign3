@@ -10,8 +10,7 @@ use crate::types::worker_v2::{
     AsrElementKindV2, ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2,
 };
 use batchalign_chat_ops::asr_postprocess::{
-    AsrElement, AsrElementKind, AsrMonologue, AsrOutput, AsrRawText, AsrTimestampSecs,
-    SpeakerIndex,
+    AsrElement, AsrElementKind, AsrMonologue, AsrOutput, AsrRawText, AsrTimestampSecs, SpeakerIndex,
 };
 
 /// Parse one live V2 ASR execute response into the established Rust ASR

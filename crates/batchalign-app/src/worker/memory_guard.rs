@@ -115,11 +115,10 @@ pub struct SpawnPermit {
 pub fn available_memory_mb() -> u64 {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
-    let available = sys.available_memory() / (1024 * 1024);
     // sysinfo on macOS undercounts — this is a known issue documented in MEMORY.md.
     // The kernel can reclaim inactive+purgeable pages, so the real headroom is larger.
     // But we use the conservative number to be safe.
-    available
+    sys.available_memory() / (1024 * 1024)
 }
 
 /// Query total physical memory in MB.
@@ -145,11 +144,8 @@ pub async fn acquire_spawn_permit(config: &WorkerConfig) -> Result<SpawnPermit, 
         .await
         .map_err(|_| MemoryGuardError::SemaphoreClosed)?;
 
-    let required_mb = config
-        .profile
-        .startup_reservation_mb()
-        .0
-        .max(min_spawn_memory_mb());
+    let startup_reservation = config.startup_reservation_mb();
+    let required_mb = startup_reservation.0.max(min_spawn_memory_mb());
     let available = available_memory_mb();
     let total = total_memory_mb();
     let threshold = required_mb;
@@ -178,6 +174,7 @@ pub async fn acquire_spawn_permit(config: &WorkerConfig) -> Result<SpawnPermit, 
     let host_lease = tokio::task::spawn_blocking(move || {
         coordinator.acquire_worker_startup_lease(
             profile,
+            startup_reservation,
             &lang,
             &engine_overrides,
             timeout,
@@ -220,7 +217,6 @@ pub fn skip_if_insufficient_memory(required_mb: u64) {
         );
         // Return from the test function. In Rust test harness, this counts as "pass".
         // The test body after this call won't execute.
-        return;
     }
 }
 
@@ -247,6 +243,7 @@ mod tests {
                     MemoryMb(1_000_000_000),
                     1,
                 ),
+                crate::types::runtime::MemoryTier::detect(),
             ),
             ..Default::default()
         };
@@ -265,8 +262,16 @@ mod tests {
         let tier = MemoryTier::from_total_mb(64_000);
         let gpu = WorkerProfile::Gpu.startup_reservation_mb_for_tier(&tier);
         let stanza = WorkerProfile::Stanza.startup_reservation_mb_for_tier(&tier);
-        assert!(gpu.0 > 4096, "GPU Large tier ({} MB) must exceed old floor", gpu.0);
-        assert!(stanza.0 > 4096, "Stanza Large tier ({} MB) must exceed old floor", stanza.0);
+        assert!(
+            gpu.0 > 4096,
+            "GPU Large tier ({} MB) must exceed old floor",
+            gpu.0
+        );
+        assert!(
+            stanza.0 > 4096,
+            "Stanza Large tier ({} MB) must exceed old floor",
+            stanza.0
+        );
     }
 
     #[test]

@@ -431,20 +431,38 @@ mod tests {
 
     #[test]
     fn tier_boundary_24gb_is_medium() {
-        assert_eq!(MemoryTier::from_total_mb(24_000).kind, MemoryTierKind::Medium);
-        assert_eq!(MemoryTier::from_total_mb(23_999).kind, MemoryTierKind::Small);
+        assert_eq!(
+            MemoryTier::from_total_mb(24_000).kind,
+            MemoryTierKind::Medium
+        );
+        assert_eq!(
+            MemoryTier::from_total_mb(23_999).kind,
+            MemoryTierKind::Small
+        );
     }
 
     #[test]
     fn tier_boundary_48gb_is_large() {
-        assert_eq!(MemoryTier::from_total_mb(48_000).kind, MemoryTierKind::Large);
-        assert_eq!(MemoryTier::from_total_mb(47_999).kind, MemoryTierKind::Medium);
+        assert_eq!(
+            MemoryTier::from_total_mb(48_000).kind,
+            MemoryTierKind::Large
+        );
+        assert_eq!(
+            MemoryTier::from_total_mb(47_999).kind,
+            MemoryTierKind::Medium
+        );
     }
 
     #[test]
     fn tier_boundary_128gb_is_fleet() {
-        assert_eq!(MemoryTier::from_total_mb(128_000).kind, MemoryTierKind::Fleet);
-        assert_eq!(MemoryTier::from_total_mb(127_999).kind, MemoryTierKind::Large);
+        assert_eq!(
+            MemoryTier::from_total_mb(128_000).kind,
+            MemoryTierKind::Fleet
+        );
+        assert_eq!(
+            MemoryTier::from_total_mb(127_999).kind,
+            MemoryTierKind::Large
+        );
     }
 
     #[test]

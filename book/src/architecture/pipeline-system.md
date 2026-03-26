@@ -1,23 +1,27 @@
 # Pipeline System
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:27 EDT
+**Last updated:** 2026-03-26 14:05 EDT
 
-The pipeline system processes CHAT files through typed workflow families
-backed by Rust orchestrators. The concrete families are now explicit in code:
-per-file transform, cross-file batch transform, reference projection, and
-composite workflow. Each family still follows the same high-level lifecycle:
-parse → cache → infer → inject → validate → serialize.
+The pipeline system processes CHAT files through command-owned modules backed by
+a shared, typed execution kernel. The concrete workflow families are still
+explicit in code — per-file transform, cross-file batch transform, reference
+projection, and composite workflow — but they are now an internal runtime
+shape, not the primary contributor-facing ownership model. The families share
+the same end state — typed materialization plus validation — but not the same
+internal stage sequence.
+Per-file transforms often look like `parse → cache → infer → inject → validate
+→ serialize`, while `compare` is `pair → morphotag main → parse raw gold →
+compare bundle → materialize`.
 
 If you are adding new command semantics, start in
-[`crates/batchalign-app/src/workflow/mod.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/mod.rs).
-From there, jump immediately to
-[`crates/batchalign-app/src/workflow/registry.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/registry.rs)
-for the released command catalog and
-[`crates/batchalign-app/src/workflow/traits.rs`](/Users/chen/batchalign3-rearch/crates/batchalign-app/src/workflow/traits.rs)
-for the workflow family contracts. The workflow family should
-determine where the typed bundle lives and how the result is materialized;
-`runner/` should stay focused on job lifecycle and queueing.
+`crates/batchalign-app/src/commands/` and
+`crates/batchalign-app/src/commands/catalog.rs`. From there, jump to
+`command_family.rs` when you need the released-command family metadata and to
+`text_batch.rs` when you need the shared text-family helpers reused by the
+runner kernel. The command module should own the public entrypoint, metadata,
+and materialization choice; `runner/` should stay focused on job lifecycle,
+queueing, and shared dispatch machinery.
 
 ## Core Data Model
 
@@ -38,17 +42,19 @@ was part of `transcribe_s`.
 
 ```mermaid
 flowchart TD
-    registry["workflow/registry.rs\nreleased_command_workflows()"]
+    registry["commands/catalog.rs\nreleased command specs"]
+    command["commands/*.rs\ncommand-owned wrappers"]
     perfile["PerFileWorkflow\ntranscribe / transcribe_s / align / opensmile / avqi"]
     batched["CrossFileBatchWorkflow\nmorphotag / utseg / translate / coref"]
     projection["ReferenceProjectionWorkflow\ncompare"]
     composite["CompositeWorkflow\nbenchmark = transcribe + compare"]
     rust["Rust-owned orchestration\n(parse / cache / inject / validate)"]
 
-    registry --> perfile
-    registry --> batched
-    registry --> projection
-    registry --> composite
+    registry --> command
+    command --> perfile
+    command --> batched
+    command --> projection
+    command --> composite
     perfile --> rust
     batched --> rust
     projection --> rust
@@ -66,14 +72,16 @@ Commands are classified by input/output type and workflow family:
 - **Cross-file batch processing**: Pools utterances across files in one GPU
   batch (e.g., `morphotag`, `utseg`, `coref`).
 - **Reference projection**: Compares a main transcript against a gold
-  companion and materializes output views from a typed compare bundle.
+  companion and materializes a released projected-reference view plus any
+  internal alternate views
+  from a typed compare bundle.
 - **Composite**: Chains existing workflows without reimplementing them (e.g.,
   `benchmark = transcribe + compare`).
 - **Analysis**: Produces metrics or non-CHAT output (e.g., `opensmile`,
   `avqi`). Returns structured results.
 
-The registry also places `transcribe_s` in the per-file family as the diarized
-transcribe variant.
+The command-owned catalog also places `transcribe_s` in the per-file family as
+the diarized transcribe variant.
 
 ## Processing Lifecycle
 
@@ -95,6 +103,16 @@ Every CHAT-mutating command follows this pattern:
 
 For generation commands (`transcribe`), step 1 is replaced by ASR inference
 followed by `build_chat()` to construct the initial AST.
+
+ReferenceProjection workflows intentionally diverge from the generic infer/inject
+loop:
+
+1. pair each primary transcript with `FILE.gold.cha`
+2. morphotag the main transcript only
+3. parse the morphotagged main and raw gold into `ChatFile` ASTs
+4. build a `ComparisonBundle` with main/gold compare views, structural word
+   matches, and metrics
+5. materialize the released main output or an internal AST-first gold projection
 
 ## Pre-Serialization Validation
 
@@ -150,12 +168,16 @@ materializers.
 ## Worker Concurrency
 
 Worker parallelism is capped based on available memory, not scaled linearly.
-Each worker loads ~4-12 GB of ML models. The server computes per-job file
-parallelism via `compute_job_workers()`, and a memory gate
-(`memory_gate()`) defers jobs when system memory is low. Workers with
-matching `(command, lang)` that are already loaded bypass the memory gate.
-See [Worker Memory Architecture](worker-memory-architecture.md) for the
-auto-tuning formula, memory gate internals, and pool concurrency model.
+Each worker loads ~4-12 GB of ML models. The server now combines:
+
+- `HostExecutionPolicy` for tier-aware bootstrap mode and file-parallel clamps
+- host-memory admission planning for granted worker counts
+- target-aware worker reuse keyed by actual `WorkerTarget`
+
+On large hosts this favors profile reuse; on small hosts it favors task
+bootstrap so a laptop does not speculatively preload a whole profile. See
+[Worker Memory Architecture](worker-memory-architecture.md) for the pool
+structure, warmup behavior, and host-policy details.
 
 ## Key Patterns
 

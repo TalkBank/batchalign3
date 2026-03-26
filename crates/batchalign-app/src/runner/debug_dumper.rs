@@ -334,43 +334,6 @@ impl DebugDumper {
             Err(e) => debug!(%e, "failed to serialize UD responses"),
         }
     }
-
-    /// Dump morphosyntax injection diagnostics (MOR/GRA counts, errors).
-    pub(crate) fn dump_morphosyntax_inject_diagnostics(
-        &self,
-        filename: &str,
-        diagnostics: &impl serde::Serialize,
-    ) {
-        let Some(dir) = self.ensure_dir() else {
-            return;
-        };
-        let stem = Self::stem(filename);
-        let path = dir.join(format!("{stem}_morphosyntax_inject.json"));
-        match serde_json::to_string_pretty(diagnostics) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    debug!(%e, "failed to write morphosyntax inject diagnostics");
-                } else {
-                    info!(path = %path.display(), "wrote morphosyntax inject diagnostics");
-                }
-            }
-            Err(e) => debug!(%e, "failed to serialize inject diagnostics"),
-        }
-    }
-
-    /// Dump CHAT text after morphosyntax injection.
-    pub(crate) fn dump_post_morphosyntax_chat(&self, filename: &str, chat_text: &str) {
-        let Some(dir) = self.ensure_dir() else {
-            return;
-        };
-        let stem = Self::stem(filename);
-        let path = dir.join(format!("{stem}_post_morphosyntax.cha"));
-        if let Err(e) = std::fs::write(&path, chat_text) {
-            debug!(%e, "failed to write post-morphosyntax CHAT");
-        } else {
-            info!(path = %path.display(), "wrote post-morphosyntax CHAT");
-        }
-    }
 }
 
 #[cfg(test)]

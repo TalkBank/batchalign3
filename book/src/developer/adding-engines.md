@@ -1,17 +1,18 @@
 # Adding Inference Providers
 
 **Status:** Current
-**Last modified:** 2026-03-24 21:21 EDT
+**Last modified:** 2026-03-26 14:05 EDT
 
 Batchalign3 no longer has a public entry-point plugin system. New engines are
 added in-tree as built-in worker capabilities.
 
 This page covers the current extension path.
 
-If you are adding a new command or workflow, decide the workflow family first
-and put the command's typed bundle or materializer in
-`crates/batchalign-app/src/workflow/`. Engine work should support that
-workflow; it should not define the workflow shape on its own.
+If you are adding a new command, choose its `WorkflowFamily` in
+`crates/batchalign-app/src/command_family.rs`, put the released command wrapper
+in `crates/batchalign-app/src/commands/`, and keep any algorithmic or
+orchestration logic in the owning Rust module. Engine work should support that
+Rust-owned command flow; it should not define the command shape on its own.
 
 ## Choose the layer first
 
@@ -145,9 +146,9 @@ In addition to those Rust-side changes, update these Python-side surfaces:
    engine-specific wiring. Reserve **`batchalign/worker/_execute_v2.py`** for
    the small task router that dispatches to those prepared hosts.
 
-Remember: command semantics live in the workflow layer, not in the worker
-bootstrap layer. The worker layer should only know how to load engines and
-execute typed tasks.
+Remember: command semantics live in the command-owned Rust layer, not in the
+worker bootstrap layer. The worker layer should only know how to load engines
+and execute typed tasks.
 
 ## Public extension surfaces that are still supported
 

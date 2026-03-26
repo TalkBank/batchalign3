@@ -8,6 +8,9 @@
 use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, MwtDict, TokenizationMode};
 
 use crate::api::ReleasedCommand;
+use crate::commands::CommandKernelPlan;
+use crate::config::ServerConfig;
+use crate::host_policy::HostExecutionPolicy;
 use crate::params::{CacheOverrides, CachePolicy};
 use crate::store::RunnerJobSnapshot;
 use crate::transcribe::{AsrBackend, TranscribeOptions};
@@ -26,7 +29,9 @@ use super::options::{
 /// This plan carries the option-derived behavior knobs that the batched
 /// morphosyntax / utseg / translate / coref / compare dispatch code owns.
 #[derive(Clone)]
-pub(in crate::runner) struct BatchedInferDispatchPlan {
+pub(crate) struct BatchedInferDispatchPlan {
+    /// Resource-aware execution profile for the command's remaining workload.
+    pub kernel_plan: CommandKernelPlan,
     /// Morphotag-specific retokenization policy. Other text commands keep the
     /// default `Preserve` behavior.
     pub tokenization_mode: TokenizationMode,
@@ -42,7 +47,7 @@ pub(in crate::runner) struct BatchedInferDispatchPlan {
 
 impl BatchedInferDispatchPlan {
     /// Build the batched-text plan once from the runner snapshot.
-    pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Self {
+    pub(crate) fn from_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> Self {
         let morphotag_params = extract_morphotag_dispatch_params(&job.dispatch.options);
         let MorphotagDispatchParams {
             tokenization_mode,
@@ -68,6 +73,7 @@ impl BatchedInferDispatchPlan {
         };
 
         Self {
+            kernel_plan: kernel_plan_for_job(job, config),
             tokenization_mode,
             multilingual_policy,
             cache_policy,
@@ -78,22 +84,26 @@ impl BatchedInferDispatchPlan {
 }
 
 /// Typed plan for forced alignment dispatch.
-pub(in crate::runner) struct FaDispatchPlan {
+pub(crate) struct FaDispatchPlan {
+    /// Resource-aware execution profile for the command's remaining workload.
+    pub kernel_plan: CommandKernelPlan,
     /// Fully extracted FA option bundle.
     pub options: FaDispatchParams,
 }
 
 impl FaDispatchPlan {
     /// Build the FA option plan from the persisted job snapshot.
-    pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Option<Self> {
+    pub(crate) fn from_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> Option<Self> {
         let overrides = resolve_cache_overrides(job);
         let cache_policy = if job.dispatch.options.common().override_cache {
             CachePolicy::SkipCache
         } else {
             overrides.policy_for(CacheTaskName::ForcedAlignment)
         };
-        extract_fa_dispatch_params(&job.dispatch.options, cache_policy)
-            .map(|options| Self { options })
+        extract_fa_dispatch_params(&job.dispatch.options, cache_policy).map(|options| Self {
+            kernel_plan: kernel_plan_for_job(job, config),
+            options,
+        })
     }
 }
 
@@ -104,7 +114,9 @@ impl FaDispatchPlan {
 /// `morphosyntax`) are resolved here so the dispatch module stops re-reading
 /// the store-owned `runtime_state` bag.
 #[derive(Clone)]
-pub(in crate::runner) struct TranscribeDispatchPlan {
+pub(crate) struct TranscribeDispatchPlan {
+    /// Resource-aware execution profile for the command's remaining workload.
+    pub kernel_plan: CommandKernelPlan,
     /// Base transcribe options cloned per file before media-specific values are
     /// filled in.
     pub base_options: TranscribeOptions,
@@ -114,7 +126,7 @@ pub(in crate::runner) struct TranscribeDispatchPlan {
 
 impl TranscribeDispatchPlan {
     /// Build the transcribe plan from the persisted job snapshot.
-    pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Option<Self> {
+    pub(crate) fn from_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> Option<Self> {
         let TranscribeDispatchParams {
             asr_engine,
             diarize,
@@ -130,6 +142,7 @@ impl TranscribeDispatchPlan {
         let speaker_backend = diarize.then(|| resolve_speaker_backend(None));
 
         Some(Self {
+            kernel_plan: kernel_plan_for_job(job, config),
             base_options: TranscribeOptions {
                 backend: AsrBackend::from_engine_name(asr_engine.as_wire_name()),
                 diarize,
@@ -150,7 +163,9 @@ impl TranscribeDispatchPlan {
 
 /// Typed plan for benchmark dispatch.
 #[derive(Clone)]
-pub(in crate::runner) struct BenchmarkDispatchPlan {
+pub(crate) struct BenchmarkDispatchPlan {
+    /// Resource-aware execution profile for the command's remaining workload.
+    pub kernel_plan: CommandKernelPlan,
     /// Base transcribe options reused by the benchmark pipeline's ASR phase.
     pub base_options: TranscribeOptions,
     /// Compare-side cache lookup policy.
@@ -163,7 +178,7 @@ pub(in crate::runner) struct BenchmarkDispatchPlan {
 
 impl BenchmarkDispatchPlan {
     /// Build the benchmark plan from the persisted job snapshot.
-    pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Option<Self> {
+    pub(crate) fn from_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> Option<Self> {
         let BenchmarkDispatchParams {
             asr_engine,
             wor_tier,
@@ -172,6 +187,7 @@ impl BenchmarkDispatchPlan {
         } = extract_benchmark_dispatch_params(&job.dispatch.options)?;
 
         Some(Self {
+            kernel_plan: kernel_plan_for_job(job, config),
             base_options: TranscribeOptions {
                 backend: AsrBackend::from_engine_name(asr_engine.as_wire_name()),
                 diarize: false,
@@ -194,26 +210,36 @@ impl BenchmarkDispatchPlan {
 
 /// Typed plan for media-analysis dispatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::runner) enum MediaAnalysisDispatchPlan {
+pub(crate) enum MediaAnalysisDispatchPlan {
     /// OpenSMILE needs the selected feature-set string.
     Opensmile {
+        /// Resource-aware execution profile for the command's remaining workload.
+        kernel_plan: CommandKernelPlan,
         /// Feature set to request from the worker.
         feature_set: String,
     },
     /// AVQI currently has no command-specific options.
-    Avqi,
+    Avqi {
+        /// Resource-aware execution profile for the command's remaining workload.
+        kernel_plan: CommandKernelPlan,
+    },
 }
 
 impl MediaAnalysisDispatchPlan {
     /// Build the media-analysis plan from the persisted job snapshot.
-    pub(in crate::runner) fn from_job(job: &RunnerJobSnapshot) -> Option<Self> {
+    pub(crate) fn from_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> Option<Self> {
         match job.dispatch.command {
             ReleasedCommand::Opensmile => {
                 let OpensmileDispatchParams { feature_set } =
                     extract_opensmile_dispatch_params(&job.dispatch.options)?;
-                Some(Self::Opensmile { feature_set })
+                Some(Self::Opensmile {
+                    kernel_plan: kernel_plan_for_job(job, config),
+                    feature_set,
+                })
             }
-            ReleasedCommand::Avqi => Some(Self::Avqi),
+            ReleasedCommand::Avqi => Some(Self::Avqi {
+                kernel_plan: kernel_plan_for_job(job, config),
+            }),
             _ => None,
         }
     }
@@ -237,6 +263,15 @@ fn resolve_cache_overrides(job: &RunnerJobSnapshot) -> CacheOverrides {
     } else {
         CacheOverrides::None
     }
+}
+
+fn kernel_plan_for_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> CommandKernelPlan {
+    let host_policy = HostExecutionPolicy::from_server_config(config);
+    CommandKernelPlan::for_command_with_policy(
+        job.dispatch.command,
+        job.pending_files.len(),
+        &host_policy,
+    )
 }
 
 /// Parse a wire name into a [`CacheTaskName`].
@@ -276,8 +311,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::options::{AsrEngineName, FaEngineName};
     use crate::api::{JobId, LanguageCode3, NumSpeakers, ReleasedCommand};
+    use crate::config::ServerConfig;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::options::{
         BenchmarkOptions, CommandOptions, CommonOptions, MorphotagOptions, OpensmileOptions,
         TranscribeOptions as TranscribeCommand,
@@ -340,7 +376,7 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let plan = BatchedInferDispatchPlan::from_job(&snapshot);
+        let plan = BatchedInferDispatchPlan::from_job(&snapshot, &ServerConfig::default());
 
         assert_eq!(plan.tokenization_mode, TokenizationMode::StanzaRetokenize);
         assert_eq!(plan.multilingual_policy, MultilingualPolicy::SkipNonPrimary);
@@ -375,7 +411,8 @@ mod tests {
             runtime_state,
         );
 
-        let plan = TranscribeDispatchPlan::from_job(&snapshot).expect("transcribe plan");
+        let plan = TranscribeDispatchPlan::from_job(&snapshot, &ServerConfig::default())
+            .expect("transcribe plan");
 
         assert!(matches!(
             plan.base_options.backend,
@@ -413,7 +450,8 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let plan = TranscribeDispatchPlan::from_job(&snapshot).expect("transcribe_s plan");
+        let plan = TranscribeDispatchPlan::from_job(&snapshot, &ServerConfig::default())
+            .expect("transcribe_s plan");
 
         assert!(matches!(plan.base_options.backend, AsrBackend::RustRevAi));
         assert!(plan.base_options.diarize);
@@ -448,7 +486,8 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let plan = BenchmarkDispatchPlan::from_job(&snapshot).expect("benchmark plan");
+        let plan = BenchmarkDispatchPlan::from_job(&snapshot, &ServerConfig::default())
+            .expect("benchmark plan");
 
         assert!(matches!(plan.base_options.backend, AsrBackend::RustRevAi));
         assert_eq!(plan.cache_policy, CachePolicy::SkipCache);
@@ -471,11 +510,13 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let plan = MediaAnalysisDispatchPlan::from_job(&snapshot).expect("media analysis plan");
+        let plan = MediaAnalysisDispatchPlan::from_job(&snapshot, &ServerConfig::default())
+            .expect("media analysis plan");
 
         assert_eq!(
             plan,
             MediaAnalysisDispatchPlan::Opensmile {
+                kernel_plan: CommandKernelPlan::for_command(ReleasedCommand::Opensmile, 1),
                 feature_set: "ComParE_2016".into(),
             }
         );

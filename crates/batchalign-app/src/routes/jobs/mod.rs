@@ -26,7 +26,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::api::{ReleasedCommand, CorrelationId, DisplayPath, JobInfo, JobStatus, JobSubmission};
+use crate::api::{CorrelationId, DisplayPath, JobInfo, JobStatus, JobSubmission, ReleasedCommand};
 use axum::extract::State;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -284,7 +284,7 @@ pub(crate) async fn submit_job(
             correlation_id: correlation_id.clone(),
         },
         dispatch: JobDispatchConfig {
-            command: submission.command.clone(),
+            command: submission.command,
             lang: submission.lang.clone(),
             num_speakers: submission.num_speakers,
             options: submission.options.clone(),

@@ -1,10 +1,12 @@
 # Workflow Architecture Execution Plan
 
-**Status:** Active plan
-**Last modified:** 2026-03-21 07:27 EDT
+**Status:** Historical
+**Last modified:** 2026-03-26 14:05 EDT
 
-This page turns [Hybrid Workflow Architecture](../architecture/hybrid-workflow-architecture.md)
-into an execution plan for the live refactor stream.
+This page records the execution plan for the now-completed intermediate
+workflow-layer refactor. It is preserved for architecture history, but the live
+code has since moved fully to command-owned entrypoints and the old
+`src/workflow/` tree has been deleted.
 
 The goal is not to rewrite batchalign3 all at once. The goal is to let the new
 architecture shape the code that is already being refactored, while recording
@@ -35,7 +37,7 @@ That means the execution strategy must be incremental.
 
 ## Stable Now
 
-These are the seams Houjun can build against now.
+These are the seams contributors can build against now.
 
 - `crates/batchalign-app/src/workflow/mod.rs`
 - `crates/batchalign-app/src/workflow/traits.rs`
@@ -64,29 +66,32 @@ continues to move.
 
 Why now:
 
-- Houjun's BA2 compare redesign is the clearest signal that future workflows
+- the later `batchalign2-master` compare redesign is the clearest signal that future workflows
   will need multiple input artifacts and multiple output materializations.
-- current BA3 compare already has a natural internal bundle shape, but it is not
-  described that way in code.
+- compare already has a natural internal bundle shape, but it still needs to be
+  described and surfaced that way in code.
 
 Current state:
 
 - compare bundle construction is explicit in Rust
+- the bundle now carries compare views, metrics, and structural word-match
+  metadata
 - output materialization is separated from bundle construction
-- the released output shape is still main-annotated CHAT plus CSV metrics
-- a skeletal gold-projection materializer exists as an internal seam
+- the released output shape now follows `batchalign2-master compare`:
+  projected reference CHAT plus CSV metrics
+- an internal main-annotated materializer still exists for benchmark-style flows
 
 Immediate goals:
 
-- preserve current user-facing behavior for now
-- keep the gold-projection seam visible without hardening it into product
+- preserve released compare behavior at the BA2-master surface
+- keep alternate internal materializers explicit instead of implicit
 
 Acceptance criteria:
 
 - compare bundle construction is a named internal concept
-- main-annotated CHAT output is one explicit materialization step
+- projected-reference CHAT output is one explicit materialization step
 - CSV metrics output is one explicit materialization step
-- current CLI/server behavior remains unchanged
+- the compare CLI/server behavior follows the BA2-master surface
 
 ### 2. Keep shrinking `pyo3`
 
@@ -132,9 +137,10 @@ These areas are still expected to move while the contributor seam stays stable.
 
 ### 1. Expand compare into multi-materializer support
 
-The current skeleton is intentionally conservative. Future work may add:
+The current AST-first projection is intentionally conservative. Future work may
+add:
 
-- a real gold-projected output mode
+- chunk-safe partial `%gra` / `%wor` projection
 - richer debugging/alignment bundles
 - additional compare materializers for alternate output shapes
 

@@ -4,35 +4,157 @@
 //! 1. Parse main + gold files
 //! 2. Run morphosyntax on main (via existing pipeline)
 //! 3. DP-align main vs gold words
-//! 4. Inject `%xsrep` tiers into main
-//! 5. Serialize annotated CHAT + CSV metrics
+//! 4. Project compare annotations onto the gold/reference transcript
+//! 5. Serialize projected CHAT + CSV metrics
 //!
 //! Gold file convention: for each `FILE.cha`, expects `FILE.gold.cha` in the
 //! same directory. Files ending in `.gold.cha` are skipped.
 
 use std::path::Path;
 
-use crate::api::{ChatText, LanguageCode3};
+use crate::api::LanguageCode3;
 use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use batchalign_chat_ops::morphosyntax::MwtDict;
+use tracing::{info, warn};
 
 use crate::error::ServerError;
-use crate::workflow::ReferenceProjectionWorkflow;
-pub(crate) use crate::workflow::compare::CompareMaterializedOutputs;
-use crate::workflow::compare::{CompareWorkflow, CompareWorkflowRequest};
-use crate::workflow::text_batch::TextBatchFileInput;
+use crate::params::MorphosyntaxParams;
+use crate::text_batch::TextBatchFileInput;
+use batchalign_chat_ops::compare::{
+    ComparisonBundle, clear_comparison, compare, format_metrics_csv, inject_comparison,
+    project_gold_structurally,
+};
+use batchalign_chat_ops::morphosyntax::{MultilingualPolicy, TokenizationMode};
+use batchalign_chat_ops::parse::parse_lenient;
+use batchalign_chat_ops::serialize::to_chat_string;
+
+/// Released compare outputs.
+pub(crate) struct CompareMaterializedOutputs {
+    /// CHAT text written by the released compare command.
+    pub chat_output: String,
+    /// CSV sidecar containing aggregate and per-POS compare metrics.
+    pub metrics_csv: String,
+}
+
+/// Internal main-annotated compare output used by benchmark-style flows.
+pub(crate) struct MainAnnotatedCompareOutputs {
+    /// CHAT text for the main transcript annotated with `%xsrep` and `%xsmor`.
+    pub annotated_main_chat: String,
+    /// CSV sidecar containing aggregate and per-POS compare metrics.
+    pub metrics_csv: String,
+}
+
+struct ComparisonArtifacts {
+    main_file: batchalign_chat_ops::ChatFile,
+    gold_file: batchalign_chat_ops::ChatFile,
+    bundle: ComparisonBundle,
+}
+
+async fn build_comparison_artifacts(
+    main_text: &str,
+    gold_text: &str,
+    lang: &LanguageCode3,
+    services: PipelineServices<'_>,
+    cache_policy: CachePolicy,
+    mwt: &MwtDict,
+) -> Result<ComparisonArtifacts, ServerError> {
+    let mor_params = MorphosyntaxParams {
+        lang,
+        tokenization_mode: TokenizationMode::Preserve,
+        cache_policy,
+        multilingual_policy: MultilingualPolicy::ProcessAll,
+        mwt,
+    };
+    let morphotagged_main =
+        crate::morphosyntax::process_morphosyntax(main_text, services, &mor_params).await?;
+
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
+    let (main_file, main_errors) = parse_lenient(&parser, &morphotagged_main);
+    if !main_errors.is_empty() {
+        warn!(
+            num_errors = main_errors.len(),
+            "Parse errors in morphotagged main (continuing)"
+        );
+    }
+
+    let (gold_file, gold_errors) = parse_lenient(&parser, gold_text);
+    if !gold_errors.is_empty() {
+        warn!(
+            num_errors = gold_errors.len(),
+            "Parse errors in gold file (continuing)"
+        );
+    }
+
+    let bundle = compare(&main_file, &gold_file);
+
+    info!(
+        matches = bundle.metrics.matches,
+        insertions = bundle.metrics.insertions,
+        deletions = bundle.metrics.deletions,
+        wer = %format!("{:.4}", bundle.metrics.wer),
+        "Compare alignment complete"
+    );
+
+    Ok(ComparisonArtifacts {
+        main_file,
+        gold_file,
+        bundle,
+    })
+}
+
+fn materialize_main_annotated(
+    artifacts: ComparisonArtifacts,
+) -> Result<MainAnnotatedCompareOutputs, ServerError> {
+    let ComparisonArtifacts {
+        mut main_file,
+        bundle,
+        ..
+    } = artifacts;
+    clear_comparison(&mut main_file);
+    inject_comparison(&mut main_file, &bundle.main_utterances).map_err(|err| {
+        ServerError::Persistence(format!("compare tier serialization failed: {err}"))
+    })?;
+    Ok(MainAnnotatedCompareOutputs {
+        annotated_main_chat: to_chat_string(&main_file),
+        metrics_csv: format_metrics_csv(&bundle.metrics).map_err(|err| {
+            ServerError::Persistence(format!("compare CSV serialization failed: {err}"))
+        })?,
+    })
+}
+
+fn materialize_released(
+    artifacts: ComparisonArtifacts,
+) -> Result<CompareMaterializedOutputs, ServerError> {
+    let ComparisonArtifacts {
+        main_file,
+        mut gold_file,
+        bundle,
+    } = artifacts;
+    gold_file = project_gold_structurally(&main_file, &gold_file, &bundle);
+    clear_comparison(&mut gold_file);
+    inject_comparison(&mut gold_file, &bundle.gold_utterances).map_err(|err| {
+        ServerError::Persistence(format!("compare tier serialization failed: {err}"))
+    })?;
+    Ok(CompareMaterializedOutputs {
+        chat_output: to_chat_string(&gold_file),
+        metrics_csv: format_metrics_csv(&bundle.metrics).map_err(|err| {
+            ServerError::Persistence(format!("compare CSV serialization failed: {err}"))
+        })?,
+    })
+}
 
 /// Process a single CHAT file through the compare pipeline.
 ///
-/// Returns the released compare outputs for the current main-annotated workflow
-/// materialization.
+/// Returns the released compare outputs for the current projected-reference
+/// workflow materialization.
 ///
 /// Steps:
 /// 1. Run morphosyntax on `main_text` (so it has %mor/%gra).
 /// 2. Parse gold file.
 /// 3. Build the comparison bundle from main vs gold.
-/// 4. Materialize the current main-annotated output.
+/// 4. Materialize the projected reference-side output.
 pub(crate) async fn process_compare(
     main_text: &str,
     gold_text: &str,
@@ -41,16 +163,23 @@ pub(crate) async fn process_compare(
     cache_policy: CachePolicy,
     mwt: &MwtDict,
 ) -> Result<CompareMaterializedOutputs, ServerError> {
-    CompareWorkflow::released()
-        .run(CompareWorkflowRequest {
-            main_text: ChatText::from(main_text),
-            gold_text: ChatText::from(gold_text),
-            lang,
-            services,
-            cache_policy,
-            mwt,
-        })
-        .await
+    materialize_released(
+        build_comparison_artifacts(main_text, gold_text, lang, services, cache_policy, mwt).await?,
+    )
+}
+
+/// Process one compare flow and keep the main transcript as the structural anchor.
+pub(crate) async fn process_compare_main_annotated(
+    main_text: &str,
+    gold_text: &str,
+    lang: &LanguageCode3,
+    services: PipelineServices<'_>,
+    cache_policy: CachePolicy,
+    mwt: &MwtDict,
+) -> Result<MainAnnotatedCompareOutputs, ServerError> {
+    materialize_main_annotated(
+        build_comparison_artifacts(main_text, gold_text, lang, services, cache_policy, mwt).await?,
+    )
 }
 
 /// Derive the gold file path from a main file path.
@@ -128,6 +257,23 @@ pub(crate) async fn process_compare_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use batchalign_chat_ops::compare::compare;
+    use batchalign_chat_ops::parse::{TreeSitterParser, parse_lenient};
+
+    fn make_chat(utterances: &[(&str, &str)]) -> String {
+        let mut lines = vec![
+            "@UTF8".to_string(),
+            "@Begin".to_string(),
+            "@Languages:\teng".to_string(),
+            "@Participants:\tPAR Participant".to_string(),
+            "@ID:\teng|test|PAR|||||Participant|||".to_string(),
+        ];
+        for (speaker, text) in utterances {
+            lines.push(format!("*{speaker}:\t{text}"));
+        }
+        lines.push("@End".to_string());
+        lines.join("\n")
+    }
 
     #[test]
     fn gold_path_derivation() {
@@ -145,5 +291,87 @@ mod tests {
         assert!(is_gold_file("/data/01DM.gold.cha"));
         assert!(!is_gold_file("test.cha"));
         assert!(!is_gold_file("test.gold.txt"));
+    }
+
+    #[test]
+    fn released_compare_surface_should_match_ba2_projected_gold_chat() {
+        let parser = TreeSitterParser::new().expect("parser");
+        let main = make_chat(&[("PAR", "hello big world .")]);
+        let gold = make_chat(&[("PAR", "hello world today .")]);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
+        let bundle = compare(&main_file, &gold_file);
+
+        let output = materialize_released(ComparisonArtifacts {
+            main_file,
+            gold_file,
+            bundle,
+        })
+        .expect("materialized");
+
+        assert!(output.chat_output.contains("*PAR:\thello world today ."));
+        assert!(
+            output
+                .chat_output
+                .contains("%xsrep:\thello +big world -today")
+        );
+    }
+
+    #[test]
+    fn main_materializer_keeps_main_anchor() {
+        let parser = TreeSitterParser::new().expect("parser");
+        let main = make_chat(&[("PAR", "hello big world .")]);
+        let gold = make_chat(&[("PAR", "hello world today .")]);
+        let (main_file, _) = parse_lenient(&parser, &main);
+        let (gold_file, _) = parse_lenient(&parser, &gold);
+        let bundle = compare(&main_file, &gold_file);
+
+        let output = materialize_main_annotated(ComparisonArtifacts {
+            main_file,
+            gold_file,
+            bundle,
+        })
+        .expect("materialized");
+
+        assert!(
+            output
+                .annotated_main_chat
+                .contains("*PAR:\thello big world .")
+        );
+        assert!(
+            output
+                .annotated_main_chat
+                .contains("%xsrep:\thello +big world -today")
+        );
+    }
+
+    #[test]
+    fn gold_materializer_projects_structural_tiers_for_exact_match() {
+        let parser = TreeSitterParser::new().expect("parser");
+        let main = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tPAR Participant\n@ID:\teng|test|PAR|||||Participant|||\n*PAR:\thello world .\n%mor:\tintj|hello noun|world .\n%gra:\t1|2|COM 2|0|ROOT 3|2|PUNCT\n%wor:\thello \u{15}0_100\u{15} world \u{15}100_200\u{15} .\n@End\n";
+        let gold = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tPAR Participant\n@ID:\teng|test|PAR|||||Participant|||\n*PAR:\thello world .\n@End\n";
+        let (main_file, _) = parse_lenient(&parser, main);
+        let (gold_file, _) = parse_lenient(&parser, gold);
+        let bundle = compare(&main_file, &gold_file);
+
+        let output = materialize_released(ComparisonArtifacts {
+            main_file,
+            gold_file,
+            bundle,
+        })
+        .expect("materialized");
+
+        assert!(
+            output
+                .chat_output
+                .contains("%mor:\tintj|hello noun|world .")
+        );
+        assert!(
+            output
+                .chat_output
+                .contains("%gra:\t1|2|COM 2|0|ROOT 3|2|PUNCT")
+        );
+        assert!(output.chat_output.contains("%wor:\thello"));
+        assert!(output.chat_output.contains("\u{15}0_100\u{15}"));
     }
 }

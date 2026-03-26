@@ -39,7 +39,7 @@ fn cache_key_retokenize_differs() {
 
 #[test]
 fn test_clear_morphosyntax() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
     use talkbank_model::model::Line;
 
     let parser = TreeSitterParser::new().unwrap();
@@ -97,7 +97,7 @@ fn test_clear_morphosyntax() {
 
 #[test]
 fn test_clear_morphosyntax_preserves_other_tiers() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
     use talkbank_model::model::Line;
 
     let parser = TreeSitterParser::new().unwrap();
@@ -133,7 +133,7 @@ fn test_clear_morphosyntax_preserves_other_tiers() {
 
 #[test]
 fn test_clear_morphosyntax_no_tiers() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
     use talkbank_model::model::Line;
 
     let parser = TreeSitterParser::new().unwrap();
@@ -156,7 +156,7 @@ fn test_clear_morphosyntax_no_tiers() {
 
 #[test]
 fn test_validate_mor_alignment_ok() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     // Correctly aligned: 2 main words + 2 %mor items
@@ -173,7 +173,7 @@ fn test_validate_mor_alignment_ok() {
 
 #[test]
 fn test_validate_mor_alignment_no_mor_tier() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     // No %mor -- validation should pass (nothing to check)
@@ -261,7 +261,7 @@ fn snapshot_ud_response_from_python() {
 /// Verify collect_payloads produces the expected shape for a simple CHAT.
 #[test]
 fn snapshot_collected_payloads() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/eng_the_dog_runs.cha");
@@ -293,7 +293,7 @@ fn snapshot_collected_payloads() {
 /// the batch item must carry lang="spa" from the file header.
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_spa() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/spa_hola_que_es_este.cha");
@@ -319,7 +319,7 @@ fn collect_payloads_uses_file_language_not_batch_default_spa() {
 /// Same regression for Russian: @Languages: rus with batch default "eng".
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_rus() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/rus_vot_istoriya.cha");
@@ -342,7 +342,7 @@ fn collect_payloads_uses_file_language_not_batch_default_rus() {
 /// Same regression for Chinese: @Languages: zho with batch default "eng".
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_zho() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/zho_hao_qing_zhong.cha");
@@ -365,7 +365,7 @@ fn collect_payloads_uses_file_language_not_batch_default_zho() {
 /// Same regression for French: @Languages: fra with batch default "eng".
 #[test]
 fn collect_payloads_uses_file_language_not_batch_default_fra() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/fra_lescargot_dort.cha");
@@ -389,7 +389,7 @@ fn collect_payloads_uses_file_language_not_batch_default_fra() {
 /// (Control case: ensures fix doesn't regress the happy path.)
 #[test]
 fn collect_payloads_lang_correct_when_primary_matches_header() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/eng_hello_world_male.cha");
@@ -409,7 +409,7 @@ fn collect_payloads_lang_correct_when_primary_matches_header() {
 /// should be used as the utterance default (not the batch primary_lang).
 #[test]
 fn collect_payloads_uses_first_declared_language_for_multilingual() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     // Bilingual file: primary declared language is "spa", secondary is "eng"
@@ -437,7 +437,7 @@ fn collect_payloads_uses_first_declared_language_for_multilingual() {
 /// files would be incorrectly reused for Spanish.
 #[test]
 fn cache_key_uses_file_language_not_batch_default() {
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/spa_hola_mundo.cha");
@@ -477,8 +477,8 @@ fn cache_key_uses_file_language_not_batch_default() {
 #[test]
 fn test_inject_results_retokenize_cantonese_retrace() {
     use crate::morphosyntax::inject::inject_results;
-    use crate::nlp::{UdResponse, UdSentence, UdWord, UdId};
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::nlp::{UdId, UdResponse, UdSentence, UdWord};
+    use crate::parse::{TreeSitterParser, parse_lenient};
 
     let parser = TreeSitterParser::new().unwrap();
     let chat = include_str!("../../../../test-fixtures/retok_yue_retrace.cha");
@@ -514,9 +514,15 @@ fn test_inject_results_retokenize_cantonese_retrace() {
     // 7 single-char words to 5 words (下+次→下次, 食+飯→食飯).
     // Stanza processes 5 words and returns 5 MOR items.
     let segmented_words = vec!["呢", "度", "下次", "食飯", "啦"];
-    eprintln!("Simulated PyCantonese segmentation: {:?} ({} words)", segmented_words, segmented_words.len());
-    let ud_words: Vec<UdWord> = segmented_words.iter().enumerate().map(|(i, w)| {
-        UdWord {
+    eprintln!(
+        "Simulated PyCantonese segmentation: {:?} ({} words)",
+        segmented_words,
+        segmented_words.len()
+    );
+    let ud_words: Vec<UdWord> = segmented_words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| UdWord {
             id: UdId::Single(i + 1),
             text: w.to_string(),
             lemma: w.to_string(),
@@ -527,8 +533,8 @@ fn test_inject_results_retokenize_cantonese_retrace() {
             deprel: "root".into(),
             deps: None,
             misc: None,
-        }
-    }).collect();
+        })
+        .collect();
 
     let ud_response = UdResponse {
         sentences: vec![UdSentence { words: ud_words }],

@@ -1,7 +1,7 @@
 # Command Flowcharts
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-26 01:21 EDT
 
 Option-driven flowcharts for every batchalign processing command. Each
 diagram shows how CLI flags route through different code paths at runtime.
@@ -371,24 +371,40 @@ flowchart TD
 
 ## compare
 
-Reference-projection workflow. It builds a typed comparison bundle from main
-and gold CHAT files, runs morphosyntax where needed, and materializes
-compare-specific outputs.
+Reference-projection workflow. The released command now emits the projected
+reference transcript, and the benchmark/internal main-shaped path is a separate
+materializer rather than the command contract.
 
 ```mermaid
 flowchart TD
-    start([compare invoked]) --> parse[Parse all files → ASTs]
-    parse --> bundle[Build typed comparison bundle\nmain + gold + projection state]
-    bundle --> morph[process_morphosyntax as needed\nexecute_v2(task="morphosyntax")]
-    morph --> compare[DP-align main vs gold\ninside the comparison bundle]
-    compare --> materialize[Materialize %xsrep tiers\nand compare metrics]
-    materialize --> inject[Inject comparison results]
-    inject --> merge_check{--merge-abbrev?}
+    start([compare invoked]) --> discover[Discover primary .cha files\nskip *.gold.cha companions]
+    discover --> pair[Pair FILE.cha with FILE.gold.cha]
+    pair --> found{Gold companion found?}
+    found -->|No| fail[Report file error]
+    found -->|Yes| morph[process_morphosyntax\nmain transcript only]
+    pair --> parse_gold[parse_lenient raw gold\n→ gold AST]
+    morph --> parse_main[parse_lenient morphotagged main\n→ main AST]
+    parse_main --> bundle[compare()\nconform + local window search + local DP\nComparisonBundle: main view, gold view,\nstructural word matches, metrics]
+    parse_gold --> bundle
+    bundle --> released[GoldProjectedCompareMaterializer\nproject_gold_structurally()]
+    bundle --> internal_main[MainAnnotatedCompareMaterializer (internal/benchmark)\ninject %xsrep / %xsmor on main]
+    released --> safe{Exact structural match?}
+    safe -->|Yes| copy[Copy %mor / %gra / %wor]
+    safe -->|No, full gold coverage| mor_only[Project %mor only]
+    safe -->|No, partial or unsafe| keep[Keep gold dependent tiers unchanged]
+    copy --> goldannot[Inject %xsrep / %xsmor on gold]
+    mor_only --> goldannot
+    keep --> goldannot
+    goldannot --> merge_check
+    internal_main --> internal_done([Internal main-annotated view])
     merge_check -->|Yes| merge[merge_abbreviations]
-    merge_check -->|No| serialize
-    merge --> serialize[Serialize → .cha output]
-    serialize --> done([Output .cha files])
+    merge_check -->|No| metrics[Write .compare.csv]
+    merge --> metrics
+    metrics --> done([Output .cha + .compare.csv])
 ```
+
+The public command now uses the projected-reference branch. The main-annotated
+branch remains available only for internal consumers such as benchmark.
 
 ---
 

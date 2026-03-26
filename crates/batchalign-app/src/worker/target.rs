@@ -1,14 +1,25 @@
 //! Typed worker bootstrap targets for the Rust control plane.
 //!
-//! The released worker pool is now infer-task-only. Rust still reasons in terms
-//! of top-level commands for warmup, memory checks, and scheduling, but Python
-//! workers are always bootstrapped around one inference task.
+//! Large hosts can still amortize model load across profile-shaped workers such
+//! as `profile:gpu`. Constrained hosts instead launch task-shaped workers such
+//! as `infer:asr` so one small machine does not speculatively hold unrelated
+//! models in memory.
 
-use crate::api::{ReleasedCommand, MemoryMb};
+use crate::api::{MemoryMb, ReleasedCommand};
+use crate::commands::command_workflow_descriptor;
 use crate::runtime;
-use crate::workflow::command_workflow_descriptor;
 
 use super::InferTask;
+
+/// How one local Python worker should bootstrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerBootstrapMode {
+    /// Load the full shared profile for a task family.
+    Profile,
+    /// Load only the requested infer task.
+    Task,
+}
 
 // ---------------------------------------------------------------------------
 // WorkerProfile
@@ -121,10 +132,7 @@ impl WorkerProfile {
 
     /// Map a command name to the profile needed for that command's infer-task worker.
     pub fn for_command(command: ReleasedCommand) -> Option<Self> {
-        WorkerTarget::for_command(command).map(|target| {
-            let WorkerTarget::InferTask(task) = target;
-            Self::for_task(task)
-        })
+        command_workflow_descriptor(command).map(|descriptor| Self::for_task(descriptor.infer_task))
     }
 }
 
@@ -135,27 +143,74 @@ impl WorkerProfile {
 /// Rust control plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkerTarget {
+    /// Launch a worker around one shared profile.
+    Profile(WorkerProfile),
     /// Launch a worker around one pure inference task.
     InferTask(InferTask),
 }
 
 impl WorkerTarget {
+    /// Build a profile bootstrap target.
+    pub fn profile(profile: WorkerProfile) -> Self {
+        Self::Profile(profile)
+    }
+
     /// Build a pure inference worker target.
     pub fn infer_task(task: InferTask) -> Self {
         Self::InferTask(task)
     }
 
+    /// Build one worker target from an infer task and host bootstrap mode.
+    pub fn from_infer_task(task: InferTask, mode: WorkerBootstrapMode) -> Self {
+        match mode {
+            WorkerBootstrapMode::Profile => Self::Profile(WorkerProfile::for_task(task)),
+            WorkerBootstrapMode::Task => Self::InferTask(task),
+        }
+    }
+
     /// Return the string label used in logs, health responses, and worker keys.
     pub fn label(&self) -> String {
         match self {
+            Self::Profile(profile) => profile.label().to_string(),
             Self::InferTask(task) => format!("infer:{}", task_name(*task)),
         }
     }
 
+    /// Return the shared profile that owns this target's task family.
+    pub fn profile_kind(&self) -> WorkerProfile {
+        match self {
+            Self::Profile(profile) => *profile,
+            Self::InferTask(task) => WorkerProfile::for_task(*task),
+        }
+    }
+
+    /// Return the specific infer task if this is a task bootstrap target.
+    pub fn task(&self) -> Option<InferTask> {
+        match self {
+            Self::Profile(_) => None,
+            Self::InferTask(task) => Some(*task),
+        }
+    }
+
+    /// Whether the target uses concurrent dispatch inside one process.
+    pub fn is_concurrent(&self) -> bool {
+        self.profile_kind().is_concurrent()
+    }
+
     /// Return the infer-task worker target used for one released command.
+    #[cfg(test)]
     pub(crate) fn for_command(command: ReleasedCommand) -> Option<Self> {
         let task = command_workflow_descriptor(command)?.infer_task;
         Some(Self::InferTask(task))
+    }
+
+    /// Return the actual bootstrap target used for one released command and host mode.
+    pub(crate) fn for_command_with_mode(
+        command: ReleasedCommand,
+        mode: WorkerBootstrapMode,
+    ) -> Option<Self> {
+        let task = command_workflow_descriptor(command)?.infer_task;
+        Some(Self::from_infer_task(task, mode))
     }
 }
 
@@ -177,7 +232,7 @@ pub(crate) fn task_name(task: InferTask) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{InferTask, WorkerProfile, WorkerTarget};
+    use super::{InferTask, WorkerBootstrapMode, WorkerProfile, WorkerTarget};
     use crate::api::ReleasedCommand;
     use crate::types::runtime;
 
@@ -198,6 +253,40 @@ mod tests {
     #[test]
     fn infer_target_label_is_prefixed() {
         assert_eq!(WorkerTarget::infer_task(InferTask::Fa).label(), "infer:fa");
+    }
+
+    #[test]
+    fn profile_target_label_is_prefixed() {
+        assert_eq!(
+            WorkerTarget::profile(WorkerProfile::Gpu).label(),
+            "profile:gpu"
+        );
+    }
+
+    #[test]
+    fn profile_mode_maps_task_to_profile_target() {
+        assert_eq!(
+            WorkerTarget::from_infer_task(InferTask::Asr, WorkerBootstrapMode::Profile),
+            WorkerTarget::Profile(WorkerProfile::Gpu)
+        );
+    }
+
+    #[test]
+    fn command_target_respects_bootstrap_mode() {
+        assert_eq!(
+            WorkerTarget::for_command_with_mode(
+                ReleasedCommand::Morphotag,
+                WorkerBootstrapMode::Profile
+            ),
+            Some(WorkerTarget::Profile(WorkerProfile::Stanza))
+        );
+        assert_eq!(
+            WorkerTarget::for_command_with_mode(
+                ReleasedCommand::Morphotag,
+                WorkerBootstrapMode::Task
+            ),
+            Some(WorkerTarget::InferTask(InferTask::Morphosyntax))
+        );
     }
 
     // -- WorkerProfile tests --
@@ -279,7 +368,10 @@ mod tests {
         let io = WorkerProfile::Io.startup_reservation_mb_for_tier(&tier);
 
         assert_eq!(gpu.0, 16_000, "GPU Large tier should match TOML constant");
-        assert_eq!(stanza.0, 12_000, "Stanza Large tier should match TOML constant");
+        assert_eq!(
+            stanza.0, 12_000,
+            "Stanza Large tier should match TOML constant"
+        );
         assert_eq!(io.0, 4_000, "IO Large tier should match TOML constant");
     }
 
@@ -290,7 +382,10 @@ mod tests {
         let stanza = WorkerProfile::Stanza.startup_reservation_mb_for_tier(&tier);
 
         assert!(gpu.0 < 16_000, "GPU Small tier must be less than Large");
-        assert!(stanza.0 < 12_000, "Stanza Small tier must be less than Large");
+        assert!(
+            stanza.0 < 12_000,
+            "Stanza Small tier must be less than Large"
+        );
         assert!(gpu.0 > stanza.0, "GPU must still exceed Stanza");
     }
 }

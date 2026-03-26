@@ -276,7 +276,8 @@ pub async fn submit_and_complete(
 ) -> (JobInfo, Vec<FileResult>) {
     let submission = JobSubmission {
         command,
-        lang: LanguageSpec::try_from(lang).expect("test lang must be a valid ISO 639-3 code or \"auto\""),
+        lang: LanguageSpec::try_from(lang)
+            .expect("test lang must be a valid ISO 639-3 code or \"auto\""),
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
@@ -689,7 +690,8 @@ pub async fn submit_paths_and_complete(
 
     let submission = JobSubmission {
         command,
-        lang: LanguageSpec::try_from(lang).expect("test lang must be a valid ISO 639-3 code or \"auto\""),
+        lang: LanguageSpec::try_from(lang)
+            .expect("test lang must be a valid ISO 639-3 code or \"auto\""),
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
@@ -815,8 +817,10 @@ mod tests {
 
     #[test]
     fn expected_paths_mode_result_path_preserves_requested_extension() {
-        let expected =
-            expected_paths_mode_result_path("/tmp/input/eng_acr_first13p5.mp3", "/tmp/out/test.cha");
+        let expected = expected_paths_mode_result_path(
+            "/tmp/input/eng_acr_first13p5.mp3",
+            "/tmp/out/test.cha",
+        );
         assert_eq!(expected, PathBuf::from("/tmp/out/eng_acr_first13p5.cha"));
     }
 
@@ -879,6 +883,71 @@ pub fn load_ba2_golden(command: &str, name: &str) -> Option<String> {
         std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("Failed to read BA2 golden {}: {e}", path.display())),
     )
+}
+
+/// Load a compare fixture pair (`FILE.cha` plus `FILE.gold.cha`).
+///
+/// Returns `None` if either companion file does not exist.
+pub fn load_compare_fixture_pair(name: &str) -> Option<(String, String)> {
+    let repo_root = find_repo_root()?;
+    let main_path = repo_root.join(format!("batchalign/tests/support/parity/{name}.cha"));
+    let gold_path = repo_root.join(format!("batchalign/tests/support/parity/{name}.gold.cha"));
+    if !main_path.exists() || !gold_path.exists() {
+        eprintln!(
+            "SKIP: compare fixture pair not found: {} / {}",
+            main_path.display(),
+            gold_path.display()
+        );
+        return None;
+    }
+    let main = std::fs::read_to_string(&main_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read compare fixture {}: {e}",
+            main_path.display()
+        )
+    });
+    let gold = std::fs::read_to_string(&gold_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read compare fixture {}: {e}",
+            gold_path.display()
+        )
+    });
+    Some((main, gold))
+}
+
+/// Load committed batchalign2-master compare golden outputs.
+///
+/// Reads from `batchalign/tests/golden/ba2_reference/compare/{name}.master.cha`
+/// plus the companion `.master.compare.csv`.
+pub fn load_ba2_compare_master_golden(name: &str) -> Option<(String, String)> {
+    let repo_root = find_repo_root()?;
+    let chat_path = repo_root.join(format!(
+        "batchalign/tests/golden/ba2_reference/compare/{name}.master.cha"
+    ));
+    let csv_path = repo_root.join(format!(
+        "batchalign/tests/golden/ba2_reference/compare/{name}.master.compare.csv"
+    ));
+    if !chat_path.exists() || !csv_path.exists() {
+        eprintln!(
+            "SKIP: BA2 master compare golden not found: {} / {}",
+            chat_path.display(),
+            csv_path.display()
+        );
+        return None;
+    }
+    let chat = std::fs::read_to_string(&chat_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read BA2 master compare golden {}: {e}",
+            chat_path.display()
+        )
+    });
+    let csv = std::fs::read_to_string(&csv_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read BA2 master compare golden {}: {e}",
+            csv_path.display()
+        )
+    });
+    Some((chat, csv))
 }
 
 /// Compare BA3 output to BA2 golden reference, ignoring metadata differences.
@@ -954,6 +1023,50 @@ pub fn assert_ba2_parity(label: &str, ba3_output: &str, ba2_golden: &str) {
         ba3_lines.len(),
     ));
 
+    panic!("{report}");
+}
+
+/// Compare two text artifacts exactly after normalizing line endings and
+/// trimming line-end whitespace.
+pub fn assert_exact_text_parity(label: &str, actual: &str, expected: &str) {
+    let normalize =
+        |s: &str| -> Vec<String> { s.lines().map(|line| line.trim_end().to_string()).collect() };
+
+    let actual_lines = normalize(actual);
+    let expected_lines = normalize(expected);
+    if actual_lines == expected_lines {
+        return;
+    }
+
+    let mut report = format!("\n=== EXACT PARITY FAILURE: {label} ===\n\n");
+    let max_lines = actual_lines.len().max(expected_lines.len());
+    let mut diff_count = 0;
+    for i in 0..max_lines {
+        let actual_line = actual_lines
+            .get(i)
+            .map(|s| s.as_str())
+            .unwrap_or("<missing>");
+        let expected_line = expected_lines
+            .get(i)
+            .map(|s| s.as_str())
+            .unwrap_or("<missing>");
+        if actual_line != expected_line {
+            diff_count += 1;
+            report.push_str(&format!(
+                "Line {i}:\n  expected: {expected_line}\n  actual:   {actual_line}\n\n"
+            ));
+            if diff_count >= 20 {
+                report.push_str("  ... (truncated, too many diffs)\n");
+                break;
+            }
+        }
+    }
+
+    report.push_str(&format!(
+        "Total lines: expected={}, actual={}, diffs={diff_count}\n",
+        expected_lines.len(),
+        actual_lines.len(),
+    ));
     panic!("{report}");
 }
 

@@ -44,6 +44,9 @@ class WorkerRegistryEntry:
     profile: str
     lang: LanguageCode
     engine_overrides: str = ""
+    ownership: str = "external"
+    owner_server_instance_id: str = ""
+    owner_server_pid: int | None = None
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

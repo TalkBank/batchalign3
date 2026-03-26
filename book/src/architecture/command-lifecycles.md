@@ -1,7 +1,7 @@
 # Command Lifecycles
 
 **Status:** Current
-**Last modified:** 2026-03-24 21:21 EDT
+**Last modified:** 2026-03-26 14:05 EDT
 
 End-to-end sequence diagrams showing how jobs flow through the system,
 from CLI invocation to output files. Every batchalign command now fits one
@@ -11,17 +11,18 @@ projection, composite workflow, or media analysis. For per-command
 option-driven flowcharts, see [Command Flowcharts](command-flowcharts.md).
 
 Contributor rule of thumb: if you are adding new command semantics, start in
-`crates/batchalign-app/src/workflow/`. `runner/` owns lifecycle and queueing;
-`dispatch/` should remain thin.
+`crates/batchalign-app/src/commands/` and then jump to the owning module
+(`compare.rs`, `benchmark.rs`, `transcribe/`, `fa/`, `morphosyntax/`, etc.).
+`runner/` owns lifecycle and queueing; `dispatch/` should remain thin.
 
 ## Workflow Families Overview
 
-| Workflow Family | Commands | Parallelism | Key Trait |
+| Workflow Family | Commands | Parallelism | Key shape |
 |------------------|----------|-------------|-----------|
 | **Per-file transform** | `align`, `transcribe`, `transcribe_s` | Concurrent files (semaphore-bounded by `num_workers`) | One file in, one primary output out |
 | **Cross-file batch transform** | `morphotag`, `utseg`, `translate`, `coref` | Cross-file batching (all utterances pooled into one GPU batch) | One prepared-text batch per task; maximizes model batch efficiency |
-| **Reference projection** | `compare` | Concurrent files, but with two primary CHAT inputs per file | Gold-scaffolded compare bundle plus materializers |
-| **Composite workflow** | `benchmark` | Concurrent files (semaphore-bounded by `num_workers`) | Transcribe first, then compare via typed workflow composition |
+| **Reference projection** | `compare` | Concurrent files, but with two primary CHAT inputs per file | Main+gold comparison bundle plus AST-first materializers |
+| **Composite workflow** | `benchmark` | Concurrent files (semaphore-bounded by `num_workers`) | Transcribe first, then compare via typed command composition |
 | **Media analysis V2** | `opensmile`, `avqi` | Concurrent files (semaphore-bounded by `num_workers`) | Rust prepares audio, sends typed `execute_v2` requests, Python returns raw analysis payloads |
 
 All workflow families are server-side orchestrated or Rust-owned at the
@@ -64,7 +65,7 @@ transcribe and compare rather than inventing its own third orchestration style.
 | Shape | File-level parallelism | Within-file parallelism |
 |-------|------------------------|-------------------------|
 | Per-file transform | Supervised tasks + `Semaphore(N)` | Single worker call or Rust composition per file |
-| Reference projection | Supervised tasks + `Semaphore(N)` | Main+gold comparison bundle per file |
+| Reference projection | Supervised tasks + `Semaphore(N)` | Main+gold comparison bundle plus materializers per file |
 | Composite workflow | Supervised tasks + `Semaphore(N)` | Transcribe then compare per file |
 | Cross-file batch transform | N/A (single batch) | One GPU batch call covers all files |
 | Media analysis V2 | Supervised tasks + `Semaphore(N)` | Single worker call per file |
@@ -272,6 +273,74 @@ sequenceDiagram
    The only differences are: which tiers are injected, what the cache key
    includes, and which Stanza/translation pipeline runs. `compare` is separate
    now because it is a reference-projection workflow with a main/gold pair.
+
+---
+
+## Scenario 2b: compare — 1 main file + 1 gold companion
+
+Compare is the reference-projection shape. It pairs each primary transcript with
+a `FILE.gold.cha` companion, morphotags only the main side, and materializes one
+or more outputs from a typed comparison bundle.
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Server
+    participant Pool as WorkerPool
+    participant W as Worker
+    participant Cmp as compare()
+
+    CLI->>Server: POST /jobs (compare, 1 main file)
+    Server-->>CLI: 202 Accepted {job_id}
+    Server->>Server: Resolve FILE.gold.cha companion
+
+    alt Missing gold companion
+        Server->>Server: Mark file Error
+    else Gold companion present
+        Server->>Pool: checkout worker
+        Pool-->>Server: CheckedOutWorker
+        Server->>W: execute_v2(task="morphosyntax", main transcript only)
+        W-->>Server: typed morphosyntax result
+        Note over Server: Worker returned to pool
+
+        Server->>Server: parse_lenient(morphotagged main) -> AST_main
+        Server->>Server: parse_lenient(raw gold) -> AST_gold
+        Server->>Cmp: compare(AST_main, AST_gold)
+        Note over Cmp: conform -> per-gold window search -> local DP<br/>main view + gold view + structural word matches + metrics
+        Cmp-->>Server: ComparisonBundle
+
+        Server->>Server: project_gold_structurally() on gold AST
+        Note over Server: Exact matches copy %mor / %gra / %wor;<br/>unsafe partial projection stays conservative
+        Server->>Server: build typed %xsrep / %xsmor models\nlower once to gold AST tiers
+        opt Internal benchmark/main path
+            Server->>Server: MainAnnotatedCompareMaterializer<br/>reuse typed tier models on main AST
+        end
+
+        Server->>Server: CompareMetricsCsvTable -> csv crate -> .compare.csv
+        Server->>Server: validate -> serialize
+        Server-->>CLI: output .cha + .compare.csv
+    end
+```
+
+### Walkthrough
+
+1. The CLI submits only primary `.cha` inputs; the gold companion is resolved by
+   the compare planner/dispatch layer.
+2. BA3 runs morphosyntax on the main transcript only. The gold transcript stays
+   raw during artifact construction so deletions retain reference-side shape
+   instead of picking up invented tags.
+3. `compare()` performs BA2-style per-gold-utterance window selection and local
+   DP, then returns a `ComparisonBundle` containing main-anchored tokens,
+   gold-anchored tokens, structural gold↔main word matches, and aggregate
+   metrics.
+4. The released materializer projects onto the gold/reference AST and injects
+   `%xsrep` / `%xsmor` there. The main-annotated materializer still exists for
+   internal benchmark-style flows, but it is no longer the compare command
+   surface.
+5. `%xsrep` / `%xsmor` are emitted from typed compare-tier models, not from raw
+   string hacking, and `.compare.csv` is rendered from the same bundle through a
+   structured table model. That keeps transcript annotations and metric output
+   in lockstep.
 
 ---
 
@@ -521,7 +590,7 @@ sequenceDiagram
 
 ### CHAT Ownership Boundary
 
-In all four scenarios, the **Rust server owns the full CHAT lifecycle**:
+In all scenarios above, the **Rust server owns the full CHAT lifecycle**:
 parsing, AST manipulation, validation, caching, and serialization. Python
 workers receive extracted data (word lists, audio paths) and return raw
 ML output. No CHAT text crosses the IPC boundary.

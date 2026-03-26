@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::api::{ContentType, EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
+use crate::api::{DisplayPath, EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
+use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::worker::pool::WorkerPool;
 use tracing::warn;
@@ -15,9 +16,9 @@ use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
 use crate::transcribe::TranscribeOptions;
 
 use super::super::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, apply_result_filename, classify_server_error,
-    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_progress_forwarder,
-    spawn_supervised_file_task, user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, classify_server_error, drain_supervised_file_tasks,
+    is_retryable_worker_failure, spawn_progress_forwarder, spawn_supervised_file_task,
+    user_facing_error,
 };
 use super::TranscribeDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -27,7 +28,7 @@ use super::infer_batched::apply_merge_abbrev;
 /// The runner always passes this bundle together after it chooses the
 /// transcribe command family, so keeping it typed here makes the dispatch seam
 /// explicit and keeps the function signature narrow.
-pub(in crate::runner) struct TranscribeDispatchRuntime {
+pub(crate) struct TranscribeDispatchRuntime {
     /// Worker pool used for ASR and optional speaker diarization requests.
     pub pool: Arc<WorkerPool>,
     /// Shared utterance cache used by post-ASR server-side stages.
@@ -44,20 +45,26 @@ pub(in crate::runner) struct TranscribeDispatchRuntime {
 ///
 /// Like FA, transcribe is per-file (each file has its own audio). Files are
 /// processed concurrently up to `num_workers` at a time, bounded by a semaphore.
-pub(in crate::runner) async fn dispatch_transcribe_infer(
+pub(crate) async fn dispatch_transcribe_infer(
     job: &RunnerJobSnapshot,
     store: &Arc<JobStore>,
     runtime: TranscribeDispatchRuntime,
     plan: TranscribeDispatchPlan,
 ) {
     let TranscribeDispatchPlan {
+        kernel_plan,
         base_options,
         should_merge_abbrev,
     } = plan;
     let job_id = &job.identity.job_id;
 
     // Process files concurrently, bounded by available workers.
-    let file_sem = Arc::new(tokio::sync::Semaphore::new(runtime.num_workers.0.max(1)));
+    let file_parallelism = runtime
+        .num_workers
+        .0
+        .max(1)
+        .min(kernel_plan.file_parallelism_hint.max(1));
+    let file_sem = Arc::new(tokio::sync::Semaphore::new(file_parallelism));
     let mut tasks = Vec::new();
 
     for file in &job.pending_files {
@@ -66,7 +73,10 @@ pub(in crate::runner) async fn dispatch_transcribe_infer(
             break;
         }
 
-        let Ok(permit) = file_sem.clone().acquire_owned().await else { tracing::warn!("file semaphore closed during shutdown"); break; };
+        let Ok(permit) = file_sem.clone().acquire_owned().await else {
+            tracing::warn!("file semaphore closed during shutdown");
+            break;
+        };
         let store = store.clone();
         let pool = runtime.pool.clone();
         let cache = runtime.cache.clone();
@@ -152,9 +162,6 @@ async fn process_one_transcribe_file(
             job.filesystem.staging_dir.join("input").join(filename)
         };
     let audio_path = original_audio_path.clone();
-    let paths_mode = job.filesystem.paths_mode;
-    let output_paths = job.filesystem.output_paths.clone();
-    let staging_dir = job.filesystem.staging_dir.clone();
 
     opts.rev_job_id = rev_job_ids.get(&original_audio_path).cloned();
 
@@ -225,20 +232,12 @@ async fn process_one_transcribe_file(
                     output_text
                 };
 
-                // Determine output filename (.cha extension)
-                let output_filename = Path::new(filename)
-                    .with_extension("cha")
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
+                let primary_output =
+                    primary_output_artifact(job.dispatch.command, &DisplayPath::from(filename));
 
                 // Write output
-                let write_path = if paths_mode && file_index < output_paths.len() {
-                    apply_result_filename(&output_paths[file_index], &output_filename)
-                } else {
-                    staging_dir.join("output").join(&output_filename)
-                };
+                let write_path =
+                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
                 if let Some(parent) = write_path.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -256,8 +255,8 @@ async fn process_one_transcribe_file(
 
                 lifecycle
                     .complete_with_result(
-                        output_filename.clone().into(),
-                        ContentType::Chat,
+                        primary_output.display_path.clone(),
+                        primary_output.content_type,
                         finished_at,
                     )
                     .await;
@@ -314,14 +313,14 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::options::{AsrEngineName, FaEngineName};
-    use crate::api::{LanguageCode3, LanguageSpec};
     use crate::api::{
-        EngineVersion, DisplayPath, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
+        DisplayPath, EngineVersion, FileStatusKind, JobId, JobStatus, NumSpeakers, ReleasedCommand,
         UnixTimestamp,
     };
+    use crate::api::{LanguageCode3, LanguageSpec};
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
+    use crate::options::{AsrEngineName, FaEngineName};
     use crate::options::{CommandOptions, CommonOptions, TranscribeOptions as TranscribeCommand};
     use crate::store::{
         FileStatus, Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity,
@@ -511,9 +510,10 @@ mod tests {
             return;
         }
 
-        let converted_audio_path = crate::ensure_wav::ensure_wav(&original_audio_path, Some(&cache_dir))
-            .await
-            .expect("convert mp4 to cached wav");
+        let converted_audio_path =
+            crate::ensure_wav::ensure_wav(&original_audio_path, Some(&cache_dir))
+                .await
+                .expect("convert mp4 to cached wav");
 
         assert_ne!(
             converted_audio_path.file_stem(),

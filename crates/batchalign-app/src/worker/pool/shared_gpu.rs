@@ -218,7 +218,8 @@ impl SharedGpuWorker {
             Ok(Ok(WorkerControlResponse::Health(response))) => {
                 if !response.status.is_ok() {
                     return Err(WorkerError::HealthCheckFailed(format!(
-                        "status={}", response.status
+                        "status={}",
+                        response.status
                     )));
                 }
                 Ok(response)
@@ -249,7 +250,7 @@ impl SharedGpuWorker {
         }
 
         info!(
-            target = %self.config.profile.label(),
+            target = %self.config.bootstrap_label(),
             pid = %self.pid,
             "Shutting down shared GPU worker"
         );
@@ -320,8 +321,8 @@ impl SharedGpuWorker {
     }
 
     /// The worker's profile label.
-    pub(super) fn profile_label(&self) -> &'static str {
-        self.config.profile.label()
+    pub(super) fn profile_label(&self) -> String {
+        self.config.bootstrap_label()
     }
 
     /// The worker's language code.

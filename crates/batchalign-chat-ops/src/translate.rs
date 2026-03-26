@@ -289,8 +289,8 @@ pub fn postprocess_translation(raw: &str, punct_chars: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talkbank_parser::TreeSitterParser;
     use talkbank_model::model::WriteChat;
+    use talkbank_parser::TreeSitterParser;
 
     fn parse_chat(text: &str) -> ChatFile {
         let parser = TreeSitterParser::new().unwrap();

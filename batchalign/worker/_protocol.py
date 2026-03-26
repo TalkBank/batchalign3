@@ -45,6 +45,20 @@ logger = logging.getLogger(__name__)
 _stdout_lock = threading.Lock()
 
 
+def _registry_ownership_from_env() -> tuple[str, str, int | None]:
+    """Resolve how a TCP worker should describe its registry ownership."""
+    server_instance_id = os.environ.get("BATCHALIGN_SERVER_INSTANCE_ID", "").strip()
+    if not server_instance_id:
+        return ("external", "", None)
+
+    raw_server_pid = os.environ.get("BATCHALIGN_SERVER_PID", "").strip()
+    try:
+        server_pid = int(raw_server_pid) if raw_server_pid else None
+    except ValueError:
+        server_pid = None
+    return ("server_owned", server_instance_id, server_pid)
+
+
 def _write_json(payload: dict[str, WorkerJSONValue]) -> None:
     """Emit a single JSON message line to stdout."""
     sys.stdout.write(json.dumps(payload) + "\n")
@@ -260,6 +274,7 @@ def _serve_tcp(
     actual_port = server_sock.getsockname()[1]
 
     bootstrap = _state.bootstrap
+    ownership, owner_server_instance_id, owner_server_pid = _registry_ownership_from_env()
     entry = WorkerRegistryEntry(
         pid=os.getpid(),
         host=host,
@@ -267,6 +282,9 @@ def _serve_tcp(
         profile=bootstrap.profile.value if bootstrap and bootstrap.profile else "",
         lang=bootstrap.lang if bootstrap else "eng",
         engine_overrides=json.dumps(bootstrap.engine_overrides) if bootstrap and bootstrap.engine_overrides else "",
+        ownership=ownership,
+        owner_server_instance_id=owner_server_instance_id,
+        owner_server_pid=owner_server_pid,
     )
     register_worker(entry, registry_path=registry_path)
 
@@ -312,6 +330,7 @@ def _serve_tcp_concurrent(
     actual_port = server_sock.getsockname()[1]
 
     bootstrap = _state.bootstrap
+    ownership, owner_server_instance_id, owner_server_pid = _registry_ownership_from_env()
     entry = WorkerRegistryEntry(
         pid=os.getpid(),
         host=host,
@@ -319,6 +338,9 @@ def _serve_tcp_concurrent(
         profile=bootstrap.profile.value if bootstrap and bootstrap.profile else "",
         lang=bootstrap.lang if bootstrap else "eng",
         engine_overrides=json.dumps(bootstrap.engine_overrides) if bootstrap and bootstrap.engine_overrides else "",
+        ownership=ownership,
+        owner_server_instance_id=owner_server_instance_id,
+        owner_server_pid=owner_server_pid,
     )
     register_worker(entry, registry_path=registry_path)
 

@@ -29,9 +29,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{
-    DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers, WorkerLanguage,
-};
+use crate::api::{DurationSeconds, EngineVersion, LanguageCode3, NumSpeakers, WorkerLanguage};
 use crate::worker::WorkerPid;
 
 string_id!(
@@ -642,7 +640,9 @@ mod tests {
     fn morphosyntax_request_v2_retokenize_defaults_false() {
         let json = r#"{"lang":"eng","payload_ref_id":"p1","item_count":1}"#;
         let req: MorphosyntaxRequestV2 = serde_json::from_str(json).unwrap();
-        assert!(!req.retokenize, "retokenize must default to false for backward compat");
+        assert!(
+            !req.retokenize,
+            "retokenize must default to false for backward compat"
+        );
     }
 }
-

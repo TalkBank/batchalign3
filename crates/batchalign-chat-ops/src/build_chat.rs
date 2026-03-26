@@ -20,8 +20,8 @@ use std::path::Path;
 use serde::Deserialize;
 use talkbank_model::Span;
 use talkbank_model::model::{
-    BracketedContent, BracketedItem, Bullet, ChatFile, DependentTier, Header,
-    IDHeader, LanguageCode, LanguageCodes, Line, MediaHeader, MediaType, ParticipantEntries,
+    BracketedContent, BracketedItem, Bullet, ChatFile, DependentTier, Header, IDHeader,
+    LanguageCode, LanguageCodes, Line, MediaHeader, MediaType, ParticipantEntries,
     ParticipantEntry, ParticipantName, ParticipantRole, Retrace, RetraceKind, Separator,
     SpeakerCode, Terminator, Utterance, UtteranceContent, Word,
 };
@@ -225,7 +225,8 @@ pub fn build_chat(desc: &TranscriptDescription) -> Result<ChatFile, String> {
         }
 
         // Word-level utterance
-        if let Some(mut utt_line) = build_word_utterance(&parser, &utt_desc.speaker, words, desc.write_wor)?
+        if let Some(mut utt_line) =
+            build_word_utterance(&parser, &utt_desc.speaker, words, desc.write_wor)?
         {
             // Set [- lang] precode when utterance language differs from primary
             if let Some(ref utt_lang) = utt_desc.lang
@@ -593,7 +594,7 @@ fn build_word_utterance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{parse_lenient, TreeSitterParser};
+    use crate::parse::{TreeSitterParser, parse_lenient};
     use crate::serialize::to_chat_string;
 
     /// Helper: create a WordDesc with default kind.

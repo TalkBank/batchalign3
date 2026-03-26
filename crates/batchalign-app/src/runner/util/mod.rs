@@ -183,10 +183,7 @@ mod tests {
             merge_abbrev: false.into(),
             batch_size: 4,
         });
-        assert!(should_preflight(
-            ReleasedCommand::Transcribe,
-            Some(&opts)
-        ));
+        assert!(should_preflight(ReleasedCommand::Transcribe, Some(&opts)));
     }
 
     #[test]
@@ -200,10 +197,7 @@ mod tests {
             merge_abbrev: false.into(),
             batch_size: 4,
         });
-        assert!(!should_preflight(
-            ReleasedCommand::Transcribe,
-            Some(&opts)
-        ));
+        assert!(!should_preflight(ReleasedCommand::Transcribe, Some(&opts)));
     }
 
     #[test]
@@ -426,8 +420,7 @@ mod tests {
         };
 
         let paths =
-            collect_preflight_audio_paths(ReleasedCommand::Align, &job, &job.pending_files)
-                .await;
+            collect_preflight_audio_paths(ReleasedCommand::Align, &job, &job.pending_files).await;
 
         assert_eq!(paths, vec![wav_path.to_path_buf()]);
     }

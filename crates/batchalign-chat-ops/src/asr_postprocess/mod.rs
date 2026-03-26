@@ -174,9 +174,9 @@ const LONG_PAUSE_SPLIT_MS: i64 = 800;
 /// Common English sentence starters worth treating as utterance starts after a
 /// long pause in otherwise unpunctuated ASR output.
 const LONG_PAUSE_SENTENCE_STARTERS: &[&str] = &[
-    "and", "but", "did", "do", "does", "go", "have", "has", "had", "he", "how", "i", "is",
-    "it", "no", "now", "okay", "so", "then", "they", "we", "well", "what", "when", "where",
-    "who", "why", "yes", "you",
+    "and", "but", "did", "do", "does", "go", "have", "has", "had", "he", "how", "i", "is", "it",
+    "no", "now", "okay", "so", "then", "they", "we", "well", "what", "when", "where", "who", "why",
+    "yes", "you",
 ];
 
 // ---------------------------------------------------------------------------
@@ -224,12 +224,15 @@ pub fn prepare_asr_chunks(output: &AsrOutput, lang: &str) -> Vec<PreparedMonolog
         // Stage 5b: add timing-gap boundaries for long unpunctuated runs.
         let chunks = split_on_long_pauses(chunks);
 
-        prepared.extend(chunks.into_iter().filter(|chunk| !chunk.is_empty()).map(|words| {
-            PreparedMonologueChunk {
-                speaker: monologue.speaker,
-                words,
-            }
-        }));
+        prepared.extend(
+            chunks
+                .into_iter()
+                .filter(|chunk| !chunk.is_empty())
+                .map(|words| PreparedMonologueChunk {
+                    speaker: monologue.speaker,
+                    words,
+                }),
+        );
     }
 
     prepared
@@ -245,7 +248,7 @@ pub fn utterances_from_prepared_chunks(chunks: Vec<PreparedMonologueChunk>) -> V
 }
 
 /// Apply the post-retokenization cleanup passes shared by all ASR paths.
-pub fn finalize_utterances(utterances: &mut Vec<Utterance>, lang: &str) {
+pub fn finalize_utterances(utterances: &mut [Utterance], lang: &str) {
     // Matches BA2's DisfluencyReplacementEngine which ran after ASR on all utterances.
     cleanup::apply_disfluency_replacements(utterances, lang);
 

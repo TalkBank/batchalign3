@@ -1,6 +1,6 @@
 //! `batchalign3 bench` — repeated performance runs for a command.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use batchalign_app::ReleasedCommand;
@@ -15,12 +15,15 @@ use crate::args::{BenchArgs, BenchTarget, GlobalOpts};
 use crate::dispatch;
 use crate::error::CliError;
 
-fn metadata(
-    target: BenchTarget,
-) -> (ReleasedCommand, &'static str, u32, &'static [&'static str]) {
+fn metadata(target: BenchTarget) -> (ReleasedCommand, &'static str, u32, &'static [&'static str]) {
     match target {
         BenchTarget::Align => (ReleasedCommand::Align, "eng", 1, &["cha"]),
-        BenchTarget::Transcribe => (ReleasedCommand::Transcribe, "eng", 1, &["wav", "mp3", "mp4"]),
+        BenchTarget::Transcribe => (
+            ReleasedCommand::Transcribe,
+            "eng",
+            1,
+            &["wav", "mp3", "mp4"],
+        ),
         BenchTarget::TranscribeS => (
             ReleasedCommand::TranscribeS,
             "eng",
@@ -123,7 +126,7 @@ pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> 
     }
 
     if !Path::new(&args.in_dir).exists() {
-        return Err(CliError::InputMissing(args.in_dir.clone().into()));
+        return Err(CliError::InputMissing(args.in_dir.clone()));
     }
     std::fs::create_dir_all(&args.out_dir)?;
 

@@ -281,10 +281,7 @@ mod tests {
             batch_size: 8,
         });
 
-        assert!(!should_preflight(
-            ReleasedCommand::Transcribe,
-            Some(&opts)
-        ));
+        assert!(!should_preflight(ReleasedCommand::Transcribe, Some(&opts)));
     }
 
     #[test]
@@ -298,9 +295,6 @@ mod tests {
             merge_abbrev: false.into(),
         });
 
-        assert!(!should_preflight(
-            ReleasedCommand::Benchmark,
-            Some(&opts)
-        ));
+        assert!(!should_preflight(ReleasedCommand::Benchmark, Some(&opts)));
     }
 }

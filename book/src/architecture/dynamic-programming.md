@@ -1,7 +1,7 @@
 # Dynamic Programming in batchalign3
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-26 00:52 EDT
 
 ## Purpose
 
@@ -21,7 +21,7 @@ architecturally avoidable runtime remap uses.
 | UTR timing recovery | `crates/batchalign-chat-ops/src/fa/utr.rs:inject_utr_timing` | Hirschberg edit-distance DP | Global alignment of all document words against all ASR tokens. Correctness-critical: per-utterance windowing caused token exhaustion on hand-edited transcripts. Matches old batchalign's proven approach. |
 | Morphosyntax retokenize mapping | `crates/batchalign-chat-ops/src/retokenize/mapping.rs:build_word_token_mapping` | **None** | Deterministic span-join mapping first; length-aware monotonic fallback when text diverges (no DP). |
 | WER evaluation | `batchalign-chat-ops/src/dp_align.rs` + `wer_conform.rs` (Rust) | Hirschberg edit-distance DP | Canonical use of DP for transcript comparison. Python `benchmark.py` is a thin wrapper around `batchalign_core.wer_compute()`. |
-| Compare command | `crates/batchalign-chat-ops/src/compare.rs` via `dp_align::align` | Hirschberg edit-distance DP | Aligns main vs gold transcript words to compute WER and inject `%xsrep` tiers. Same algorithm as WER evaluation. |
+| Compare command | `crates/batchalign-chat-ops/src/compare.rs` via `dp_align::align` | Hirschberg edit-distance DP | Aligns main vs gold transcript words to compute WER and inject `%xsrep` / `%xsmor` tiers. Same algorithm as WER evaluation. |
 
 ## Necessity Assessment
 
@@ -29,7 +29,8 @@ architecturally avoidable runtime remap uses.
 
 - **WER evaluation / compare command**: comparing two independent word sequences
   is exactly edit distance territory. The compare command uses the same Hirschberg
-  algorithm to align main vs gold transcripts for `%xsrep` annotation.
+  algorithm to align main vs gold transcripts for `%xsrep` / `%xsmor`
+  annotation.
 - **CTC forced alignment (`forced_align`)**: DP is intrinsic to the model family.
 - **Whisper DTW path**: if cross-attention DTW is the chosen alignment method,
   DP is part of the method.

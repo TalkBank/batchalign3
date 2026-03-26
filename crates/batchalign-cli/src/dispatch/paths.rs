@@ -54,12 +54,7 @@ pub(super) async fn dispatch_paths_mode(
     if let Some(od) = out_dir {
         for inp in inputs {
             if Path::new(inp).is_dir() {
-                copy_nonmatching(
-                    Path::new(inp),
-                    Path::new(od),
-                    extensions,
-                    command,
-                )?;
+                copy_nonmatching(Path::new(inp), Path::new(od), extensions, command)?;
             }
         }
     }
@@ -175,9 +170,8 @@ pub(super) async fn dispatch_paths_mode(
 
     let submission = JobSubmission {
         command,
-        lang: LanguageSpec::try_from(lang).map_err(|e| {
-            CliError::InvalidArgument(format!("invalid language: {e}"))
-        })?,
+        lang: LanguageSpec::try_from(lang)
+            .map_err(|e| CliError::InvalidArgument(format!("invalid language: {e}")))?,
         num_speakers: num_speakers.into(),
         files: vec![],
         media_files: vec![],

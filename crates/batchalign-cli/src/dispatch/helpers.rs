@@ -79,18 +79,14 @@ pub(super) async fn poll_and_write_incrementally(
                                     Ok(false) => {
                                         let error_msg = result.error.unwrap_or_default();
                                         progress.log_error(fn_, &error_msg);
-                                        error_details.push(FileErrorDetail::new(
-                                            fn_.clone(),
-                                            error_msg,
-                                        ));
+                                        error_details
+                                            .push(FileErrorDetail::new(fn_.clone(), error_msg));
                                     }
                                     Err(e) => {
                                         let error_msg = format!("{e}");
                                         progress.log_error(fn_, &error_msg);
-                                        error_details.push(FileErrorDetail::new(
-                                            fn_.clone(),
-                                            error_msg,
-                                        ));
+                                        error_details
+                                            .push(FileErrorDetail::new(fn_.clone(), error_msg));
                                     }
                                 }
                             }
@@ -410,11 +406,7 @@ pub(super) fn distribute_files_weighted(
 }
 
 /// Print a structured failure summary.
-pub(super) fn print_failure_summary(
-    errors: &[FileErrorDetail],
-    total_files: u64,
-    out_dir: &Path,
-) {
+pub(super) fn print_failure_summary(errors: &[FileErrorDetail], total_files: u64, out_dir: &Path) {
     if errors.is_empty() {
         eprintln!(
             "\nAll done! {total_files} file(s) written to {}",
@@ -445,7 +437,9 @@ pub(super) fn print_failure_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batchalign_app::api::{FileStatusEntry, JobId, LanguageCode3, LanguageSpec, ReleasedCommand};
+    use batchalign_app::api::{
+        FileStatusEntry, JobId, LanguageCode3, LanguageSpec, ReleasedCommand,
+    };
     use batchalign_app::options::{CommandOptions, CommonOptions, MorphotagOptions};
 
     fn test_job_info(status: JobStatus, error: Option<&str>) -> JobInfo {

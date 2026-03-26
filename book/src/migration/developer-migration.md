@@ -1,7 +1,7 @@
 # Developer Architecture Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-18
+**Last updated:** 2026-03-26 00:52 EDT
 
 Comparison anchors for this page:
 
@@ -19,6 +19,8 @@ See also:
 
 - [BA2 Architecture Reference](ba2-architecture-reference.md) for the frozen Jan
   9 baseline architecture
+- [BA2 Compare Migration](ba2-compare-migration.md) for the dedicated
+  `batchalign2-master compare` to BA3 compare rewrite map
 - [Hybrid Workflow Architecture](../architecture/hybrid-workflow-architecture.md)
   for the proposed BA3 direction informed by BA2 strengths and newer compare
   workflow pressure
@@ -280,6 +282,14 @@ The same principle shows up across the command surface:
     Python worker: structured chain data
     Rust: document-level payload collection, sparse `%xcoref` injection, and
     validation
+- `compare`:
+  - later `batchalign2-master`: Python owned `morphosyntax -> compare ->
+    compare_analysis`, projected through the Python `Document` model, and relied
+    on string/document regeneration as the projection mechanism
+  - current BA3:
+    Rust: morphotag main only, keep gold raw, build a `ComparisonBundle` with
+    local-window alignment plus structural word matches, and materialize either
+    the released main output or an internal AST-first gold projection
 - `benchmark`:
   - Jan 9 / Feb 9 BA2: Python command path around ASR + gold transcript + WER
     output files

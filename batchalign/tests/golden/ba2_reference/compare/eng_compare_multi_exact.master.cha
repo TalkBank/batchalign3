@@ -1,0 +1,16 @@
+@UTF8
+@Begin
+@Languages:	eng
+@Participants:	PAR Participant
+@ID:	eng|test|PAR|||||Participant|||
+*PAR:	hello world .
+%mor:	intj|hello noun|world
+%gra:	1|2|DISCOURSE 2|2|ROOT
+%xsrep:	hello world .
+%xsmor:	INTJ NOUN PUNCT
+*PAR:	I like cats .
+%mor:	pron|I-Prs-Nom-S1 verb|like-Fin-Ind-Pres-S1 noun|cat-Plur-Acc
+%gra:	1|2|NSUBJ 2|3|ROOT 3|2|OBJ
+%xsrep:	i like cats .
+%xsmor:	PRON VERB NOUN PUNCT
+@End

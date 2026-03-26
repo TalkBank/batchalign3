@@ -14,9 +14,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::api::{ContentType, EngineVersion, DisplayPath, JobId, RevAiJobId, UnixTimestamp};
-use crate::host_memory::{HostMemoryCoordinator, HostMemoryError};
+use crate::api::{
+    ContentType, DisplayPath, EngineVersion, JobId, ReleasedCommand, RevAiJobId, UnixTimestamp,
+};
 use crate::cache::UtteranceCache;
+use crate::commands::{RunnerDispatchKind, command_runner_dispatch_kind};
+use crate::commands::{
+    align as align_command, avqi as avqi_command, benchmark as benchmark_command,
+    compare as compare_command, coref as coref_command, morphotag as morphotag_command,
+    opensmile as opensmile_command, transcribe as transcribe_command,
+    translate as translate_command, utseg as utseg_command,
+};
+use crate::host_memory::{HostMemoryCoordinator, HostMemoryError};
 use crate::pipeline::PipelineServices;
 use crate::revai::{RevAiPreflightPlan, preflight_submit_audio_paths};
 use crate::scheduling::{DurationMs, FailureCategory, RetryPolicy, WorkUnitKind};
@@ -27,10 +36,10 @@ use tracing::{error, info, warn};
 
 use crate::api::JobStatus;
 use crate::queue::QueueBackend;
+use crate::state::resolve_worker_capability_snapshot;
 use crate::store::{JobStore, LeaseRenewalOutcome, RunnerJobSnapshot, unix_now};
-use crate::workflow::{RunnerDispatchKind, command_runner_dispatch_kind};
 
-use dispatch::{
+pub(crate) use dispatch::{
     BatchedInferDispatchPlan, BenchmarkDispatchPlan, BenchmarkDispatchRuntime, FaDispatchPlan,
     FaDispatchRuntime, MediaAnalysisDispatchPlan, MediaAnalysisDispatchRuntime,
     TranscribeDispatchPlan, TranscribeDispatchRuntime, dispatch_batched_infer,
@@ -115,8 +124,8 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     let store = &context.store;
     let pool = &context.pool;
     let cache = &context.cache;
-    let infer_tasks = &context.infer_tasks;
-    let engine_versions = &context.engine_versions;
+    let startup_infer_tasks = &context.infer_tasks;
+    let startup_engine_versions = &context.engine_versions;
     let queue = context.queue.as_ref();
     let test_echo_mode = context.test_echo_mode;
 
@@ -148,7 +157,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
 
     // Collect file list to process
     let mut file_list = job.pending_files.clone();
-    let command = job.dispatch.command.clone();
+    let command = job.dispatch.command;
 
     // Compute the requested per-job file parallelism without host-memory math,
     // then let the host-memory coordinator clamp it to what the machine can
@@ -180,7 +189,9 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     })?;
     let execution_plan = match execution_plan {
         Ok(plan) => plan,
-        Err(error @ (HostMemoryError::CapacityRejected { .. } | HostMemoryError::TimedOut { .. })) => {
+        Err(
+            error @ (HostMemoryError::CapacityRejected { .. } | HostMemoryError::TimedOut { .. }),
+        ) => {
             let retry_at = UnixTimestamp(
                 unix_now().0 + (memory_gate_policy.backoff_for_retry(1).0 as f64 / 1000.0),
             );
@@ -249,9 +260,10 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // that dispatch_execute_v2 will use for the GPU worker. Engine overrides
     // from the job options are passed so the pre-scaled worker matches the
     // exact key that dispatch will look up.
+    let job_engine_overrides = job.dispatch.options.common().engine_overrides_json();
+
     if *num_workers > 1 {
         let pre_scale_lang = job.dispatch.lang.to_worker_language();
-        let job_engine_overrides = job.dispatch.options.common().engine_overrides_json();
         pool.pre_scale_with_overrides(
             command,
             pre_scale_lang,
@@ -317,6 +329,27 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     };
 
     // Choose between infer path or per-file dispatch.
+    let capability_snapshot = match resolve_runtime_capability_snapshot(
+        pool,
+        startup_infer_tasks,
+        startup_engine_versions,
+        test_echo_mode,
+        command,
+        job.dispatch.lang.to_worker_language(),
+        &job_engine_overrides,
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(err_msg) => {
+            warn!(job_id = %job_id, correlation_id = %correlation_id, "{}", err_msg);
+            store.fail_job(job_id, &err_msg, unix_now()).await;
+            return Ok(());
+        }
+    };
+    let infer_tasks = &capability_snapshot.infer_tasks;
+    let engine_versions = &capability_snapshot.engine_versions;
+
     let all_chat = file_list.iter().all(|file| file.has_chat);
     let infer_task = infer_task_for_command(command);
     let infer_supported = infer_task.is_some_and(|task| infer_tasks.contains(&task));
@@ -370,17 +403,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side transcribe orchestrator"
         );
 
-        let Some(plan) = TranscribeDispatchPlan::from_job(&job) else {
-            warn!(
-                job_id = %job_id,
-                correlation_id = %correlation_id,
-                command = %command,
-                "Transcribe dispatch plan could not be built from job options"
-            );
-            return Ok(());
-        };
-
-        dispatch_transcribe_infer(
+        transcribe_command::run(
             &job,
             store,
             TranscribeDispatchRuntime {
@@ -390,7 +413,6 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
                 rev_job_ids: rev_job_ids.clone(),
                 num_workers,
             },
-            plan,
         )
         .await;
     } else if use_benchmark_infer {
@@ -409,17 +431,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side benchmark orchestrator"
         );
 
-        let Some(plan) = BenchmarkDispatchPlan::from_job(&job) else {
-            warn!(
-                job_id = %job_id,
-                correlation_id = %correlation_id,
-                command = %command,
-                "Benchmark dispatch plan could not be built from job options"
-            );
-            return Ok(());
-        };
-
-        dispatch_benchmark_infer(
+        benchmark_command::run(
             &job,
             store,
             BenchmarkDispatchRuntime {
@@ -429,7 +441,6 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
                 rev_job_ids: rev_job_ids.clone(),
                 num_workers,
             },
-            plan,
         )
         .await;
     } else if use_media_analysis_infer {
@@ -451,26 +462,23 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side media-analysis V2 path"
         );
 
-        let Some(plan) = MediaAnalysisDispatchPlan::from_job(&job) else {
-            warn!(
-                job_id = %job_id,
-                correlation_id = %correlation_id,
-                command = %command,
-                "Media-analysis dispatch plan could not be built from job options"
-            );
-            return Ok(());
+        let runtime = MediaAnalysisDispatchRuntime {
+            pool: pool.clone(),
+            num_workers,
         };
-
-        dispatch_media_analysis_v2(
-            &job,
-            store,
-            MediaAnalysisDispatchRuntime {
-                pool: pool.clone(),
-                num_workers,
-            },
-            plan,
-        )
-        .await;
+        match command {
+            ReleasedCommand::Opensmile => opensmile_command::run(&job, store, runtime).await,
+            ReleasedCommand::Avqi => avqi_command::run(&job, store, runtime).await,
+            _ => {
+                tracing::error!(
+                    job_id = %job_id,
+                    correlation_id = %correlation_id,
+                    command = %command,
+                    "Media-analysis infer path selected for unsupported command"
+                );
+                return Ok(());
+            }
+        }
     } else if use_infer {
         // --- Server-side infer path ---
         // The server owns CHAT parse/cache/inject/serialize.
@@ -499,17 +507,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         if command == "align" {
             // FA is per-file (each file has its own audio) — not cross-file batchable.
             // Files are processed concurrently, bounded by num_workers.
-            let Some(plan) = FaDispatchPlan::from_job(&job) else {
-                warn!(
-                    job_id = %job_id,
-                    correlation_id = %correlation_id,
-                    command = %command,
-                    "FA dispatch plan could not be built from job options"
-                );
-                return Ok(());
-            };
-
-            dispatch_fa_infer(
+            align_command::run(
                 &job,
                 store,
                 FaDispatchRuntime {
@@ -519,17 +517,93 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
                     rev_job_ids: rev_job_ids.clone(),
                     num_workers,
                 },
-                plan,
+            )
+            .await;
+        } else if command == ReleasedCommand::Morphotag {
+            let debug_dir = job
+                .dispatch
+                .options
+                .common()
+                .debug_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
+            morphotag_command::run(
+                &job,
+                store,
+                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
+            )
+            .await;
+        } else if command == ReleasedCommand::Compare {
+            let debug_dir = job
+                .dispatch
+                .options
+                .common()
+                .debug_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
+            compare_command::run(
+                &job,
+                store,
+                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
+            )
+            .await;
+        } else if command == ReleasedCommand::Utseg {
+            let debug_dir = job
+                .dispatch
+                .options
+                .common()
+                .debug_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
+            utseg_command::run(
+                &job,
+                store,
+                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
+            )
+            .await;
+        } else if command == ReleasedCommand::Translate {
+            let debug_dir = job
+                .dispatch
+                .options
+                .common()
+                .debug_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
+            translate_command::run(
+                &job,
+                store,
+                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
+            )
+            .await;
+        } else if command == ReleasedCommand::Coref {
+            let debug_dir = job
+                .dispatch
+                .options
+                .common()
+                .debug_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
+            coref_command::run(
+                &job,
+                store,
+                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
             )
             .await;
         } else {
-            let plan = BatchedInferDispatchPlan::from_job(&job);
-            let debug_dir = job.dispatch.options.common().debug_dir
+            let plan = BatchedInferDispatchPlan::from_job(&job, store.config());
+            let debug_dir = job
+                .dispatch
+                .options
+                .common()
+                .debug_dir
                 .as_deref()
                 .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(
-                debug_dir.as_deref(),
-            );
+            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
             dispatch_batched_infer(
                 &job,
                 store,
@@ -575,6 +649,36 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     );
 
     Ok(())
+}
+
+async fn resolve_runtime_capability_snapshot(
+    pool: &WorkerPool,
+    startup_infer_tasks: &[InferTask],
+    startup_engine_versions: &BTreeMap<String, String>,
+    test_echo_mode: bool,
+    command: ReleasedCommand,
+    lang: impl Into<crate::api::WorkerLanguage>,
+    engine_overrides: &str,
+) -> Result<crate::state::WorkerCapabilitySnapshot, String> {
+    if !test_echo_mode && pool.detected_capabilities().is_none() && infer_task_for_command(command).is_some() {
+        pool.ensure_command_capabilities_with_overrides(command, lang, engine_overrides)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to bootstrap live worker capabilities for '{}': {}",
+                    command, error
+                )
+            })?;
+    }
+
+    resolve_worker_capability_snapshot(
+        &[],
+        startup_infer_tasks,
+        startup_engine_versions,
+        test_echo_mode,
+        pool.detected_capabilities(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 async fn dispatch_test_echo_files(
@@ -677,7 +781,6 @@ async fn record_preflight_media_failures(
 
     failed_indices
 }
-
 
 #[cfg(test)]
 mod tests;
