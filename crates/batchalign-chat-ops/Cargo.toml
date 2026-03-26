@@ -22,7 +22,7 @@ zhconv = "0.4.1"
 talkbank-model = { path = "../../../talkbank-tools/crates/talkbank-model" }
 talkbank-parser = { path = "../../../talkbank-tools/crates/talkbank-parser" }
 strsim = "0.11.1"
-whatlang = "0.16"
+whatlang = "0.18"
 
 [dev-dependencies]
 insta = { workspace = true }

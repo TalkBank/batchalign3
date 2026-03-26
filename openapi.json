@@ -10,6 +10,10 @@
         ],
         "type": "string"
       },
+      "DisplayPath": {
+        "description": "Display path for a file within a job: either a bare basename\n(`\"sample.cha\"`) for single-file input or a relative forward-slash path\n(`\"PWA/TYO_a1.cha\"`) for directory input with subdirectories.\n\nBackslashes are normalized to forward slashes on construction so the value\nis platform-independent regardless of whether the CLI ran on Windows.\n\nThis type replaces the former `FileName` which incorrectly rejected path\nseparators during deserialization even though the system routinely carries\nrelative paths.",
+        "type": "string"
+      },
       "DurationSeconds": {
         "description": "Duration measured in fractional seconds.",
         "format": "double",
@@ -45,10 +49,6 @@
         ],
         "type": "string"
       },
-      "FileName": {
-        "description": "Basename of a file being processed (e.g. `\"sample.cha\"`).\nRejects empty strings and path separators.",
-        "type": "string"
-      },
       "FilePayload": {
         "description": "A single CHAT file submitted by the client.",
         "properties": {
@@ -57,7 +57,7 @@
             "type": "string"
           },
           "filename": {
-            "$ref": "#/components/schemas/FileName",
+            "$ref": "#/components/schemas/DisplayPath",
             "description": "Original filename (e.g. \"01DM_18.cha\")."
           }
         },
@@ -114,8 +114,8 @@
             ]
           },
           "filename": {
-            "$ref": "#/components/schemas/FileName",
-            "description": "Original filename from the submission (e.g. \"01DM_18.cha\")."
+            "$ref": "#/components/schemas/DisplayPath",
+            "description": "Display path for this file: a bare basename (`\"sample.cha\"`) or a\nrelative forward-slash path (`\"PWA/TYO_a1.cha\"`) for directory input.\nBackslashes are normalized to forward slashes on construction."
           }
         },
         "required": [
@@ -170,8 +170,8 @@
             ]
           },
           "filename": {
-            "$ref": "#/components/schemas/FileName",
-            "description": "Original filename from the submission (e.g. \"01DM_18.cha\")."
+            "$ref": "#/components/schemas/DisplayPath",
+            "description": "Display path for this file: a bare basename (`\"sample.cha\"`) or a\nrelative forward-slash path (`\"PWA/TYO_a1.cha\"`) for directory input.\nBackslashes are normalized to forward slashes on construction."
           },
           "finished_at": {
             "oneOf": [

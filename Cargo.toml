@@ -29,7 +29,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 
 # JSON Schema generation (for Rust→Python IPC type sync)
-schemars = "0.8"
+schemars = "1.2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -83,14 +83,14 @@ blake3 = "1"
 moka = { version = "0.12", features = ["future"] }
 
 # TOML parsing (runtime constants)
-toml = "1.0"
+toml = "1.1"
 
 # Testing
 assert_cmd = "2"
 insta = { version = "1", features = ["json"] }
 predicates = "3"
-proptest = "1.10"
-rstest = "0.25"
+proptest = "1.11"
+rstest = "0.26"
 tempfile = "3"
 
 [profile.dev]

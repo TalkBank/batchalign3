@@ -286,6 +286,19 @@ export interface components {
          */
         ContentType: "chat" | "csv" | "text";
         /**
+         * @description Display path for a file within a job: either a bare basename
+         *     (`"sample.cha"`) for single-file input or a relative forward-slash path
+         *     (`"PWA/TYO_a1.cha"`) for directory input with subdirectories.
+         *
+         *     Backslashes are normalized to forward slashes on construction so the value
+         *     is platform-independent regardless of whether the CLI ran on Windows.
+         *
+         *     This type replaces the former `FileName` which incorrectly rejected path
+         *     separators during deserialization even though the system routinely carries
+         *     relative paths.
+         */
+        DisplayPath: string;
+        /**
          * Format: double
          * @description Duration measured in fractional seconds.
          */
@@ -313,17 +326,12 @@ export interface components {
          * @enum {string}
          */
         FailureCategory: "validation" | "parse_error" | "input_missing" | "worker_crash" | "worker_timeout" | "worker_protocol" | "provider_transient" | "provider_terminal" | "memory_pressure" | "cancelled" | "system";
-        /**
-         * @description Basename of a file being processed (e.g. `"sample.cha"`).
-         *     Rejects empty strings and path separators.
-         */
-        FileName: string;
         /** @description A single CHAT file submitted by the client. */
         FilePayload: {
             /** @description Full CHAT file text. */
             content: string;
             /** @description Original filename (e.g. "01DM_18.cha"). */
-            filename: components["schemas"]["FileName"];
+            filename: components["schemas"]["DisplayPath"];
         };
         /**
          * @description Machine-readable sub-stage within a file's processing lifecycle.
@@ -354,8 +362,12 @@ export interface components {
              *     `None` for successfully processed files.
              */
             error?: string | null;
-            /** @description Original filename from the submission (e.g. "01DM_18.cha"). */
-            filename: components["schemas"]["FileName"];
+            /**
+             * @description Display path for this file: a bare basename (`"sample.cha"`) or a
+             *     relative forward-slash path (`"PWA/TYO_a1.cha"`) for directory input.
+             *     Backslashes are normalized to forward slashes on construction.
+             */
+            filename: components["schemas"]["DisplayPath"];
         };
         /**
          * @description Per-file status within a job.
@@ -384,8 +396,12 @@ export interface components {
              *     detected, if applicable.
              */
             error_line?: number | null;
-            /** @description Original filename from the submission (e.g. "01DM_18.cha"). */
-            filename: components["schemas"]["FileName"];
+            /**
+             * @description Display path for this file: a bare basename (`"sample.cha"`) or a
+             *     relative forward-slash path (`"PWA/TYO_a1.cha"`) for directory input.
+             *     Backslashes are normalized to forward slashes on construction.
+             */
+            filename: components["schemas"]["DisplayPath"];
             finished_at?: null | components["schemas"]["UnixTimestamp"];
             next_eligible_at?: null | components["schemas"]["UnixTimestamp"];
             /**
