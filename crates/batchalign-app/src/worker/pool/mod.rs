@@ -471,6 +471,42 @@ impl WorkerPool {
             }
         }
 
+        // Probe capabilities from the first discovered TCP worker so that
+        // `infer_tasks` is populated even when no stdio workers are spawned.
+        // Without this, servers that only have pre-started TCP daemons start
+        // with `infer_tasks = Vec::new()` and reject every job.
+        if self.lazy_capabilities.get().is_none() && !discovered.is_empty() {
+            let first = &discovered[0];
+            let probe_info = TcpWorkerInfo {
+                host: first.entry.host.clone(),
+                port: first.entry.port,
+                profile: first.profile,
+                lang: first.lang.clone(),
+                engine_overrides: first.entry.engine_overrides.clone(),
+                pid: WorkerPid(first.entry.pid),
+                audio_task_timeout_s: self.config.audio_task_timeout_s,
+                analysis_task_timeout_s: self.config.analysis_task_timeout_s,
+            };
+            match TcpWorkerHandle::connect(probe_info).await {
+                Ok(mut probe_handle) => match probe_handle.capabilities().await {
+                    Ok(caps) => {
+                        info!(
+                            infer_tasks = ?caps.infer_tasks,
+                            engine_versions = ?caps.engine_versions,
+                            "Detected worker capabilities from TCP registry worker"
+                        );
+                        let _ = self.lazy_capabilities.set(caps);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to probe capabilities from TCP registry worker");
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "Failed to connect to TCP registry worker for capability probe");
+                }
+            }
+        }
+
         count
     }
 

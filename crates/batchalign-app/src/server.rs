@@ -189,6 +189,19 @@ async fn probe_workers(
             .collect();
         let caps = validate_infer_capability_gate(&all_tasks, &BTreeMap::new(), true)?;
         (caps, all_tasks, BTreeMap::new())
+    } else if let Some(detected) = pool.detected_capabilities() {
+        // TCP registry workers were discovered and capabilities probed.
+        let caps = validate_infer_capability_gate(
+            &detected.infer_tasks,
+            &detected.engine_versions,
+            false,
+        )?;
+        info!(
+            capabilities = ?caps,
+            infer_tasks = ?detected.infer_tasks,
+            "Using capabilities detected from TCP registry workers"
+        );
+        (caps, detected.infer_tasks.clone(), detected.engine_versions.clone())
     } else {
         let caps = optimistic_capabilities();
         info!(
