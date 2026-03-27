@@ -82,6 +82,73 @@ struct FaFileContext<'a> {
     media_dir: Option<&'a str>,
 }
 
+fn media_search_subdir(filename: &str, media_subdir: &str) -> String {
+    let file_parent = Path::new(filename)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if file_parent.is_empty() {
+        media_subdir.to_string()
+    } else if media_subdir.is_empty() {
+        file_parent
+    } else {
+        format!("{media_subdir}/{file_parent}")
+    }
+}
+
+async fn find_media_in_root(root: &Path, subdir: &str, stem: &str) -> Option<PathBuf> {
+    let search_dir = if subdir.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(subdir)
+    };
+    for ext in crate::runner::util::KNOWN_MEDIA_EXTENSIONS {
+        let candidate = search_dir.join(format!("{stem}.{ext}"));
+        if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_media_in_root, media_search_subdir};
+
+    #[test]
+    fn media_search_subdir_preserves_mapping_subdir() {
+        assert_eq!(
+            media_search_subdir("d01oma12a.cha", "French/Newcastle/Discussion/12"),
+            "French/Newcastle/Discussion/12"
+        );
+        assert_eq!(
+            media_search_subdir(
+                "Discussion/12/d01oma12a.cha",
+                "French/Newcastle"
+            ),
+            "French/Newcastle/Discussion/12"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_media_in_root_searches_nested_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("French/Newcastle/Discussion/12");
+        std::fs::create_dir_all(&nested).unwrap();
+        let target = nested.join("d01oma12a.mp3");
+        std::fs::write(&target, b"mp3").unwrap();
+
+        let found = find_media_in_root(
+            dir.path(),
+            "French/Newcastle/Discussion/12",
+            "d01oma12a",
+        )
+        .await;
+
+        assert_eq!(found.as_deref(), Some(target.as_path()));
+    }
+}
+
 /// Dispatch FA (forced alignment) via the server-side infer path.
 ///
 /// Unlike morphosyntax/utseg/translate/coref, FA is per-file: each file has
@@ -255,99 +322,102 @@ async fn process_one_fa_file(
     lifecycle.stage(FileStage::ResolvingAudio).await;
 
     // Resolve audio path.
-    // In paths_mode the audio sits alongside the .cha source file.
-    // In content mode (remote --server) we try multiple strategies:
-    //   1. Media mapping (explicit server-side path mapping)
-    //   2. Source directory (client's original path — works when server shares filesystem)
-    //   3. Media roots (server-configured search directories)
-    //   4. Alongside staged file (last resort)
-    let original_audio_path = if job.filesystem.paths_mode {
-        resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await
-    } else {
-        let mut found: Option<PathBuf> = None;
+    // Everything is local to the execution host now, but the corpus root and
+    // media root can still differ on that host. Search order:
+    //   1. explicit --media-dir root replacement using the known corpus subdir
+    //   2. paths_mode adjacency (or content-mode source_dir when shared)
+    //   3. local media_mappings root replacement on the execution host
+    //   4. server media_roots fallback
+    //   5. flat --media-dir / staged adjacency fallback
+    let stem = Path::new(filename)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mapped_subdir = media_search_subdir(filename, &media_subdir);
+    let media_dir_path = media_dir.map(Path::new);
 
-        // Strategy 1: Media mapping
-        if found.is_none() && !media_mapping.is_empty() {
-            let mapping_root = host.media_mapping_root(&media_mapping).map(str::to_owned);
-            if let Some(root) = mapping_root {
-                let file_path = Path::new(filename);
-                let stem = file_path.file_stem().unwrap_or_default().to_string_lossy();
-                let file_parent = file_path
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let full_subdir = if file_parent.is_empty() {
-                    media_subdir.clone()
-                } else if media_subdir.is_empty() {
-                    file_parent
-                } else {
-                    format!("{media_subdir}/{file_parent}")
-                };
-                let search_dir = PathBuf::from(&root).join(&full_subdir);
-                for ext in crate::runner::util::KNOWN_MEDIA_EXTENSIONS {
-                    let candidate = search_dir.join(format!("{stem}.{ext}"));
-                    if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-                        found = Some(candidate);
-                        break;
-                    }
-                }
-            }
+    let mut original_audio_path = None;
+
+    if let Some(root) = media_dir_path {
+        if let Some(candidate) = find_media_in_root(root, &mapped_subdir, &stem).await {
+            info!(
+                filename,
+                media_dir = %root.display(),
+                mapped_subdir = %mapped_subdir,
+                "Resolved audio via --media-dir root mapping"
+            );
+            original_audio_path = Some(candidate);
         }
+    }
 
-        // Strategy 2: Source directory — the client's original input path.
-        // Works when the server shares the same filesystem (e.g. fleet machines
-        // with the same /Users/macw/ layout).
-        if found.is_none() && !source_dir.as_os_str().is_empty() {
-            let source_path = source_dir.join(Path::new(filename).file_name().unwrap_or_default());
-            let source_audio =
-                resolve_audio_for_chat_with_media_dir(&source_path, media_dir.map(Path::new)).await;
-            if source_audio.is_some() {
+    if original_audio_path.is_none() && job.filesystem.paths_mode {
+        original_audio_path = resolve_audio_for_chat_with_media_dir(&read_path, None).await;
+    }
+
+    if original_audio_path.is_none() && !source_dir.as_os_str().is_empty() {
+        let source_path = source_dir.join(Path::new(filename).file_name().unwrap_or_default());
+        let source_audio =
+            resolve_audio_for_chat_with_media_dir(&source_path, media_dir.map(Path::new)).await;
+        if source_audio.is_some() {
+            info!(
+                filename,
+                source_dir = %source_dir.display(),
+                "Resolved audio via client source directory"
+            );
+            original_audio_path = source_audio;
+        }
+    }
+
+    if original_audio_path.is_none() && !media_mapping.is_empty() {
+        if let Some(root) = host.media_mapping_root(&media_mapping) {
+            if let Some(candidate) =
+                find_media_in_root(Path::new(root), &mapped_subdir, &stem).await
+            {
                 info!(
                     filename,
-                    source_dir = %source_dir.display(),
-                    "Resolved audio via client source directory"
+                    media_mapping,
+                    mapped_subdir = %mapped_subdir,
+                    "Resolved audio via local media mapping"
                 );
-                found = source_audio;
+                original_audio_path = Some(candidate);
             }
         }
+    }
 
-        // Strategy 3: Media roots from server config
-        if found.is_none() && !host.media_roots().is_empty() {
-            let file_stem = Path::new(filename)
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
-            'roots: for root in host.media_roots() {
-                for ext in crate::runner::util::KNOWN_MEDIA_EXTENSIONS {
-                    let candidate = Path::new(root).join(format!("{file_stem}.{ext}"));
-                    if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-                        found = Some(candidate);
-                        break 'roots;
-                    }
-                }
+    if original_audio_path.is_none() && !host.media_roots().is_empty() {
+        'roots: for root in host.media_roots() {
+            if let Some(candidate) = find_media_in_root(Path::new(root), "", &stem).await {
+                original_audio_path = Some(candidate);
+                break 'roots;
             }
         }
+    }
 
-        // Strategy 4: Alongside staged file (last resort)
-        if found.is_none() {
-            found =
-                resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await;
-        }
+    if original_audio_path.is_none() {
+        original_audio_path =
+            resolve_audio_for_chat_with_media_dir(&read_path, media_dir.map(Path::new)).await;
+    }
 
-        found
-    };
     let original_audio_path = match original_audio_path {
         Some(p) => p,
         None => {
+            let search_hint = if !source_dir.as_os_str().is_empty() {
+                format!(
+                    "in shared source directory '{}' or via --media-dir",
+                    source_dir.display()
+                )
+            } else if !media_mapping.is_empty() {
+                format!("via local media mapping '{media_mapping}' subdir '{mapped_subdir}'")
+            } else if media_dir.is_some() {
+                "via --media-dir or alongside the staged .cha file".to_string()
+            } else {
+                "on a shared filesystem alongside the .cha file (or pass --media-dir)".to_string()
+            };
             let err_msg = format!(
                 "Cannot find audio file for {filename}. \
-                 Searched for media with known extensions (.wav, .mp3, .mp4, etc.) \
-                 {}.",
-                if !media_mapping.is_empty() {
-                    format!("in media mapping '{media_mapping}' subdir '{media_subdir}'")
-                } else {
-                    "alongside the .cha file".to_string()
-                }
+                 Searched for media with known extensions (.wav, .mp3, .mp4, etc.) {}.",
+                search_hint
             );
             lifecycle
                 .fail(&err_msg, FailureCategory::Validation, unix_now())

@@ -87,50 +87,122 @@ async fn infer_groups_v2(
 
     let mut parsed_results = Vec::with_capacity(batch.miss_indices.len());
     for group_index in batch.miss_indices.iter().copied() {
-        let infer_item = build_fa_infer_item(&batch, group_index);
-        let request_ids = build_fa_request_ids(request_namespace, group_index);
-        let request = build_forced_alignment_request_v2(
-            artifacts.store(),
-            ForcedAlignmentBuildInputV2 {
-                ids: &request_ids,
-                infer_item: &infer_item,
-                engine: batch.engine,
-            },
+        let group = &batch.groups[group_index];
+        let response = dispatch_group_request(
+            services,
+            &artifacts,
+            &batch,
+            request_namespace,
+            group_index,
+            batch.engine,
         )
-        .await
-        .map_err(|error| {
-            ServerError::Validation(format!(
-                "failed to build worker protocol V2 FA request for group {group_index}: {error}"
-            ))
-        })?;
+        .await?;
 
-        let response = services
-            .pool
-            .dispatch_execute_v2(&batch.worker_lang, &request)
-            .await
-            .map_err(ServerError::Worker)?;
-
-        match parse_forced_alignment_result_v2(
+        match parse_group_response(
             &response,
-            &batch.groups[group_index].words,
-            DurationMs(batch.groups[group_index].audio_start_ms()),
+            group_index,
+            group,
             batch.timing_mode,
         ) {
-            Ok(timings) => parsed_results.push(FaWorkerGroupResult {
-                group_index,
-                timings,
-            }),
-            Err(error) => {
+            Ok(parsed) => parsed_results.push(parsed),
+            Err(error)
+                if should_retry_with_whisper_fallback(batch.engine, &error) =>
+            {
                 warn!(
                     group = group_index,
-                    error = %error,
-                    "worker protocol V2 FA response parsing failed for group"
+                    start_ms = group.audio_start_ms(),
+                    end_ms = group.audio_end_ms(),
+                    "Wave2Vec FA hit CTC target-length limit; retrying group with Whisper FA"
                 );
+                let fallback_namespace = NEXT_FA_REQUEST_NAMESPACE.fetch_add(1, Ordering::Relaxed);
+                let fallback_response = dispatch_group_request(
+                    services,
+                    &artifacts,
+                    &batch,
+                    fallback_namespace,
+                    group_index,
+                    FaEngineType::WhisperFa,
+                )
+                .await?;
+                parsed_results.push(parse_group_response(
+                    &fallback_response,
+                    group_index,
+                    group,
+                    batch.timing_mode,
+                )?);
             }
+            Err(error) => return Err(error),
         }
     }
 
     Ok(parsed_results)
+}
+
+async fn dispatch_group_request(
+    services: PipelineServices<'_>,
+    artifacts: &PreparedArtifactRuntimeV2,
+    batch: &FaWorkerBatch<'_>,
+    request_namespace: u64,
+    group_index: usize,
+    engine: FaEngineType,
+) -> Result<crate::types::worker_v2::ExecuteResponseV2, ServerError> {
+    let infer_item = build_fa_infer_item(batch, group_index);
+    let request_ids = build_fa_request_ids(request_namespace, group_index);
+    let request = build_forced_alignment_request_v2(
+        artifacts.store(),
+        ForcedAlignmentBuildInputV2 {
+            ids: &request_ids,
+            infer_item: &infer_item,
+            engine,
+        },
+    )
+    .await
+    .map_err(|error| {
+        ServerError::Validation(format!(
+            "failed to build worker protocol V2 FA request for group {group_index}: {error}"
+        ))
+    })?;
+
+    services
+        .pool
+        .dispatch_execute_v2(&batch.worker_lang, &request)
+        .await
+        .map_err(ServerError::Worker)
+}
+
+fn parse_group_response(
+    response: &crate::types::worker_v2::ExecuteResponseV2,
+    group_index: usize,
+    group: &FaGroup,
+    timing_mode: FaTimingMode,
+) -> Result<FaWorkerGroupResult, ServerError> {
+    let timings = parse_forced_alignment_result_v2(
+        response,
+        &group.words,
+        DurationMs(group.audio_start_ms()),
+        timing_mode,
+    )
+    .map_err(|error| {
+        ServerError::Validation(format!(
+            "failed to parse worker protocol V2 FA response for group {group_index} ({}..{} ms): {error}",
+            group.audio_start_ms(),
+            group.audio_end_ms(),
+        ))
+    })?;
+
+    Ok(FaWorkerGroupResult {
+        group_index,
+        timings,
+    })
+}
+
+fn should_retry_with_whisper_fallback(engine: FaEngineType, error: &ServerError) -> bool {
+    engine == FaEngineType::Wave2Vec
+        && matches!(
+            error,
+            ServerError::Validation(message)
+                if message.contains("targets length is too long for CTC")
+        )
 }
 
 /// Build one production-domain `FaInferItem` from the transport-neutral batch
@@ -176,6 +248,11 @@ mod tests {
     use batchalign_chat_ops::indices::{UtteranceIdx, WordIdx};
 
     use super::*;
+    use crate::api::DurationSeconds;
+    use crate::types::worker_v2::{
+        ExecuteOutcomeV2, ExecuteResponseV2, TaskResultV2, TranslationItemResultV2,
+        TranslationResultV2, WorkerRequestIdV2,
+    };
 
     /// Build a small FA word for transport unit tests.
     fn make_word(index: usize, text: &str) -> FaWord {
@@ -234,5 +311,59 @@ mod tests {
         assert_ne!(first.request_id, second.request_id);
         assert_ne!(first.payload_ref_id, second.payload_ref_id);
         assert_ne!(first.audio_ref_id, second.audio_ref_id);
+    }
+
+    #[test]
+    fn parse_group_response_reports_parser_failure_with_group_context() {
+        let group = FaGroup {
+            audio_span: TimeSpan::new(100, 900),
+            words: vec![make_word(0, "hello")],
+            utterance_indices: vec![UtteranceIdx(0)],
+        };
+        let response = ExecuteResponseV2 {
+            request_id: WorkerRequestIdV2::from("req-fa-v2-bad"),
+            outcome: ExecuteOutcomeV2::Success,
+            result: Some(TaskResultV2::TranslationResult(TranslationResultV2 {
+                items: vec![TranslationItemResultV2 {
+                    raw_translation: Some("hola".into()),
+                    error: None,
+                }],
+            })),
+            elapsed_s: DurationSeconds(0.01),
+        };
+
+        let error = parse_group_response(&response, 13, &group, FaTimingMode::Continuous)
+            .expect_err("non-FA payload should fail immediately");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to parse worker protocol V2 FA response for group 13")
+        );
+        assert!(error.to_string().contains("translation data"));
+    }
+
+    #[test]
+    fn whisper_fallback_triggers_only_for_wave2vec_ctc_overflow() {
+        let overflow = ServerError::Validation(
+            "failed to parse worker protocol V2 FA response for group 13 (175765..176365 ms): \
+             worker protocol V2 forced-alignment request failed with RuntimeFailure: \
+             targets length is too long for CTC"
+                .into(),
+        );
+        assert!(should_retry_with_whisper_fallback(
+            FaEngineType::Wave2Vec,
+            &overflow
+        ));
+        assert!(!should_retry_with_whisper_fallback(
+            FaEngineType::WhisperFa,
+            &overflow
+        ));
+
+        let other = ServerError::Validation("some other parse failure".into());
+        assert!(!should_retry_with_whisper_fallback(
+            FaEngineType::Wave2Vec,
+            &other
+        ));
     }
 }

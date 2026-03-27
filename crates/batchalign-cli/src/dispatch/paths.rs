@@ -6,7 +6,6 @@ use batchalign_app::ReleasedCommand;
 use batchalign_app::api::{JobSubmission, LanguageSpec};
 use batchalign_app::options::CommandOptions;
 
-use crate::client;
 use crate::discover::{build_server_names, copy_nonmatching, infer_base_dir};
 use crate::error::CliError;
 
@@ -27,8 +26,6 @@ pub(super) fn prepare_paths_submission(
     inputs: &[std::path::PathBuf],
     out_dir: Option<&std::path::Path>,
     options: Option<&CommandOptions>,
-    bank: Option<&str>,
-    subdir: Option<&str>,
     lexicon: Option<&str>,
     before: Option<&std::path::Path>,
     media_mapping_keys: &[String],
@@ -83,16 +80,7 @@ pub(super) fn prepare_paths_submission(
         .collect::<Result<_, CliError>>()?;
 
     let base_dir = infer_base_dir(inputs)?;
-
-    let mapping = if let Some(bk) = bank {
-        client::MediaMapping {
-            key: bk.to_string(),
-            subdir: subdir.unwrap_or("").to_string(),
-        }
-    } else {
-        client::detect_media_mapping(&base_dir, media_mapping_keys)?
-    };
-    let (mapping_key, mapping_subdir) = (mapping.key, mapping.subdir);
+    let (mapping_key, mapping_subdir) = detect_media_mapping(&base_dir, media_mapping_keys)?;
 
     let mut opts = options.cloned().unwrap_or_else(|| {
         CommandOptions::Morphotag(batchalign_app::options::MorphotagOptions {
@@ -166,4 +154,80 @@ pub(super) fn prepare_paths_submission(
         effective_out,
         total_files: files.len(),
     }))
+}
+
+fn detect_media_mapping(
+    in_dir: &Path,
+    mapping_keys: &[String],
+) -> Result<(String, String), CliError> {
+    if mapping_keys.is_empty() {
+        return Ok((String::new(), String::new()));
+    }
+
+    let abs = std::fs::canonicalize(in_dir).map_err(CliError::Io)?;
+    let parts: Vec<String> = abs
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+
+    for key in mapping_keys {
+        if let Some(idx) = parts.iter().position(|p| p == key) {
+            let subdir = if idx + 1 < parts.len() {
+                parts[idx + 1..].join("/")
+            } else {
+                String::new()
+            };
+            return Ok((key.clone(), subdir));
+        }
+    }
+
+    Ok((String::new(), String::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_media_mapping, prepare_paths_submission};
+    use batchalign_app::ReleasedCommand;
+
+    #[test]
+    fn detect_media_mapping_keeps_local_subdir() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("slabank-data/French/Newcastle/Discussion/12");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (key, subdir) = detect_media_mapping(&dir, &["slabank-data".to_string()]).unwrap();
+        assert_eq!(key, "slabank-data");
+        assert_eq!(subdir, "French/Newcastle/Discussion/12");
+    }
+
+    #[test]
+    fn paths_submission_carries_detected_media_mapping() {
+        let root = tempfile::tempdir().unwrap();
+        let input_dir = root.path().join("slabank-data/French/Newcastle/Discussion/12");
+        let output_dir = root.path().join("out");
+        std::fs::create_dir_all(&input_dir).unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
+        std::fs::write(input_dir.join("d01oma12a.cha"), "@Begin\n@End\n").unwrap();
+
+        let prepared = prepare_paths_submission(
+            ReleasedCommand::Align,
+            "eng",
+            1,
+            &["cha"],
+            &[input_dir.clone()],
+            Some(output_dir.as_path()),
+            None,
+            None,
+            None,
+            &["slabank-data".to_string()],
+        )
+        .unwrap()
+        .expect("expected one prepared submission");
+
+        assert_eq!(prepared.submission.media_mapping, "slabank-data");
+        assert_eq!(
+            prepared.submission.media_subdir,
+            "French/Newcastle/Discussion/12"
+        );
+    }
 }

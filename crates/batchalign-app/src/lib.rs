@@ -167,6 +167,7 @@ pub mod server_backend;
 pub mod state;
 pub mod store;
 pub(crate) mod submission;
+pub(crate) mod temporal_backend;
 pub(crate) mod text_batch;
 pub mod trace_store;
 pub mod transcribe;
@@ -185,12 +186,12 @@ pub use server::{
 pub use state::AppState;
 pub(crate) use websocket::ws_route;
 
-/// Return whether one closed released command requires client-local audio access.
+/// Return whether one closed released command requires shared-filesystem audio access.
 pub fn released_command_uses_local_audio(command: ReleasedCommand) -> bool {
     commands::released_command_uses_local_audio(command)
 }
 
-/// Return whether one released command name requires client-local audio access.
+/// Return whether one released command name requires shared-filesystem audio access.
 ///
 /// This keeps the old stringly helper only for callers that still sit at a
 /// trust boundary. Contributor-facing Rust code should prefer

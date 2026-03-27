@@ -15,11 +15,12 @@ use crate::error;
 use crate::host_policy::HostExecutionPolicy;
 use crate::media::MediaResolver;
 use crate::runner::{ExecutionEngine, RunnerExecutionContext};
-use crate::server_backend::bootstrap_embedded_server_backend;
+use crate::server_backend::{ServerBackendBootstrap, bootstrap_embedded_server_backend};
 use crate::state::{
     AppBuildInfo, AppControlPlane, AppEnvironment, AppPaths, AppState, WorkerCapabilitySnapshot,
     WorkerSubsystem, resolve_worker_capability_snapshot, validate_infer_capability_gate,
 };
+use crate::temporal_backend::bootstrap_temporal_server_backend;
 use crate::worker::InferTask;
 use crate::worker::pool::{PoolConfig, WorkerPool};
 
@@ -372,20 +373,29 @@ pub async fn create_app_with_prepared_workers(
     );
     let db = Arc::new(db);
     let execution_runtime = workers.resolve_execution_runtime(cache.clone())?;
-    let embedded_backend =
-        bootstrap_embedded_server_backend(config.clone(), db, execution_runtime.engine).await?;
-    if embedded_backend.loaded_jobs > 0 {
-        info!(loaded = embedded_backend.loaded_jobs, "Jobs loaded from DB");
+    let backend_bootstrap: ServerBackendBootstrap = match config.backend {
+        crate::config::ServerBackendKind::Embedded => {
+            bootstrap_embedded_server_backend(config.clone(), db, execution_runtime.engine).await?
+        }
+        crate::config::ServerBackendKind::Temporal => {
+            bootstrap_temporal_server_backend(config.clone(), db, execution_runtime.engine).await?
+        }
+    };
+    if backend_bootstrap.loaded_jobs > 0 {
+        info!(
+            loaded = backend_bootstrap.loaded_jobs,
+            "Jobs loaded from DB"
+        );
     }
     let capability_snapshot = execution_runtime.capability_snapshot;
     let capabilities = capability_snapshot.capabilities;
     let infer_tasks = capability_snapshot.infer_tasks;
     let pool = workers.pool.clone();
 
-    if embedded_backend.queued_jobs > 0 {
+    if backend_bootstrap.queued_jobs > 0 {
         info!(
-            count = embedded_backend.queued_jobs,
-            "Queued jobs will be resumed by local dispatcher"
+            count = backend_bootstrap.queued_jobs,
+            "Queued jobs will be resumed by the configured backend"
         );
     }
 
@@ -397,7 +407,7 @@ pub async fn create_app_with_prepared_workers(
 
     let state = Arc::new(AppState {
         control: AppControlPlane {
-            backend: embedded_backend.backend,
+            backend: backend_bootstrap.backend,
         },
         workers: WorkerSubsystem {
             pool,

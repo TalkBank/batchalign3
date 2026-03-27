@@ -184,6 +184,7 @@ fn snapshot_job_info() {
         next_eligible_at: None,
         num_workers: Some(4),
         active_lease: None,
+        control_plane: None,
     };
     insta::assert_json_snapshot!("job_info", info);
 }
@@ -230,6 +231,7 @@ fn snapshot_job_list_item() {
         next_eligible_at: None,
         num_workers: Some(4),
         active_lease: None,
+        control_plane: None,
     };
     insta::assert_json_snapshot!("job_list_item", item);
 }

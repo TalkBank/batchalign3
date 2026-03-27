@@ -12,7 +12,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use crate::api::{JobId, JobInfo, JobListItem, JobStatus, NodeId, NumWorkers, UnixTimestamp};
+use crate::api::{
+    JobControlPlaneInfo, JobId, JobInfo, JobListItem, JobStatus, NodeId, NumWorkers, UnixTimestamp,
+};
 use crate::config::ServerConfig;
 use crate::db::JobDB;
 use crate::error::ServerError;
@@ -253,12 +255,11 @@ impl EmbeddedServerBackend {
     }
 }
 
-/// Summary returned when bootstrapping the embedded control plane.
+/// Summary returned when bootstrapping one concrete server backend.
 ///
-/// This keeps the server factory from needing direct access to the embedded
-/// queue, runtime supervisor, broadcast bus, or dispatcher just to report basic
-/// startup information.
-pub(crate) struct EmbeddedServerBootstrap {
+/// This keeps the server factory from needing direct access to backend-specific
+/// queue/runtime/broadcast internals just to report basic startup information.
+pub(crate) struct ServerBackendBootstrap {
     /// Route-facing backend over the fully started embedded control plane.
     pub backend: Arc<dyn ServerBackend>,
     /// Number of persisted jobs loaded from the database at startup.
@@ -277,7 +278,7 @@ pub(crate) async fn bootstrap_embedded_server_backend(
     config: ServerConfig,
     db: Arc<JobDB>,
     engine: ExecutionEngine,
-) -> Result<EmbeddedServerBootstrap, ServerError> {
+) -> Result<ServerBackendBootstrap, ServerError> {
     let (ws_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
     let store = Arc::new(JobStore::new(config, Some(db), ws_tx.clone()));
     let loaded_jobs = store.load_from_db().await?;
@@ -299,7 +300,7 @@ pub(crate) async fn bootstrap_embedded_server_backend(
     orchestrator.queue.notify();
     let backend: Arc<dyn ServerBackend> = Arc::new(EmbeddedServerBackend::new(orchestrator));
 
-    Ok(EmbeddedServerBootstrap {
+    Ok(ServerBackendBootstrap {
         backend,
         loaded_jobs,
         queued_jobs,
@@ -313,11 +314,19 @@ impl ServerBackend for EmbeddedServerBackend {
     }
 
     async fn list_jobs(&self) -> Vec<JobListItem> {
-        self.orchestrator.list_jobs().await
+        self.orchestrator
+            .list_jobs()
+            .await
+            .into_iter()
+            .map(|job| job.with_control_plane(JobControlPlaneInfo::embedded()))
+            .collect()
     }
 
     async fn get_job(&self, job_id: &JobId) -> Option<JobInfo> {
-        self.orchestrator.get_job(job_id).await
+        self.orchestrator
+            .get_job(job_id)
+            .await
+            .map(|job| job.with_control_plane(JobControlPlaneInfo::embedded()))
     }
 
     async fn get_job_detail(&self, job_id: &JobId) -> Option<JobDetail> {
@@ -341,7 +350,10 @@ impl ServerBackend for EmbeddedServerBackend {
     }
 
     async fn restart_job(&self, job_id: &JobId) -> Result<JobInfo, ServerError> {
-        self.orchestrator.restart_job(job_id).await
+        self.orchestrator
+            .restart_job(job_id)
+            .await
+            .map(|job| job.with_control_plane(JobControlPlaneInfo::embedded()))
     }
 
     async fn cancel_all(&self) -> usize {

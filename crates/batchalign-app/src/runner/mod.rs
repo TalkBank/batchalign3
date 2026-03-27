@@ -204,6 +204,15 @@ pub(crate) enum MemoryGateRejectionDisposition {
     FailJob,
 }
 
+/// Result of one host-owned job execution attempt.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum HostedJobRunOutcome {
+    /// The job finished its current lifecycle attempt.
+    Completed,
+    /// The host deferred the job for a later eligibility deadline.
+    Requeued { retry_at: UnixTimestamp },
+}
+
 /// Host-owned orchestration seam for queued job execution policy.
 ///
 /// This keeps the shared runner from knowing how a specific server backend
@@ -248,7 +257,7 @@ pub(crate) async fn job_task(job_id: JobId, host: ServerExecutionHost) {
             }
         }
     });
-    if let Err(e) = run_job(&job_id, &host).await {
+    if let Err(e) = run_server_job_attempt(&job_id, &host).await {
         error!(
             job_id = %job_id,
             correlation_id = %correlation_id,
@@ -261,10 +270,10 @@ pub(crate) async fn job_task(job_id: JobId, host: ServerExecutionHost) {
 }
 
 /// Run the server-owned processing lifecycle for one job.
-async fn run_job(
+pub(crate) async fn run_server_job_attempt(
     job_id: &JobId,
     host: &ServerExecutionHost,
-) -> Result<(), crate::error::ServerError> {
+) -> Result<HostedJobRunOutcome, crate::error::ServerError> {
     run_hosted_job(
         job_id,
         &host.store,
@@ -281,13 +290,19 @@ pub(crate) async fn run_direct_job(
     job_id: &JobId,
     host: &DirectExecutionHost,
 ) -> Result<(), crate::error::ServerError> {
-    run_hosted_job(
+    match run_hosted_job(
         job_id,
         &host.store,
         &host.engine,
         MemoryGateFailurePolicy::FailJob,
     )
-    .await
+    .await?
+    {
+        HostedJobRunOutcome::Completed => Ok(()),
+        HostedJobRunOutcome::Requeued { retry_at } => Err(crate::error::ServerError::Persistence(
+            format!("direct execution unexpectedly requeued job {job_id} until {retry_at}"),
+        )),
+    }
 }
 
 async fn run_hosted_job(
@@ -295,19 +310,19 @@ async fn run_hosted_job(
     store: &Arc<JobStore>,
     engine: &ExecutionEngine,
     memory_gate_policy: MemoryGateFailurePolicy,
-) -> Result<(), crate::error::ServerError> {
+) -> Result<HostedJobRunOutcome, crate::error::ServerError> {
     let pool = &engine.context.pool;
     let host_context = DispatchHostContext::from_store(store.clone());
     let sink = host_context.sink().clone();
 
     let Some(job) = store.runner_snapshot(job_id).await else {
-        return Ok(());
+        return Ok(HostedJobRunOutcome::Completed);
     };
     let job = Arc::new(job);
     let correlation_id = job.identity.correlation_id.clone();
 
     if job.cancel_token.is_cancelled() {
-        return Ok(());
+        return Ok(HostedJobRunOutcome::Completed);
     }
 
     // Acquire semaphore (blocks if too many concurrent jobs)
@@ -315,7 +330,7 @@ async fn run_hosted_job(
 
     // Check cancellation after acquiring permit
     if job.cancel_token.is_cancelled() {
-        return Ok(());
+        return Ok(HostedJobRunOutcome::Completed);
     }
 
     // Collect file list to process
@@ -341,7 +356,7 @@ async fn run_hosted_job(
                             retry_at = %retry_at,
                             "Re-queueing job after host-memory capacity rejection"
                         );
-                        return Ok(());
+                        return Ok(HostedJobRunOutcome::Requeued { retry_at });
                     }
                     MemoryGateRejectionDisposition::FailJob => {
                         let message = error.to_string();
@@ -500,7 +515,7 @@ async fn run_hosted_job(
 
     // Set final job status
     let Some(completion) = store.completion_snapshot(job_id).await else {
-        return Ok(());
+        return Ok(HostedJobRunOutcome::Completed);
     };
 
     let completed_at = unix_now();
@@ -521,7 +536,7 @@ async fn run_hosted_job(
         "Job finished"
     );
 
-    Ok(())
+    Ok(HostedJobRunOutcome::Completed)
 }
 
 async fn reserve_job_execution(

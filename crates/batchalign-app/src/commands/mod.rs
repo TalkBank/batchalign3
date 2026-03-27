@@ -23,12 +23,12 @@ pub(crate) use catalog::{
 pub(crate) use kernel::CommandKernelPlan;
 pub(crate) use spec::RunnerDispatchKind;
 
-/// Return whether one closed released command requires client-local audio access.
+/// Return whether one closed released command requires shared-filesystem audio access.
 pub fn released_command_uses_local_audio(command: ReleasedCommand) -> bool {
     released_command_descriptor(command).uses_local_audio
 }
 
-/// Return whether one released command requires client-local audio access in the CLI.
+/// Return whether one released command requires shared-filesystem audio access.
 pub fn command_uses_local_audio(command: &str) -> bool {
     ReleasedCommand::try_from(command)
         .ok()

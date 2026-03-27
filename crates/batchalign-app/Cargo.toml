@@ -18,6 +18,8 @@ batchalign-types = { workspace = true }
 batchalign-chat-ops = { workspace = true }
 batchalign-revai = { workspace = true }
 tokio = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
 libc = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
@@ -43,6 +45,11 @@ blake3 = { workspace = true }
 moka = { workspace = true }
 fs2 = { workspace = true }
 include_dir = { workspace = true, optional = true }
+temporalio-client = { workspace = true }
+temporalio-common = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-sdk = { workspace = true }
+temporalio-sdk-core = { workspace = true }
 tempfile = "3"
 
 [dev-dependencies]

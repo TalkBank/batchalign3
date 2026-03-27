@@ -708,6 +708,10 @@ pub struct ServeStartArgs {
     #[arg(long)]
     pub host: Option<String>,
 
+    /// Server control-plane backend (`embedded` or `temporal`).
+    #[arg(long)]
+    pub backend: Option<String>,
+
     /// Path to server.yaml config file.
     #[arg(long)]
     pub config: Option<String>,

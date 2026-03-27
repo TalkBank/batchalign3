@@ -34,6 +34,8 @@ schemars = "1.2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+futures-util = "0.3"
 
 # HTTP
 axum = { version = "0.8", features = ["ws"] }
@@ -52,6 +54,11 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
 
 # Async trait
 async-trait = "0.1"
+temporalio-client = "0.2"
+temporalio-common = "0.2"
+temporalio-macros = "0.2"
+temporalio-sdk = "0.2"
+temporalio-sdk-core = "0.2"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }

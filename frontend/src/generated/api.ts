@@ -616,6 +616,17 @@ export interface components {
          * @enum {string}
          */
         HostMemoryPressureLevel: "healthy" | "guarded" | "constrained" | "critical";
+        /**
+         * @description Control-plane backend that currently owns orchestration for a server job.
+         * @enum {string}
+         */
+        JobControlPlaneBackendKind: "embedded" | "temporal";
+        /** @description Backend-owned orchestration metadata for a job projection. */
+        JobControlPlaneInfo: {
+            /** @description Control-plane backend that produced this projection. */
+            backend: components["schemas"]["JobControlPlaneBackendKind"];
+            temporal?: null | components["schemas"]["TemporalWorkflowExecutionInfo"];
+        };
         /** @description Server-assigned identifier for a job (non-empty). */
         JobId: string;
         /**
@@ -637,6 +648,7 @@ export interface components {
              *     Invariant: `0 <= completed_files <= total_files`.
              */
             completed_files: number;
+            control_plane?: null | components["schemas"]["JobControlPlaneInfo"];
             /**
              * @description Filename currently being processed.  `None` when the job is queued
              *     or has reached a terminal state.
@@ -714,6 +726,7 @@ export interface components {
              * @description Number of files that finished successfully (`Done`).
              */
             completed_files: number;
+            control_plane?: null | components["schemas"]["JobControlPlaneInfo"];
             duration_s?: null | components["schemas"]["DurationSeconds"];
             /**
              * Format: int64
@@ -891,6 +904,24 @@ export interface components {
              *     `"restarted"`). Suitable for switch/match in client code.
              */
             status: string;
+        };
+        /** @description Temporal workflow execution metadata attached to a server job projection. */
+        TemporalWorkflowExecutionInfo: {
+            /** @description Error surfaced when the server could not describe the workflow. */
+            describe_error?: string | null;
+            /**
+             * Format: int64
+             * @description Temporal history length when description succeeded.
+             */
+            history_length?: number | null;
+            /** @description Current Temporal run ID when one is known. */
+            run_id?: string | null;
+            /** @description Current Temporal workflow status, normalized for Batchalign clients. */
+            status?: string | null;
+            /** @description Temporal task queue serving this workflow when known. */
+            task_queue?: string | null;
+            /** @description Stable Temporal workflow ID used for this job. */
+            workflow_id: string;
         };
         /**
          * Format: double

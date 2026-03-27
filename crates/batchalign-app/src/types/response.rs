@@ -106,6 +106,83 @@ pub struct FileStatusEntry {
     pub progress_label: Option<String>,
 }
 
+/// Control-plane backend that currently owns orchestration for a server job.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum JobControlPlaneBackendKind {
+    /// The legacy in-process queue/store/runtime control plane.
+    Embedded,
+    /// The experimental Temporal-backed control plane.
+    Temporal,
+}
+
+impl std::fmt::Display for JobControlPlaneBackendKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Embedded => f.write_str("embedded"),
+            Self::Temporal => f.write_str("temporal"),
+        }
+    }
+}
+
+/// Temporal workflow execution metadata attached to a server job projection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct TemporalWorkflowExecutionInfo {
+    /// Stable Temporal workflow ID used for this job.
+    pub workflow_id: String,
+    /// Current Temporal run ID when one is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Current Temporal workflow status, normalized for Batchalign clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Temporal task queue serving this workflow when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_queue: Option<String>,
+    /// Temporal history length when description succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_length: Option<i64>,
+    /// Error surfaced when the server could not describe the workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub describe_error: Option<String>,
+}
+
+/// Backend-owned orchestration metadata for a job projection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct JobControlPlaneInfo {
+    /// Control-plane backend that produced this projection.
+    pub backend: JobControlPlaneBackendKind,
+    /// Temporal workflow execution metadata when `backend == temporal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal: Option<TemporalWorkflowExecutionInfo>,
+}
+
+impl JobControlPlaneInfo {
+    /// Minimal embedded control-plane marker.
+    pub fn embedded() -> Self {
+        Self {
+            backend: JobControlPlaneBackendKind::Embedded,
+            temporal: None,
+        }
+    }
+
+    /// Minimal Temporal control-plane marker without an execution describe.
+    pub fn temporal() -> Self {
+        Self {
+            backend: JobControlPlaneBackendKind::Temporal,
+            temporal: None,
+        }
+    }
+
+    /// Temporal control-plane metadata with one workflow execution projection.
+    pub fn temporal_with_execution(temporal: TemporalWorkflowExecutionInfo) -> Self {
+        Self {
+            backend: JobControlPlaneBackendKind::Temporal,
+            temporal: Some(temporal),
+        }
+    }
+}
+
 /// `GET /jobs/{id}` response — job progress.
 ///
 /// Contains full detail about a single job, including per-file statuses.
@@ -180,6 +257,17 @@ pub struct JobInfo {
     /// Active lease information when this job is currently claimed by a node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_lease: Option<LeaseRecord>,
+    /// Server control-plane metadata for this job when returned by a server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_plane: Option<JobControlPlaneInfo>,
+}
+
+impl JobInfo {
+    /// Attach server control-plane metadata to this job projection.
+    pub fn with_control_plane(mut self, control_plane: JobControlPlaneInfo) -> Self {
+        self.control_plane = Some(control_plane);
+        self
+    }
 }
 
 /// `GET /jobs/{id}/results` response — completed job results.
@@ -244,6 +332,17 @@ pub struct JobListItem {
     /// Active lease information when this job is currently claimed by a node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_lease: Option<LeaseRecord>,
+    /// Server control-plane metadata for this job when returned by a server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_plane: Option<JobControlPlaneInfo>,
+}
+
+impl JobListItem {
+    /// Attach server control-plane metadata to this list projection.
+    pub fn with_control_plane(mut self, control_plane: JobControlPlaneInfo) -> Self {
+        self.control_plane = Some(control_plane);
+        self
+    }
 }
 
 /// `GET /health` response.

@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Current
-**Last updated:** 2026-03-27 07:31 EDT
+**Last updated:** 2026-03-27 11:18 EDT
 
 This page documents the current public `batchalign3` CLI surface. For anything
 you are scripting against, confirm with `batchalign3 <command> --help`.
@@ -146,9 +146,9 @@ model is used (language-specific fine-tuned models like `talkbank/CHATWhisper-en
 are bypassed since they are trained for a single language). Rev.AI handles
 auto-detection separately through its own API.
 
-Routing note: explicit remote `--server` is ignored for `transcribe` because
-the remote server cannot access client-local audio paths. The CLI runs that
-work locally through the direct host instead.
+Routing note: explicit `--server` now submits shared-filesystem `paths_mode`
+jobs for `transcribe`. The target server must be able to read the same input
+paths and write the requested output paths.
 
 ### `morphotag`
 
@@ -389,8 +389,8 @@ Key options:
 | `-n`, `--num-speakers N` | Number of speakers (default: `2`) |
 | `--wor` / `--nowor` | Include or suppress `%wor` in the benchmark hypothesis CHAT |
 | `--merge-abbrev` | Merge abbreviations in output |
-| `--bank NAME` | Server media bank name |
-| `--subdir PATH` | Subdirectory under the bank |
+| `--bank NAME` | Legacy remote media selector (unsupported in the current CLI; pass filesystem paths instead) |
+| `--subdir PATH` | Legacy remote media selector subdirectory (unsupported in the current CLI) |
 
 ### `opensmile`
 
@@ -411,8 +411,8 @@ Key options:
 | --- | --- |
 | `--feature-set SET` | Feature set: `eGeMAPSv02` (default), `eGeMAPSv01b`, `GeMAPSv01b`, `ComParE_2016` |
 | `--lang CODE` | 3-letter ISO language code (default: `eng`) |
-| `--bank NAME` | Server media bank name |
-| `--subdir PATH` | Subdirectory under the bank |
+| `--bank NAME` | Legacy remote media selector (unsupported in the current CLI; pass filesystem paths instead) |
+| `--subdir PATH` | Legacy remote media selector subdirectory (unsupported in the current CLI) |
 
 ### `compare`
 

@@ -1,7 +1,7 @@
 # Troubleshooting
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-27 11:18 EDT
 
 ## Start with verbose output
 
@@ -138,9 +138,11 @@ to override. See [Worker Tuning](worker-tuning.md) for details.
 ## "Cannot find audio file" or "Media conversion failed"
 
 **Cannot find audio file:** The server could not locate a media file
-matching the CHAT file's stem. In content mode (`--server`), check that
-`~/.batchalign3/server.yaml` has a `media_mappings` entry for the data
-directory you are processing, and that the volume is mounted. See
+matching the CHAT file's stem. Audio `--server` jobs now require the execution
+host to see the same filesystem paths as the CLI invocation. Run the CLI on the
+execution host itself (or over SSH/VNC), or make sure the same corpus path is
+mounted there. If the corpus root and media root differ on that host, configure
+local `media_mappings` or pass a server-visible `--media-dir`. See
 [Media Resolution](../reference/media-conversion.md#media-resolution).
 
 **Media conversion failed — ffmpeg not found:** MP4 (and M4A, WebM, WMA)
@@ -287,9 +289,12 @@ Look at the `capabilities` list. If the command you need is missing:
 
 ## `--server` seems to be ignored
 
-That is expected for `transcribe` and `avqi`: the current CLI keeps those on
-the local-daemon path because the remote server cannot read client-local audio
-paths.
+That should no longer happen for audio commands. If `align`, `transcribe`, or
+another audio workflow still behaves like a local-only run, double-check that:
+
+1. you actually passed `--server http://...`
+2. the target server advertises the command in `/health.capabilities`
+3. the server can see the same absolute input/output paths on its filesystem
 
 Check remote dispatch with a command that supports it:
 

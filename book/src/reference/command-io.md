@@ -1,7 +1,7 @@
 # Batchalign Command I/O Parity: Local CLI vs Server
 
 **Status:** Current
-**Last updated:** 2026-03-26 18:12 EDT
+**Last updated:** 2026-03-27 11:18 EDT
 
 This document describes the input/output flow for every batchalign command,
 comparing direct local CLI execution with the server-based (`--server`)
@@ -69,11 +69,11 @@ CHAT transcripts by running forced alignment against the corresponding audio.
 
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
-| **Input files** | `.cha` files in `IN_DIR` | `.cha` content sent as text over HTTP |
-| **Input media** | Audio referenced by `@Media:` header, found adjacent to `.cha` or via `--lazy-audio` | Audio resolved server-side from `media_roots` / `media_mappings` via `@Media:` header name |
+| **Input files** | `.cha` files in `IN_DIR` | Shared-filesystem `.cha` paths in `IN_DIR`; server reads them directly |
+| **Input media** | Audio referenced by `@Media:` header, found adjacent to `.cha` or via `--lazy-audio` | Audio referenced by `@Media:` header and found on the same shared filesystem (adjacent, via shared source path, via local `media_mappings`, or via `--media-dir`) |
 | **Extensions filter** | `["cha"]` | Same |
-| **Output** | `.cha` with `%wor` timing line, word `time` fields populated | Same `.cha` returned as text, written to `OUT_DIR` |
-| **Mutation** | If `OUT_DIR = IN_DIR`: overwrites original `.cha` in place. Media files untouched. | Same — client writes returned `.cha` over original path |
+| **Output** | `.cha` with `%wor` timing line, word `time` fields populated | Same `.cha` written directly to the requested output path |
+| **Mutation** | If `OUT_DIR = IN_DIR`: overwrites original `.cha` in place. Media files untouched. | Same |
 | **Key options** | `--utr-engine`, `--utr-engine-custom`, `--utr-strategy`, `--fa-engine`, `--fa-engine-custom`, `--pauses`, `--wor/--nowor`, `--override-cache` | All passed through typed command options |
 
 **What changes in the `.cha`:** `%wor` tier added/updated with word-level
@@ -82,8 +82,8 @@ Existing `%mor`, `%gra` tiers preserved. Media file is read but never modified.
 
 **Non-matching files:** For directory inputs, the current Rust CLI copies
 non-`.cha` files and dummy CHAT files from `IN_DIR` to `OUT_DIR` before
-submitting matching files, in both single-server content mode and direct local
-paths preparation.
+submitting matching files, in both shared-filesystem server mode and direct
+local paths preparation.
 
 ---
 
@@ -93,15 +93,15 @@ paths preparation.
 
 | Aspect | Local CLI / direct host | Explicit remote `--server` |
 |--------|--------------------------|-----------------------------|
-| **Input files** | `.mp3`, `.mp4`, `.wav` files in `IN_DIR` | Not used in current remote CLI path |
-| **Extensions filter** | `["mp3", "mp4", "wav"]` | Not used |
-| **Output** | New `.cha` files (audio extension replaced: `foo.wav` → `foo.cha`) | Explicit `--server` is ignored; the direct local path still writes the output |
-| **Mutation** | **Never mutates input.** Creates new `.cha` files in `OUT_DIR`. Original audio untouched. If `OUT_DIR = IN_DIR`, the new `.cha` appears alongside the audio. | Same effective result, because dispatch falls back to direct local execution |
-| **Key options** | `--asr-engine`, `--asr-engine-custom`, `--diarization`, `--wor/--nowor`, `--lang`, `-n`, `--batch-size` | Same effective options after local fallback |
+| **Input files** | `.mp3`, `.mp4`, `.wav` files in `IN_DIR` | Shared-filesystem audio paths in `IN_DIR`; server reads them directly |
+| **Extensions filter** | `["mp3", "mp4", "wav"]` | Same |
+| **Output** | New `.cha` files (audio extension replaced: `foo.wav` → `foo.cha`) | Same `.cha` files written directly to the requested output paths |
+| **Mutation** | **Never mutates input.** Creates new `.cha` files in `OUT_DIR`. Original audio untouched. If `OUT_DIR = IN_DIR`, the new `.cha` appears alongside the audio. | Same |
+| **Key options** | `--asr-engine`, `--asr-engine-custom`, `--diarization`, `--wor/--nowor`, `--lang`, `-n`, `--batch-size` | Same |
 
-**Current routing note (Rust CLI):** explicit `--server` is ignored for
-`transcribe`/`transcribe_s`; these commands run through direct local execution
-because the remote server cannot access client-local audio paths.
+**Current routing note (Rust CLI):** explicit `--server` now submits
+shared-filesystem `paths_mode` jobs. The server must be able to read the input
+audio paths and write the requested output paths.
 
 **What gets created:** A new `.cha` file per audio file. Contains `@Comment`
 line with Batchalign version and ASR engine name, `@Languages`, `@Participants`,
@@ -271,11 +271,11 @@ matches BA2 behavior without copying BA2's string/document shell.
 
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
-| **Input files** | `.mp3`, `.mp4`, `.wav` files in `IN_DIR` | Media filenames, or server-side bank listings via `--bank` / `--subdir` |
+| **Input files** | `.mp3`, `.mp4`, `.wav` files in `IN_DIR` | Shared-filesystem audio paths in `IN_DIR`; server reads them directly |
 | **Extensions filter** | `["mp3", "mp4", "wav"]` | Same |
 | **Output** | New `.cha` files with ASR output + eval metrics | Same |
 | **Mutation** | **Never mutates input.** Creates new `.cha` files. | Same |
-| **Key options** | `--asr-engine`, `--asr-engine-custom`, `--lang`, `-n`, `--wor/--nowor`, `--bank`, `--subdir` | All passed |
+| **Key options** | `--asr-engine`, `--asr-engine-custom`, `--lang`, `-n`, `--wor/--nowor` | All passed |
 
 **Same I/O pattern as transcribe** — creates new `.cha` files with audio
 extension renamed. Additionally includes evaluation metrics from comparing
@@ -295,15 +295,15 @@ Rust layer first rather than adding logic in CLI dispatch.
 
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
-| **Input files** | `.mp3`, `.mp4`, `.wav` files in `INPUT_DIR` | Media filenames; server resolves audio |
+| **Input files** | `.mp3`, `.mp4`, `.wav` files in `INPUT_DIR` | Shared-filesystem audio paths in `INPUT_DIR`; server reads them directly |
 | **Extensions filter** | `["mp3", "mp4", "wav"]` | Same |
-| **Output** | `.opensmile.csv` files (NOT `.cha`) | Same — server returns CSV as text with `content_type: "csv"` |
+| **Output** | `.opensmile.csv` files (NOT `.cha`) | Same `.opensmile.csv` files written directly to the requested output paths |
 | **Mutation** | **Never mutates input.** Creates new `.opensmile.csv` files in `OUT_DIR`. | Same |
 | **Key options** | `--feature-set` (eGeMAPSv02, etc.), `--lang` | All passed |
 
 **Special output:** This is the only command that produces non-CHAT output.
-The client handles this by checking `content_type` in the server response
-and using the server-provided filename directly.
+In shared-filesystem server mode, the server writes the CSV directly to the
+requested output path instead of returning the file content over HTTP.
 
 ---
 
@@ -314,12 +314,13 @@ audio files.
 
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
-| **Input files** | Paired `.cs.*` and `.sv.*` audio files in input paths | `--server` is ignored; command runs locally through the direct host |
-| **Output** | `.avqi.txt` with metrics per file pair | Same (written locally by direct execution) |
+| **Input files** | Paired `.cs.*` and `.sv.*` audio files in input paths | Shared-filesystem paired `.cs.*` / `.sv.*` paths; server resolves the partner file locally |
+| **Output** | `.avqi.txt` with metrics per file pair | Same `.avqi.txt` files written directly to the requested output paths |
 | **Mutation** | **Never mutates input.** Creates new `.avqi.txt` files. | Same |
 
-**Current routing note:** `dispatch.rs` forces `avqi` to local execution even
-when `--server` is provided, because AVQI depends on local paired-file discovery.
+**Current routing note:** explicit `--server` uses the same shared-filesystem
+paired-file discovery as local execution. The server must be able to see both
+the `.cs.*` and `.sv.*` inputs on its filesystem.
 
 **Current syntax note:** `opensmile` and `avqi` do not use the shared `PATHS` /
 `-o` command form. Their CLI syntax is positional:
@@ -364,15 +365,16 @@ different extension or name than the input.
 
 ## Server Dispatch: What Crosses the Network
 
-| Direction | CHAT commands (align, morphotag, ...) | Media commands (transcribe, opensmile, ...) |
-|-----------|---------------------------------------|---------------------------------------------|
-| **Client → Server** | Full `.cha` text (~2KB each) | Only filenames or server-bank selectors (not file content) |
-| **Server → Client** | Processed `.cha` text | Processed `.cha` or `.csv` text |
-| **Media** | Server resolves from `media_roots` via `@Media:` header | Server resolves from `media_roots` / `media_mappings` |
+| Direction | Text/CHAT commands (morphotag, compare, ...) | Audio commands (align, transcribe, opensmile, ...) |
+|-----------|----------------------------------------------|----------------------------------------------------|
+| **Client → Server** | Full `.cha` text (~2KB each) | Shared filesystem paths (`source_paths` / `output_paths`) |
+| **Server → Client** | Processed `.cha` text | Progress/status only; outputs are written directly on the execution host |
+| **Media** | No media transfer | Execution host reads media from its local/shared filesystem |
 
-Audio/video files **never cross the network**. The server must have access
-to the media via its configured `media_roots` or `media_mappings` (typically
-NFS/SMB mounts).
+Audio/video files **never cross the network**. The execution host must already
+have access to the media and output paths via its local/shared filesystem
+(typically the same machine, SSH/VNC into that machine, or standardized NFS/SMB
+mounts).
 
 ---
 

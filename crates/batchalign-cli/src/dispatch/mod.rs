@@ -17,9 +17,7 @@ use batchalign_app::host_policy::HostExecutionPolicy;
 use batchalign_app::options::CommandOptions;
 use batchalign_app::worker::handle::WorkerRuntimeConfig;
 use batchalign_app::worker::pool::PoolConfig;
-use batchalign_app::{
-    DirectHost, ReleasedCommand, prepare_direct_workers, released_command_uses_local_audio,
-};
+use batchalign_app::{DirectHost, ReleasedCommand, prepare_direct_workers};
 use batchalign_app::{api::JobInfo, api::JobStatus, config::ServerConfig};
 
 use crate::client::{self, BatchalignClient, server_label};
@@ -80,10 +78,10 @@ pub struct DispatchRequest<'a> {
 /// where to send work using the following priority chain:
 ///
 /// 1. **Explicit `--server URL`** -- single-server dispatch
-///    via HTTP content mode (CHAT text posted to server, results downloaded).
-///    Audio-dependent commands (`transcribe`, `transcribe_s`, `benchmark`,
-///    `avqi`) fall back to direct local execution even if `--server` is set,
-///    because the remote content-mode path cannot access local audio files.
+///    via HTTP. Text commands submit content and download results. Audio
+///    commands submit shared-filesystem paths (`paths_mode`), so the execution
+///    host must be able to read the same input paths and write the requested
+///    output paths.
 /// 2. **Direct local execution** -- local filesystem processing goes through
 ///    the shared direct host with no daemon/queue layer.
 ///
@@ -118,43 +116,16 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
     } = request;
     let layout = RuntimeLayout::from_env();
 
-    // --bank requires --server
-    if bank.is_some() && server_arg.is_none() {
-        eprintln!("error: --bank requires --server");
+    if bank.is_some() || subdir.is_some() {
+        eprintln!(
+            "error: --bank/--subdir remote media selection is no longer supported.\n\
+             Pass filesystem paths that are visible on the execution host instead."
+        );
         return Ok(());
     }
 
     // 1. Explicit --server
     if let Some(server) = server_arg {
-        if released_command_uses_local_audio(command) {
-            eprintln!(
-                "warning: {command} uses local audio — ignoring --server and running locally."
-            );
-            let (cfg, warnings) = load_validated_config_from_layout(&layout, None)?;
-            for warning in warnings {
-                eprintln!("warning: {warning}");
-            }
-            return dispatch_direct_mode(
-                cfg,
-                layout,
-                command,
-                lang,
-                num_speakers,
-                extensions,
-                inputs,
-                out_dir,
-                options.as_ref(),
-                bank,
-                subdir,
-                lexicon,
-                before,
-                force_cpu,
-                workers,
-                timeout,
-            )
-            .await;
-        }
-
         let client = BatchalignClient::new();
         let urls = client::parse_servers(server);
         if urls.is_empty() {
@@ -173,9 +144,8 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
                 inputs,
                 out_dir,
                 options.as_ref(),
-                bank,
-                subdir,
                 lexicon,
+                before,
                 use_tui,
                 open_dashboard,
             )
@@ -204,8 +174,6 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
         inputs,
         out_dir,
         options.as_ref(),
-        None,
-        None,
         lexicon,
         before,
         force_cpu,
@@ -226,8 +194,6 @@ async fn dispatch_direct_mode(
     inputs: &[std::path::PathBuf],
     out_dir: Option<&std::path::Path>,
     options: Option<&CommandOptions>,
-    bank: Option<&str>,
-    subdir: Option<&str>,
     lexicon: Option<&str>,
     before: Option<&std::path::Path>,
     force_cpu: bool,
@@ -250,8 +216,6 @@ async fn dispatch_direct_mode(
         inputs,
         out_dir,
         options,
-        bank,
-        subdir,
         lexicon,
         before,
         &mapping_keys,
@@ -424,13 +388,14 @@ mod tests {
     use batchalign_app::{ReleasedCommand, released_command_uses_local_audio};
 
     #[test]
-    fn benchmark_is_treated_as_local_audio_command() {
+    fn benchmark_and_align_are_treated_as_local_audio_commands() {
         assert!(released_command_uses_local_audio(
             ReleasedCommand::Benchmark
         ));
         assert!(released_command_uses_local_audio(
             ReleasedCommand::Transcribe
         ));
+        assert!(released_command_uses_local_audio(ReleasedCommand::Align));
         assert!(!released_command_uses_local_audio(
             ReleasedCommand::Morphotag
         ));

@@ -1,12 +1,14 @@
 //! Single-server dispatch — submit files to one server, poll, write results.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use batchalign_app::ReleasedCommand;
 use batchalign_app::api::JobSubmission;
 use batchalign_app::options::CommandOptions;
+use batchalign_app::released_command_uses_local_audio;
 
-use crate::client::{self, BatchalignClient, server_label};
+use crate::client::{BatchalignClient, server_label};
 use crate::discover::{build_server_names, copy_nonmatching, infer_base_dir};
 use crate::error::CliError;
 use crate::progress::BatchProgress;
@@ -16,6 +18,7 @@ use super::helpers::{
     classify_files, filter_files_for_command, inject_lexicon, maybe_open_dashboard,
     poll_and_write_incrementally,
 };
+use super::paths::prepare_paths_submission;
 use super::{server_supports_command, warn_stale_server};
 
 /// Submit files to a single server, poll for completion, write results.
@@ -30,9 +33,8 @@ pub(super) async fn dispatch_single_server(
     inputs: &[std::path::PathBuf],
     out_dir: Option<&std::path::Path>,
     options: Option<&CommandOptions>,
-    bank: Option<&str>,
-    subdir: Option<&str>,
     lexicon: Option<&str>,
+    before: Option<&std::path::Path>,
     use_tui: bool,
     open_dashboard: bool,
 ) -> Result<(), CliError> {
@@ -56,99 +58,105 @@ pub(super) async fn dispatch_single_server(
         return Ok(());
     }
 
-    // Discover files
-    let (files, outputs) = crate::discover::discover_server_inputs(inputs, out_dir, extensions)?;
-    let (files, outputs) = filter_files_for_command(command, files, outputs);
-
-    // Copy non-matching files
-    if let Some(od) = out_dir {
-        for inp in inputs {
-            if Path::new(inp).is_dir() {
-                copy_nonmatching(Path::new(inp), Path::new(od), extensions, command)?;
-            }
-        }
-    }
-
-    // Build server names and result map
-    let base_dir = infer_base_dir(inputs)?;
-    let (server_names, result_map) = build_server_names(&files, &outputs, inputs)?;
-
-    // Classify files: CHAT → content, media → names
-    let (file_payloads, media_file_names) = classify_files(&files, &server_names)?;
-
-    // Handle --bank for remote media
-    let (mapping_key, mapping_subdir, media_file_names) = if let Some(bk) = bank {
-        let remote_files = client.list_media(server_url, bk, subdir).await?;
-        if remote_files.is_empty() {
-            eprintln!(
-                "warning: no media files found on server in bank '{bk}' / '{}'",
-                subdir.unwrap_or("/")
-            );
+    let (submission, effective_out, result_map, paths_mode) = if released_command_uses_local_audio(
+        command,
+    ) {
+        let Some(prepared) = prepare_paths_submission(
+            command,
+            lang,
+            num_speakers,
+            extensions,
+            inputs,
+            out_dir,
+            options,
+            lexicon,
+            before,
+            &health.media_mapping_keys,
+        )?
+        else {
+            eprintln!("warning: no files found with extensions {extensions:?}");
             return Ok(());
-        }
+        };
+
+        eprintln!("Found {} file(s) to submit.\n", prepared.total_files);
+        eprintln!("Submitting shared-filesystem job to {server_url}...");
         eprintln!(
-            "Found {} media file(s) on server (bank={bk}, subdir={}).",
-            remote_files.len(),
-            subdir.unwrap_or("/")
+            "note: the server must be able to read these input paths and write the requested output paths.\n"
         );
+
         (
-            bk.to_string(),
-            subdir.unwrap_or("").to_string(),
-            remote_files,
+            prepared.submission,
+            prepared.effective_out,
+            HashMap::new(),
+            true,
         )
     } else {
-        let mapping = client::detect_media_mapping(&base_dir, &health.media_mapping_keys)?;
-        if !mapping.key.is_empty() {
-            eprintln!("Media mapping: {} / {}", mapping.key, mapping.subdir);
+        let (files, outputs) =
+            crate::discover::discover_server_inputs(inputs, out_dir, extensions)?;
+        let (files, outputs) = filter_files_for_command(command, files, outputs);
+
+        if let Some(od) = out_dir {
+            for inp in inputs {
+                if Path::new(inp).is_dir() {
+                    copy_nonmatching(Path::new(inp), Path::new(od), extensions, command)?;
+                }
+            }
         }
-        (mapping.key, mapping.subdir, media_file_names)
+
+        let base_dir = infer_base_dir(inputs)?;
+        let (server_names, result_map) = build_server_names(&files, &outputs, inputs)?;
+        let (file_payloads, media_file_names) = classify_files(&files, &server_names)?;
+        if file_payloads.is_empty() && media_file_names.is_empty() {
+            eprintln!("warning: no files found with extensions {extensions:?}");
+            return Ok(());
+        }
+
+        let total_count = file_payloads.len() + media_file_names.len();
+        eprintln!("Found {total_count} file(s) to submit.\n");
+
+        let mut opts = options.cloned().unwrap_or_else(|| {
+            CommandOptions::Morphotag(batchalign_app::options::MorphotagOptions {
+                common: Default::default(),
+                retokenize: false,
+                skipmultilang: false,
+                merge_abbrev: false.into(),
+            })
+        });
+        inject_lexicon(&mut opts, lexicon)?;
+        let debug_traces = opts.common().debug_dir.is_some();
+
+        let effective_out = out_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| base_dir.clone());
+
+        (
+            JobSubmission {
+                command,
+                lang: batchalign_app::api::LanguageSpec::try_from(lang)
+                    .map_err(|e| CliError::InvalidArgument(format!("invalid language: {e}")))?,
+                num_speakers: num_speakers.into(),
+                files: file_payloads,
+                media_files: media_file_names,
+                media_mapping: String::new(),
+                media_subdir: String::new(),
+                source_dir: base_dir.to_string_lossy().to_string(),
+                options: opts,
+                paths_mode: false,
+                source_paths: vec![],
+                output_paths: vec![],
+                display_names: vec![],
+                debug_traces,
+                before_paths: vec![],
+            },
+            effective_out,
+            result_map,
+            false,
+        )
     };
 
-    if file_payloads.is_empty() && media_file_names.is_empty() {
-        eprintln!("warning: no files found with extensions {extensions:?}");
-        return Ok(());
+    if !paths_mode {
+        eprintln!("Submitting to {server_url}...");
     }
-
-    let total_count = file_payloads.len() + media_file_names.len();
-    eprintln!("Found {total_count} file(s) to submit.\n");
-
-    // Build options with lexicon
-    let mut opts = options.cloned().unwrap_or_else(|| {
-        CommandOptions::Morphotag(batchalign_app::options::MorphotagOptions {
-            common: Default::default(),
-            retokenize: false,
-            skipmultilang: false,
-            merge_abbrev: false.into(),
-        })
-    });
-    inject_lexicon(&mut opts, lexicon)?;
-    let debug_traces = opts.common().debug_dir.is_some();
-
-    let effective_out = out_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| base_dir.clone());
-
-    let submission = JobSubmission {
-        command,
-        lang: batchalign_app::api::LanguageSpec::try_from(lang)
-            .map_err(|e| CliError::InvalidArgument(format!("invalid language: {e}")))?,
-        num_speakers: num_speakers.into(),
-        files: file_payloads,
-        media_files: media_file_names,
-        media_mapping: mapping_key,
-        media_subdir: mapping_subdir,
-        source_dir: base_dir.to_string_lossy().to_string(),
-        options: opts,
-        paths_mode: false,
-        source_paths: vec![],
-        output_paths: vec![],
-        display_names: vec![],
-        debug_traces,
-        before_paths: vec![],
-    };
-
-    // Submit
-    eprintln!("Submitting to {server_url}...");
     let info = client.submit_job(server_url, &submission).await?;
     let job_id = &info.job_id;
     let total_files = info.total_files;
@@ -189,6 +197,7 @@ pub(super) async fn dispatch_single_server(
                 total_files as u64,
                 &result_map,
                 &effective_out,
+                paths_mode,
                 command.as_wire_name(),
                 &tui_progress,
             );
@@ -215,6 +224,7 @@ pub(super) async fn dispatch_single_server(
                 total_files as u64,
                 &result_map,
                 &effective_out,
+                paths_mode,
                 command.as_wire_name(),
                 &progress,
             )

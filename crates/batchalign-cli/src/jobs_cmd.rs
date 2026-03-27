@@ -107,6 +107,27 @@ async fn show_job(
     eprintln!("Status:   {}", info.status);
     eprintln!("Command:  {}", info.command);
     eprintln!("Files:    {}/{}", info.completed_files, info.total_files);
+    if let Some(ref control_plane) = info.control_plane {
+        eprintln!("Backend:  {}", control_plane.backend);
+        if let Some(ref temporal) = control_plane.temporal {
+            eprintln!("Workflow: {}", temporal.workflow_id);
+            if let Some(ref run_id) = temporal.run_id {
+                eprintln!("Run ID:   {run_id}");
+            }
+            if let Some(ref status) = temporal.status {
+                eprintln!("WF State: {status}");
+            }
+            if let Some(ref task_queue) = temporal.task_queue {
+                eprintln!("Queue:    {task_queue}");
+            }
+            if let Some(history_length) = temporal.history_length {
+                eprintln!("History:  {history_length} event(s)");
+            }
+            if let Some(ref describe_error) = temporal.describe_error {
+                eprintln!("WF Error: {describe_error}");
+            }
+        }
+    }
     if let Some(ref current) = info.current_file {
         eprintln!("Current:  {current}");
     }

@@ -52,6 +52,9 @@ pub async fn start(
     if let Some(ref host) = args.host {
         cfg.host = host.clone();
     }
+    if let Some(ref backend) = args.backend {
+        cfg.backend = parse_server_backend(backend)?;
+    }
 
     if let Some(workers) = args.workers {
         cfg.max_workers_per_job = workers as i32;
@@ -81,6 +84,7 @@ pub async fn start(
         let tier = cfg.resolved_memory_tier();
         let host_policy = HostExecutionPolicy::from_server_config(&cfg);
         eprintln!("\nStarting server on {}:{}...", cfg.host, cfg.port);
+        eprintln!("Backend: {:?}", cfg.backend);
         eprintln!(
             "Memory tier: {}{} (total: {} GB, headroom: {} GB, stanza: {} GB, gpu: {} GB, bootstrap: {:?})\n",
             tier.kind,
@@ -167,6 +171,9 @@ pub async fn start(
             "--host",
             &cfg.host,
         ]);
+        if let Some(ref backend) = args.backend {
+            cmd.args(["--backend", backend]);
+        }
         if let Some(ref config_path) = args.config {
             cmd.args(["--config", config_path]);
         }
@@ -249,6 +256,16 @@ pub async fn start(
     }
 
     Ok(())
+}
+
+fn parse_server_backend(value: &str) -> Result<config::ServerBackendKind, CliError> {
+    match value.trim() {
+        "embedded" => Ok(config::ServerBackendKind::Embedded),
+        "temporal" => Ok(config::ServerBackendKind::Temporal),
+        other => Err(CliError::InvalidArgument(format!(
+            "invalid --backend value '{other}' (expected 'embedded' or 'temporal')"
+        ))),
+    }
 }
 
 /// `serve stop` — stop the server and daemon.

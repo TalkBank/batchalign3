@@ -506,6 +506,7 @@ impl Job {
             next_eligible_at: self.schedule.next_eligible_at,
             num_workers: self.schedule.num_workers,
             active_lease: self.active_lease(),
+            control_plane: None,
         }
     }
 
@@ -547,6 +548,7 @@ impl Job {
             next_eligible_at: self.schedule.next_eligible_at,
             num_workers: self.schedule.num_workers,
             active_lease: self.active_lease(),
+            control_plane: None,
         }
     }
 

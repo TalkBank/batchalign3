@@ -1,7 +1,7 @@
 # Media Conversion
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-27 11:18 EDT
 
 ## Overview
 
@@ -55,11 +55,10 @@ batchalign3 [--server http://net:8001] align input/ output/ --lang eng
   │  │  2. MEDIA RESOLUTION                                              │
   │  │     paths_mode:                                                   │
   │  │       look alongside .cha for matching stem with known extensions │
-  │  │     content mode:                                                 │
-  │  │       job.media_mapping → server.yaml media_mappings → volume     │
-  │  │       e.g. "aphasia-data" → /Volumes/Other/aphasia                │
-  │  │       combine with job.media_subdir + filename parent directory   │
-  │  │       search for stem with all known extensions                   │
+  │  │     content mode / shared-fs remap:                               │
+  │  │       trust server-visible local paths only                       │
+  │  │       source_dir when the server shares that filesystem           │
+  │  │       or local media_mappings / explicit --media-dir             │
   │  │                                                                   │
   │  │  3. MEDIA CONVERSION (ensure_wav)                ◄── THIS STEP    │
   │  │     .wav/.mp3/.flac/.ogg → pass through unchanged                │
@@ -199,28 +198,25 @@ server looks for a file with the same stem and a known media extension:
 input/ACWT01a.cha  →  input/ACWT01a.mp4  (or .wav, .mp3, etc.)
 ```
 
-### content mode (remote --server)
+### shared-filesystem server mode (`--server` for audio commands)
 
-The client POSTs `.cha` text to the server. Audio lives on server-side
-volumes configured in `~/.batchalign3/server.yaml`:
+The CLI no longer asks the server to infer remote media from client-specific
+path mappings. For audio commands, explicit `--server` submits filesystem paths
+via `paths_mode`:
 
-```yaml
-media_mappings:
-  aphasia-data: /Volumes/Other/aphasia
-  childes-data: /Volumes/CHILDES/CHILDES
-  dementia-data: /Volumes/Other/dementia
-  # ...
-```
+- `source_paths` — absolute input paths the server must be able to read
+- `output_paths` — absolute output paths the server must be able to write
 
-The client detects the mapping key from the input path (e.g.,
-`~/data/aphasia-data/English/Protocol/ACWT/` → mapping `aphasia-data`,
-subdir `English/Protocol/ACWT`). The server combines:
+This means the clean operational model is:
 
-```
-mapping_root + media_subdir + filename_parent → search directory
-```
+- run the CLI on the execution host itself, or
+- use a standardized shared mount layout so the server sees the same paths
 
-Then searches for the stem with all known extensions.
+For direct HTTP content-mode submissions, Batchalign only trusts server-visible
+local paths such as `source_dir`, local `media_mappings`, or an explicit
+`--media-dir`. The important rule is that the mapping is local to the execution
+host, not a way to dereference an arbitrary remote client's private directory
+layout.
 
 ## MP4 Media on Net Volumes
 

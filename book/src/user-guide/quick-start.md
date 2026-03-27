@@ -1,6 +1,6 @@
 # Quick Start
 
-**Last modified:** 2026-03-26 18:12 EDT
+**Last modified:** 2026-03-27 11:18 EDT
 
 This chapter covers the most common `batchalign3` workflows from the terminal.
 The examples assume the `batchalign3` binary is installed and that local
@@ -57,9 +57,9 @@ batchalign3 transcribe ~/recordings/ -o ~/transcripts/ \
   --asr-engine whisper --lang eng
 ```
 
-Important routing note: explicit remote `--server` is currently ignored for
-`transcribe` because the remote server cannot read client-local audio paths.
-The CLI runs that work locally through the direct host instead.
+Important routing note: explicit `--server` now submits shared-filesystem
+`paths_mode` jobs for `transcribe`. The target server must be able to read the
+same input paths and write the requested output paths.
 
 ## Align transcripts against audio
 

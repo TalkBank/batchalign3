@@ -1,7 +1,7 @@
 # Forced Alignment Design
 
 **Status:** Current
-**Last updated:** 2026-03-21 15:30
+**Last updated:** 2026-03-27 11:18 EDT
 
 ## Overview
 
@@ -53,8 +53,10 @@ flowchart TD
 Before alignment can begin, two steps must succeed:
 
 1. **Media resolution** — The server locates the audio file for the CHAT
-   file, either alongside it (paths mode) or via configured media mappings
-   (content mode). See [Media Conversion](media-conversion.md#media-resolution).
+   file from server-visible local paths, either alongside it (paths mode),
+   through a shared `source_dir`, via local `media_mappings`, or via an
+   explicit `--media-dir`. See
+   [Media Conversion](media-conversion.md#media-resolution).
 2. **Media conversion** — If the audio is in a container format that
    `soundfile` cannot read (MP4, M4A, WebM, WMA), it is automatically
    converted to 16 kHz mono WAV via ffmpeg and cached at

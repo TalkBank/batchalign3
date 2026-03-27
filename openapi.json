@@ -459,6 +459,38 @@
         ],
         "type": "string"
       },
+      "JobControlPlaneBackendKind": {
+        "description": "Control-plane backend that currently owns orchestration for a server job.",
+        "enum": [
+          "embedded",
+          "temporal"
+        ],
+        "type": "string"
+      },
+      "JobControlPlaneInfo": {
+        "description": "Backend-owned orchestration metadata for a job projection.",
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/JobControlPlaneBackendKind",
+            "description": "Control-plane backend that produced this projection."
+          },
+          "temporal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TemporalWorkflowExecutionInfo",
+                "description": "Temporal workflow execution metadata when `backend == temporal`."
+              }
+            ]
+          }
+        },
+        "required": [
+          "backend"
+        ],
+        "type": "object"
+      },
       "JobId": {
         "description": "Server-assigned identifier for a job (non-empty).",
         "type": "string"
@@ -492,6 +524,17 @@
             "description": "Number of files that have finished processing (status `Done`).\nInvariant: `0 <= completed_files <= total_files`.",
             "format": "int64",
             "type": "integer"
+          },
+          "control_plane": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobControlPlaneInfo",
+                "description": "Server control-plane metadata for this job when returned by a server."
+              }
+            ]
           },
           "current_file": {
             "description": "Filename currently being processed.  `None` when the job is queued\nor has reached a terminal state.",
@@ -629,6 +672,17 @@
             "description": "Number of files that finished successfully (`Done`).",
             "format": "int64",
             "type": "integer"
+          },
+          "control_plane": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobControlPlaneInfo",
+                "description": "Server control-plane metadata for this job when returned by a server."
+              }
+            ]
           },
           "duration_s": {
             "oneOf": [
@@ -941,6 +995,55 @@
         "required": [
           "status",
           "message"
+        ],
+        "type": "object"
+      },
+      "TemporalWorkflowExecutionInfo": {
+        "description": "Temporal workflow execution metadata attached to a server job projection.",
+        "properties": {
+          "describe_error": {
+            "description": "Error surfaced when the server could not describe the workflow.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history_length": {
+            "description": "Temporal history length when description succeeded.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "Current Temporal run ID when one is known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "Current Temporal workflow status, normalized for Batchalign clients.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_queue": {
+            "description": "Temporal task queue serving this workflow when known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_id": {
+            "description": "Stable Temporal workflow ID used for this job.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_id"
         ],
         "type": "object"
       },

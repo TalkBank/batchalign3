@@ -130,7 +130,7 @@ pub(crate) struct CommandWorkflowDescriptor {
     pub infer_task: InferTask,
     /// How the command is surfaced relative to the worker layer.
     pub capability_kind: CommandCapabilityKind,
-    /// Whether this command requires client-local audio access in the CLI.
+    /// Whether this command requires shared-filesystem audio path access.
     pub uses_local_audio: bool,
     /// How this command derives its primary output path.
     pub output_path_kind: CommandOutputPathKind,
@@ -325,7 +325,7 @@ impl CommandDefinition {
             command,
             InferTask::Fa,
             CommandCapabilityKind::DirectInfer,
-            false,
+            true,
             CommandOutputPathKind::PreserveInputName,
             RunnerDispatchKind::ForcedAlignment,
             CommandExecutionShape::AudioSequential,

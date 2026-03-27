@@ -1,7 +1,7 @@
 # Rust CLI and Server
 
 **Status:** Current
-**Last updated:** 2026-03-27 08:16 EDT
+**Last updated:** 2026-03-27 09:21 EDT
 
 This page covers the Rust control plane that powers `batchalign3`: the CLI
 client, the HTTP server, and how to extend them.
@@ -72,9 +72,9 @@ On the app side, the current execution split is now:
 - `ServerExecutionHost` — queue/store/server-owned lifecycle behavior
 - `DirectHost` / `DirectExecutionHost` — inline local execution without queueing
   or registry discovery
-- `ServerBackend` / `EmbeddedServerBackend` — route-facing server control-plane
-  seam over persisted jobs, queue wakeups, event subscription, traces, and
-  runtime shutdown
+- `ServerBackend` / `EmbeddedServerBackend` / `TemporalServerBackend` —
+  route-facing server control-plane seam over persisted jobs, orchestration,
+  event subscription, traces, and runtime shutdown
 - `prepare_workers*()` vs `prepare_direct_workers()` — explicit separation
   between server worker bootstrap and direct local worker bootstrap
 
@@ -218,9 +218,32 @@ not the right preparatory step before the spike.
 
 ### Temporal assessment
 
-Temporal is the strongest-looking future durable backend, but **only** as an
-optional server-mode backend after the embedded backend seam is deeper and more
-load-bearing.
+Temporal is still the strongest-looking durable backend candidate, and the first
+real spike now exists behind `batchalign3 serve start --backend temporal`.
+That spike is intentionally experimental: direct mode remains the trusted
+product path, embedded remains the default server backend, and compatibility
+with the old embedded server behavior is not the goal.
+
+Current Temporal spike shape:
+
+- one Temporal workflow per Batchalign job (`workflow_id = job_id`)
+- one Temporal activity that bridges back into the shared
+  `run_server_job_attempt()` engine path
+- Temporal-owned retry delay / durable cancellation orchestration
+- route-facing reuse of the existing `ServerBackend` seam where that simplifies
+  validation
+- a dedicated in-process worker thread/runtime for the Temporal SDK worker loop,
+  because the current Rust SDK worker is not `Send` and does not fit cleanly
+  into the embedded `RuntimeSupervisor`
+- `GET /jobs/{id}` and `batchalign3 jobs --server ... <JOB_ID>` now expose a
+  Batchalign-owned `control_plane` field that carries Temporal workflow ID, run
+  ID, workflow status, task queue, and history length without leaking raw
+  Temporal types through the rest of the app
+- restart now uses explicit Temporal workflow-ID conflict replacement semantics,
+  so a restarted job gets a fresh Temporal run instead of relying on a previous
+  run to disappear "soon enough"
+- delete now terminates any matching Temporal workflow handle before dropping
+  the local store projection
 
 Why it fits:
 
@@ -228,11 +251,14 @@ Why it fits:
   current embedded control plane that are genuinely painful: queued-job
   ownership, retries, recovery, long-running execution, and cancellation.
 - The Rust client and SDK already expose workflow start/list/cancel/signal/query
- /update semantics, which map naturally to job submission, cancellation,
- inspection, and server-side progress APIs.
+  /update semantics, which map naturally to job submission, cancellation,
+  inspection, and server-side progress APIs.
 - Temporal itself recommends a local dev server (`temporal server start-dev`)
   for development and testing, so it is plausible to spike without standing up a
   full production cluster first.
+- The current spike already compiles, boots, answers `/health`, exposes
+  Temporal workflow metadata through remote job inspection, and returns a fresh
+  Temporal run ID on restart.
 
 Why it is **not** the default answer:
 
@@ -252,11 +278,28 @@ Why it is **not** the default answer:
 So the current recommendation is:
 
 - **keep embedded as the local/default backend**
-- **treat Temporal as an optional managed/fleet backend candidate**
-- **do not evaluate Temporal seriously until more queue/retry/recovery behavior
-  is behind `ServerBackend`**
+- **treat Temporal as an optional experimental managed/fleet backend**
+- **keep using the current spike to learn what wants to become
+  Temporal-native, rather than forcing compatibility with the embedded queue**
 - **do not move the shared engine, direct mode, or Python worker packaging
   boundary just to accommodate Temporal**
+
+Validated so far:
+
+```bash
+cargo check -p batchalign-app -p batchalign-cli
+cargo test -p batchalign-app --lib -q
+cargo test -p batchalign-app --test json_compat -q
+cargo test -p batchalign-cli --lib -q
+batchalign3 serve start --foreground --backend temporal --test-echo --warmup off
+batchalign3 jobs --server http://127.0.0.1:8111 <JOB_ID>
+curl -X POST http://127.0.0.1:8111/jobs/<JOB_ID>/restart
+curl -X DELETE http://127.0.0.1:8111/jobs/<JOB_ID>
+```
+
+Important validation caveat: existing e2e coverage already treats text-only
+infer-task commands like `morphotag` as expected failures under `--test-echo`.
+Use `--test-echo` to validate control-plane behavior, not infer-task success.
 
 ### First-class debuggability
 

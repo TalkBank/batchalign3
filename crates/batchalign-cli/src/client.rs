@@ -8,7 +8,6 @@ use batchalign_app::api::{
     FileResult, HealthResponse, JobId, JobInfo, JobListItem, JobResultResponse, JobSubmission,
 };
 use reqwest::Client;
-use serde::Deserialize;
 use tracing::debug;
 
 use crate::error::CliError;
@@ -38,11 +37,6 @@ pub const MAX_POLL_FAILURES: u32 = 10;
 #[derive(Clone)]
 pub struct BatchalignClient {
     http: Client,
-}
-
-#[derive(Debug, Deserialize)]
-struct MediaListResponse {
-    files: Vec<String>,
 }
 
 impl BatchalignClient {
@@ -161,24 +155,6 @@ impl BatchalignClient {
         Ok(jobs)
     }
 
-    /// `GET /media/list` — list media files for a bank/subdir.
-    pub async fn list_media(
-        &self,
-        url: &str,
-        bank: &str,
-        subdir: Option<&str>,
-    ) -> Result<Vec<String>, CliError> {
-        let mut req_url = format!("{url}/media/list?bank={bank}");
-        if let Some(sd) = subdir {
-            req_url.push_str(&format!("&subdir={sd}"));
-        }
-        let resp = self
-            .request_with_retry(reqwest::Method::GET, &req_url, None::<&()>)
-            .await?;
-        let data: MediaListResponse = resp.json().await?;
-        Ok(data.files)
-    }
-
     /// `DELETE /jobs/{id}` — cancel a running job.
     pub async fn cancel_job(&self, url: &str, job_id: &str) -> Result<(), CliError> {
         let resp = self
@@ -287,55 +263,6 @@ fn summarize_http_error_body(status_text: &str, body: &str) -> String {
     trimmed.to_string()
 }
 
-/// Result of matching an input directory against the server's media mapping keys.
-///
-/// Replaces the anonymous `(String, String)` return that previously carried the
-/// mapping key and subdirectory.
-#[derive(Debug, Clone, Default)]
-pub struct MediaMapping {
-    /// Matched key from the server's `media_mapping_keys` (e.g. `"childes-data"`).
-    /// Empty when no mapping was detected.
-    pub key: String,
-    /// Subdirectory path under the mapping root (e.g. `"Eng-NA/MacWhinney"`).
-    /// Empty when no mapping was detected or the input is at the root.
-    pub subdir: String,
-}
-
-/// Detect media mapping from input path and server health response.
-///
-/// Queries the server's `media_mapping_keys`, then checks if any key
-/// appears as a path component of `in_dir`.
-pub fn detect_media_mapping(
-    in_dir: &std::path::Path,
-    mapping_keys: &[String],
-) -> Result<MediaMapping, CliError> {
-    if mapping_keys.is_empty() {
-        return Ok(MediaMapping::default());
-    }
-
-    let abs = std::fs::canonicalize(in_dir).map_err(CliError::Io)?;
-    let parts: Vec<String> = abs
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .collect();
-
-    for key in mapping_keys {
-        if let Some(idx) = parts.iter().position(|p| p == key) {
-            let subdir = if idx + 1 < parts.len() {
-                parts[idx + 1..].join("/")
-            } else {
-                String::new()
-            };
-            return Ok(MediaMapping {
-                key: key.clone(),
-                subdir,
-            });
-        }
-    }
-
-    Ok(MediaMapping::default())
-}
-
 /// Extract a short hostname label from a server URL (e.g. "myhost").
 pub fn server_label(url: &str) -> String {
     let without_scheme = url
@@ -389,28 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn detect_mapping_finds_key() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("childes-data/Eng-NA/test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let keys = vec!["childes-data".to_string(), "other".to_string()];
-        let mapping = detect_media_mapping(&dir, &keys).unwrap();
-        assert_eq!(mapping.key, "childes-data");
-        assert_eq!(mapping.subdir, "Eng-NA/test");
-    }
-
-    #[test]
-    fn detect_mapping_no_match() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("something/else");
-        std::fs::create_dir_all(&dir).unwrap();
-        let keys = vec!["childes-data".to_string()];
-        let mapping = detect_media_mapping(&dir, &keys).unwrap();
-        assert!(mapping.key.is_empty());
-        assert!(mapping.subdir.is_empty());
-    }
-
-    #[test]
     fn parse_servers_empty() {
         let urls = parse_servers("");
         assert!(urls.is_empty());
@@ -426,17 +331,6 @@ mod tests {
     fn parse_servers_trailing_slashes() {
         let urls = parse_servers("http://a:8000///");
         assert_eq!(urls, vec!["http://a:8000"]);
-    }
-
-    #[test]
-    fn detect_mapping_empty_keys() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("something");
-        std::fs::create_dir_all(&dir).unwrap();
-        let keys: Vec<String> = vec![];
-        let mapping = detect_media_mapping(&dir, &keys).unwrap();
-        assert_eq!(mapping.key, "");
-        assert_eq!(mapping.subdir, "");
     }
 
     #[test]

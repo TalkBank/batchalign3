@@ -1,6 +1,6 @@
 ---
 source: crates/batchalign-app/tests/json_compat.rs
-assertion_line: 315
+assertion_line: 317
 expression: cfg
 ---
 {
@@ -16,6 +16,7 @@ expression: cfg
   "max_concurrent_jobs": 4,
   "port": 9000,
   "host": "0.0.0.0",
+  "backend": "embedded",
   "max_workers_per_job": 2,
   "job_ttl_days": 14,
   "redis_url": "redis://net:6379/0",
@@ -24,6 +25,11 @@ expression: cfg
     "align"
   ],
   "auto_daemon": true,
+  "temporal_server_url": "http://127.0.0.1:7233",
+  "temporal_namespace": "default",
+  "temporal_task_queue": "batchalign3-server",
+  "temporal_heartbeat_s": 10,
+  "temporal_activity_timeout_s": 86400,
   "memory_gate_mb": 2048,
   "worker_idle_timeout_s": 300,
   "worker_health_interval_s": 15,

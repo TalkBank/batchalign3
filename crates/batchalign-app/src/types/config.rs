@@ -93,6 +93,22 @@ impl RuntimeLayout {
     }
 }
 
+/// Server control-plane backend implementation to bootstrap.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServerBackendKind {
+    /// Existing in-process queue/store/runtime stack.
+    Embedded,
+    /// Temporal-backed control plane and workflow orchestration.
+    Temporal,
+}
+
+impl Default for ServerBackendKind {
+    fn default() -> Self {
+        Self::Embedded
+    }
+}
+
 /// Default config file path.
 pub fn default_config_path() -> PathBuf {
     RuntimeLayout::from_env().config_path().to_path_buf()
@@ -150,6 +166,9 @@ pub struct ServerConfig {
     /// Bind address for the HTTP server.  Default: `"0.0.0.0"` (all interfaces).
     #[serde(default = "default_host")]
     pub host: String,
+    /// Control-plane backend implementation for `serve start`.
+    #[serde(default)]
+    pub backend: ServerBackendKind,
     /// Maximum Python worker processes per job.  `0` (default) means
     /// auto-tune based on RAM and GPU availability.
     #[serde(default)]
@@ -174,6 +193,21 @@ pub struct ServerConfig {
     /// `--server` is configured. Default: `true`.
     #[serde(default = "default_true")]
     pub auto_daemon: bool,
+    /// Temporal service URL used when `backend: temporal`.
+    #[serde(default = "default_temporal_server_url")]
+    pub temporal_server_url: String,
+    /// Temporal namespace used when `backend: temporal`.
+    #[serde(default = "default_temporal_namespace")]
+    pub temporal_namespace: String,
+    /// Temporal task queue used when `backend: temporal`.
+    #[serde(default = "default_temporal_task_queue")]
+    pub temporal_task_queue: String,
+    /// Activity heartbeat interval in seconds for the Temporal backend.
+    #[serde(default = "default_temporal_heartbeat_s")]
+    pub temporal_heartbeat_s: u64,
+    /// Per-attempt activity timeout in seconds for the Temporal backend.
+    #[serde(default = "default_temporal_activity_timeout_s")]
+    pub temporal_activity_timeout_s: u64,
     /// Minimum host headroom (MB) the coordinator keeps free after worker-start
     /// and job-execution reservations. 0 = disable host-memory headroom checks.
     /// Default: 8192.
@@ -286,6 +320,26 @@ fn default_true() -> bool {
     true
 }
 
+fn default_temporal_server_url() -> String {
+    "http://127.0.0.1:7233".to_string()
+}
+
+fn default_temporal_namespace() -> String {
+    "default".to_string()
+}
+
+fn default_temporal_task_queue() -> String {
+    "batchalign3-server".to_string()
+}
+
+fn default_temporal_heartbeat_s() -> u64 {
+    10
+}
+
+fn default_temporal_activity_timeout_s() -> u64 {
+    60 * 60 * 24
+}
+
 fn default_warmup_commands() -> Vec<String> {
     WARMUP_PRESET_FULL
         .iter()
@@ -350,11 +404,17 @@ impl Default for ServerConfig {
             max_concurrent_jobs: 0,
             port: 8000,
             host: "0.0.0.0".to_string(),
+            backend: ServerBackendKind::Embedded,
             max_workers_per_job: 0,
             job_ttl_days: 7,
             redis_url: String::new(),
             warmup_commands: default_warmup_commands(),
             auto_daemon: true,
+            temporal_server_url: default_temporal_server_url(),
+            temporal_namespace: default_temporal_namespace(),
+            temporal_task_queue: default_temporal_task_queue(),
+            temporal_heartbeat_s: default_temporal_heartbeat_s(),
+            temporal_activity_timeout_s: default_temporal_activity_timeout_s(),
             memory_gate_mb: default_memory_gate_mb(),
             worker_idle_timeout_s: default_worker_idle_timeout_s(),
             worker_health_interval_s: default_worker_health_interval_s(),
@@ -497,6 +557,33 @@ impl ServerConfig {
             warnings.push("gpu_thread_pool_size must be >= 1, defaulting to 1".into());
             self.gpu_thread_pool_size = 1;
         }
+        if self.temporal_server_url.trim().is_empty() {
+            warnings.push(
+                "temporal_server_url must not be empty, defaulting to http://127.0.0.1:7233".into(),
+            );
+            self.temporal_server_url = default_temporal_server_url();
+        }
+        if self.temporal_namespace.trim().is_empty() {
+            warnings.push("temporal_namespace must not be empty, defaulting to default".into());
+            self.temporal_namespace = default_temporal_namespace();
+        }
+        if self.temporal_task_queue.trim().is_empty() {
+            warnings.push(
+                "temporal_task_queue must not be empty, defaulting to batchalign3-server".into(),
+            );
+            self.temporal_task_queue = default_temporal_task_queue();
+        }
+        if self.temporal_heartbeat_s == 0 {
+            warnings.push("temporal_heartbeat_s must be between 1 and 60, defaulting to 10".into());
+            self.temporal_heartbeat_s = default_temporal_heartbeat_s();
+        } else if self.temporal_heartbeat_s > 60 {
+            warnings.push("temporal_heartbeat_s must be between 1 and 60, defaulting to 60".into());
+            self.temporal_heartbeat_s = 60;
+        }
+        if self.temporal_activity_timeout_s == 0 {
+            warnings.push("temporal_activity_timeout_s must be >= 1, defaulting to 86400".into());
+            self.temporal_activity_timeout_s = default_temporal_activity_timeout_s();
+        }
         warnings
     }
 }
@@ -571,9 +658,15 @@ mod tests {
         let cfg = ServerConfig::default();
         assert_eq!(cfg.port, 8000);
         assert_eq!(cfg.host, "0.0.0.0");
+        assert_eq!(cfg.backend, ServerBackendKind::Embedded);
         assert_eq!(cfg.default_lang, "eng"); // PartialEq<&str>
         assert_eq!(cfg.job_ttl_days, 7);
         assert!(cfg.auto_daemon);
+        assert_eq!(cfg.temporal_server_url, "http://127.0.0.1:7233");
+        assert_eq!(cfg.temporal_namespace, "default");
+        assert_eq!(cfg.temporal_task_queue, "batchalign3-server");
+        assert_eq!(cfg.temporal_heartbeat_s, 10);
+        assert_eq!(cfg.temporal_activity_timeout_s, 86_400);
         assert_eq!(cfg.worker_idle_timeout_s, 600);
         assert_eq!(cfg.worker_health_interval_s, 30);
         // memory_gate_mb is now tier-dependent (detect() reads system RAM)
@@ -602,6 +695,7 @@ media_mappings:
   childes-data: /nfs/childes
 default_lang: spa
 port: 9000
+backend: temporal
 max_concurrent_jobs: 4
 warmup_commands:
   - morphotag
@@ -613,6 +707,7 @@ auto_daemon: true
         assert_eq!(cfg.media_mappings["childes-data"], "/nfs/childes");
         assert_eq!(cfg.default_lang, "spa");
         assert_eq!(cfg.port, 9000);
+        assert_eq!(cfg.backend, ServerBackendKind::Temporal);
         assert_eq!(cfg.max_concurrent_jobs, 4);
         assert_eq!(cfg.warmup_commands, vec!["morphotag", "align"]);
         assert!(cfg.auto_daemon);

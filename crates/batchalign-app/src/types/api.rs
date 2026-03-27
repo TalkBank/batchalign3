@@ -63,6 +63,50 @@ mod tests {
     }
 
     #[test]
+    fn job_control_plane_roundtrip() {
+        let info = JobInfo {
+            job_id: "job-temporal".into(),
+            status: JobStatus::Running,
+            command: ReleasedCommand::Morphotag,
+            options: crate::options::CommandOptions::Morphotag(crate::options::MorphotagOptions {
+                common: crate::options::CommonOptions::default(),
+                retokenize: false,
+                skipmultilang: false,
+                merge_abbrev: false.into(),
+            }),
+            lang: LanguageSpec::Resolved(LanguageCode3::eng()),
+            source_dir: "/tmp".into(),
+            total_files: 1,
+            completed_files: 0,
+            current_file: None,
+            error: None,
+            file_statuses: Vec::new(),
+            submitted_at: None,
+            submitted_by: None,
+            submitted_by_name: None,
+            completed_at: None,
+            duration_s: None,
+            next_eligible_at: None,
+            num_workers: None,
+            active_lease: None,
+            control_plane: Some(JobControlPlaneInfo::temporal_with_execution(
+                TemporalWorkflowExecutionInfo {
+                    workflow_id: "job-temporal".into(),
+                    run_id: Some("run-123".into()),
+                    status: Some("running".into()),
+                    task_queue: Some("batchalign3-server".into()),
+                    history_length: Some(12),
+                    describe_error: None,
+                },
+            )),
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let back: JobInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info, back);
+    }
+
+    #[test]
     fn job_submission_paths_mode_validation() {
         use crate::options::{CommandOptions, CommonOptions, MorphotagOptions};
 
@@ -302,6 +346,7 @@ mod tests {
                 heartbeat_at: UnixTimestamp(1700000001.0),
                 expires_at: UnixTimestamp(1700000301.0),
             }),
+            control_plane: None,
         };
         let json = serde_json::to_string_pretty(&info).unwrap();
         let back: JobInfo = serde_json::from_str(&json).unwrap();

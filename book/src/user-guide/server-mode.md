@@ -1,7 +1,7 @@
 # Server Mode
 
 **Status:** Current
-**Last updated:** 2026-03-26 18:12 EDT
+**Last updated:** 2026-03-27 11:18 EDT
 
 Batchalign includes a built-in HTTP server managed by `batchalign3 serve ...`.
 Ordinary local processing commands no longer require that server. The CLI now
@@ -13,9 +13,10 @@ explicitly chooses `--server` or starts a server for remote/dashboard workflows.
 - With `--server URL`, the CLI submits supported jobs to that server.
 - Without `--server`, the CLI runs the command locally through the shared
   direct host.
-- Audio-dependent commands such as `transcribe`, `transcribe_s`, `benchmark`,
-  and `avqi` still ignore explicit remote `--server`, but they now fall back to
-  **direct local execution**, not to a daemon path.
+- Audio-dependent commands such as `align`, `transcribe`, `transcribe_s`,
+  `benchmark`, `opensmile`, and `avqi` now submit shared-filesystem `paths_mode`
+  jobs when `--server` is set. The server must be able to read the same input
+  paths and write the requested output paths.
 - `batchalign3 serve ...` remains useful for remote access, dashboard-backed
   job monitoring, persistent warm workers, and explicit server-managed queues.
 
@@ -40,6 +41,28 @@ batchalign3 serve start --foreground --port 8000
 batchalign3 serve start --foreground --config ~/server.yaml
 batchalign3 serve start --foreground --warmup minimal
 batchalign3 serve start --foreground --test-echo
+batchalign3 serve start --foreground --backend temporal --test-echo --warmup off
+```
+
+## Backend selection
+
+`batchalign3 serve start` now accepts `--backend embedded|temporal`.
+
+- `embedded` remains the default and is still the recommended local/single-host
+  backend.
+- `temporal` is an experimental clean-slate control-plane backend. It keeps the
+  shared Batchalign execution engine and worker pool, but hands queued-job
+  orchestration, retry timing, and durable cancellation/restart state to
+  Temporal workflows and activities.
+
+This backend choice only affects explicit server mode. Ordinary local CLI use
+still defaults to the direct host and does not require any Temporal service.
+
+To try the Temporal backend locally, start a Temporal dev server first:
+
+```bash
+temporal server start-dev
+batchalign3 serve start --foreground --backend temporal --test-echo --warmup off
 ```
 
 ## Check and stop a server
@@ -56,6 +79,21 @@ Inspect remote jobs:
 batchalign3 jobs --server http://myserver:8000
 batchalign3 jobs --server http://myserver:8000 <JOB_ID>
 ```
+
+When that server is running with `--backend temporal`,
+`batchalign3 jobs --server ... <JOB_ID>` also reports the Temporal workflow ID,
+run ID, workflow status, task queue, and history length for that Batchalign
+job.
+
+Important `--test-echo` caveat:
+
+- `--test-echo` is a control-plane smoke path, not a full model simulation.
+- Text-only infer-task commands such as `morphotag`, `utseg`, `translate`,
+  `coref`, and `compare` are expected to fail under `--test-echo` because the
+  echo worker does not advertise real `infer_tasks`.
+- Use it to validate startup, submission, restart, cancellation, deletion, and
+  remote job inspection. Do not treat it as proof that infer-task commands are
+  semantically correct.
 
 ## Server configuration
 
@@ -75,6 +113,17 @@ auto_daemon: true
 warmup_commands: [morphotag, align, transcribe]
 media_roots: []
 media_mappings: {}
+```
+
+Temporal-specific config keys:
+
+```yaml
+backend: temporal
+temporal_server_url: http://127.0.0.1:7233
+temporal_namespace: default
+temporal_task_queue: batchalign3-server
+temporal_heartbeat_s: 5
+temporal_activity_timeout_s: 3600
 ```
 
 `warmup_commands` now marks commands that are *eligible* for warmup. The
@@ -124,11 +173,16 @@ Important keys:
 
 - `port` — server listen port
 - `host` — bind address (defaults to `0.0.0.0`)
+- `backend` — server control-plane backend: `embedded` (default) or experimental `temporal`
 - `max_concurrent_jobs` — `0` means auto-tune
 - `auto_daemon` — legacy compatibility field; the CLI now defaults to direct local execution instead of auto-starting a daemon
 - `warmup_commands` — list of commands eligible for warmup (see [Worker Tuning](worker-tuning.md))
-- `media_roots` — directories searched for media
-- `media_mappings` — named client-path to server-path mappings
+- `media_roots` — local execution-host media lookup roots
+- `media_mappings` — local execution-host root mappings from corpus paths to
+  mounted media paths; useful when the CHAT/data clone root differs from the
+  media root on the same machine
+- `temporal_server_url` / `temporal_namespace` / `temporal_task_queue` — Temporal connection settings used only when `backend: temporal`
+- `temporal_heartbeat_s` / `temporal_activity_timeout_s` — Temporal activity heartbeat and per-attempt timeout controls
 - `memory_tier` — override auto-detected tier: `small`, `medium`, `large`, `fleet` (also controls task-vs-profile bootstrap mode)
 - `memory_gate_mb` — host headroom reserve (default: tier-dependent, 2000-8000 MB)
 - `gpu_startup_mb` / `stanza_startup_mb` / `io_startup_mb` — per-profile startup reservation overrides (0 = tier default)
@@ -154,6 +208,13 @@ Commands that support explicit remote dispatch look like this:
 batchalign3 --server http://myserver:8000 morphotag corpus/ -o output/
 batchalign3 --server http://myserver:8000 align corpus/ -o output/
 ```
+
+For audio commands, `--server` now means "run this on a host that can already
+see these filesystem paths." The clean operational model is to run the CLI on
+the execution host itself (or to reach it over SSH/VNC) rather than expecting
+the server to infer media from a different client machine's directory layout.
+When the corpus clone root and the mounted media root differ on that execution
+host, use local `media_mappings` or `--media-dir` as explicit root replacement.
 
 Health checks:
 
