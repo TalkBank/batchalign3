@@ -416,4 +416,33 @@ mod tests {
         assert_eq!(snapshot.infer_tasks, startup_infer_tasks);
         assert_eq!(snapshot.engine_versions, startup_engine_versions);
     }
+
+    #[test]
+    fn resolve_worker_capability_snapshot_prefers_empty_live_probe_over_startup_guess() {
+        let startup_capabilities = vec!["align".to_string(), "morphotag".to_string()];
+        let startup_infer_tasks = vec![InferTask::Fa, InferTask::Morphosyntax];
+        let startup_engine_versions = BTreeMap::from([
+            ("fa".to_string(), "wave2vec".to_string()),
+            ("morphosyntax".to_string(), "stanza-1.9.2".to_string()),
+        ]);
+        let detected = WorkerCapabilities {
+            commands: Vec::new(),
+            free_threaded: false,
+            infer_tasks: Vec::new(),
+            engine_versions: BTreeMap::new(),
+        };
+
+        let snapshot = resolve_worker_capability_snapshot(
+            &startup_capabilities,
+            &startup_infer_tasks,
+            &startup_engine_versions,
+            false,
+            Some(&detected),
+        )
+        .expect("live detected empty capabilities should override optimistic startup data");
+
+        assert!(snapshot.capabilities.is_empty());
+        assert!(snapshot.infer_tasks.is_empty());
+        assert!(snapshot.engine_versions.is_empty());
+    }
 }

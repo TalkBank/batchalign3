@@ -9,8 +9,9 @@
 mod common;
 
 use batchalign_app::api::{
-    FilePayload, FileResult, HealthResponse, HealthStatus, JobInfo, JobListItem, JobResultResponse,
-    JobStatus, JobSubmission, LanguageCode3, LanguageSpec, MemoryMb, NumSpeakers, ReleasedCommand,
+    FilePayload, FileResult, HealthResponse, HealthStatus, JobControlPlaneBackendKind, JobInfo,
+    JobListItem, JobResultResponse, JobStatus, JobSubmission, LanguageCode3, LanguageSpec,
+    MemoryMb, NumSpeakers, ReleasedCommand,
 };
 use batchalign_app::config::ServerConfig;
 use batchalign_app::create_app;
@@ -198,7 +199,9 @@ async fn health_endpoint() {
     let health: HealthResponse = resp.json().await.expect("parse health");
     assert_eq!(health.status, HealthStatus::Ok);
     assert!(!health.version.is_empty());
+    assert!(!health.build_hash.is_empty());
     assert_eq!(health.cache_backend, "sqlite");
+    assert!(health.capabilities.iter().any(|cap| cap == "transcribe"));
 }
 
 #[tokio::test]
@@ -235,6 +238,10 @@ async fn submit_and_get_job() {
         info.status
     );
     assert_eq!(info.completed_files, 1);
+    assert_eq!(
+        info.control_plane.as_ref().map(|control| control.backend),
+        Some(JobControlPlaneBackendKind::Embedded)
+    );
 }
 
 #[tokio::test]
@@ -762,8 +769,10 @@ async fn paths_mode_job() {
     std::fs::create_dir_all(&output_dir).expect("mkdir output");
 
     let input_path = input_dir.join("paths_test.cha");
-    let output_path = output_dir.join("paths_test.cha");
-    std::fs::write(&input_path, "@UTF8\n@Begin\n*CHI:\tpaths .\n@End\n").expect("write input");
+    let requested_output_path = output_dir.join("requested-output.cha");
+    let written_output_path = output_dir.join("paths_test.cha");
+    let input_content = "@UTF8\n@Begin\n*CHI:\tpaths .\n@End\n";
+    std::fs::write(&input_path, input_content).expect("write input");
 
     let submission = JobSubmission {
         command: ReleasedCommand::Transcribe,
@@ -784,7 +793,7 @@ async fn paths_mode_job() {
         }),
         paths_mode: true,
         source_paths: vec![input_path.to_string_lossy().into()],
-        output_paths: vec![output_path.to_string_lossy().into()],
+        output_paths: vec![requested_output_path.to_string_lossy().into()],
         display_names: vec![],
         debug_traces: false,
         before_paths: vec![],
@@ -805,6 +814,20 @@ async fn paths_mode_job() {
     // Wait for completion
     let final_info = poll_job_done(&client, &base_url, &job_id).await;
     assert_eq!(final_info.status, JobStatus::Completed);
+    assert_eq!(
+        final_info
+            .control_plane
+            .as_ref()
+            .map(|control| control.backend),
+        Some(JobControlPlaneBackendKind::Embedded)
+    );
+    assert!(
+        !requested_output_path.exists(),
+        "paths_mode should derive the output filename from the source file"
+    );
+    let written = std::fs::read_to_string(&written_output_path)
+        .expect("paths_mode should write the derived output file");
+    assert_eq!(written, input_content);
 }
 
 #[tokio::test]
