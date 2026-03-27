@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::api::{DurationMs, WorkerLanguage};
 use crate::error::ServerError;
 use crate::pipeline::PipelineServices;
+use crate::types::traces::FaFallbackEventTrace;
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
 use crate::worker::fa_result_v2::parse_forced_alignment_result_v2;
 use crate::worker::request_builder_v2::{
@@ -45,6 +46,8 @@ pub(crate) struct FaWorkerGroupResult {
     pub group_index: usize,
     /// Parsed timings in the established Rust FA timing domain.
     pub timings: Vec<Option<WordTiming>>,
+    /// Fallback event metadata when this group had to retry with another engine.
+    pub fallback_event: Option<FaFallbackEventTrace>,
 }
 
 /// Narrow transport adapter for FA worker inference.
@@ -98,21 +101,18 @@ async fn infer_groups_v2(
         )
         .await?;
 
-        match parse_group_response(
-            &response,
-            group_index,
-            group,
-            batch.timing_mode,
-        ) {
+        match parse_group_response(&response, group_index, group, batch.timing_mode) {
             Ok(parsed) => parsed_results.push(parsed),
-            Err(error)
-                if should_retry_with_whisper_fallback(batch.engine, &error) =>
-            {
+            Err(error) => {
+                let Some(reason) = whisper_fallback_reason(batch.engine, &error) else {
+                    return Err(error);
+                };
                 warn!(
                     group = group_index,
                     start_ms = group.audio_start_ms(),
                     end_ms = group.audio_end_ms(),
-                    "Wave2Vec FA hit CTC target-length limit; retrying group with Whisper FA"
+                    reason,
+                    "Wave2Vec FA hit recoverable target constraint; retrying group with Whisper FA"
                 );
                 let fallback_namespace = NEXT_FA_REQUEST_NAMESPACE.fetch_add(1, Ordering::Relaxed);
                 let fallback_response = dispatch_group_request(
@@ -124,14 +124,22 @@ async fn infer_groups_v2(
                     FaEngineType::WhisperFa,
                 )
                 .await?;
-                parsed_results.push(parse_group_response(
-                    &fallback_response,
-                    group_index,
-                    group,
-                    batch.timing_mode,
-                )?);
+                parsed_results.push(
+                    parse_group_response(
+                        &fallback_response,
+                        group_index,
+                        group,
+                        batch.timing_mode,
+                    )?
+                    .with_fallback_event(build_fallback_event(
+                        group_index,
+                        group,
+                        batch.engine,
+                        FaEngineType::WhisperFa,
+                        reason,
+                    )),
+                );
             }
-            Err(error) => return Err(error),
         }
     }
 
@@ -193,16 +201,59 @@ fn parse_group_response(
     Ok(FaWorkerGroupResult {
         group_index,
         timings,
+        fallback_event: None,
     })
 }
 
-fn should_retry_with_whisper_fallback(engine: FaEngineType, error: &ServerError) -> bool {
-    engine == FaEngineType::Wave2Vec
-        && matches!(
-            error,
-            ServerError::Validation(message)
-                if message.contains("targets length is too long for CTC")
-        )
+impl FaWorkerGroupResult {
+    fn with_fallback_event(mut self, fallback_event: FaFallbackEventTrace) -> Self {
+        self.fallback_event = Some(fallback_event);
+        self
+    }
+}
+
+fn build_fallback_event(
+    group_index: usize,
+    group: &FaGroup,
+    from_engine: FaEngineType,
+    to_engine: FaEngineType,
+    reason: &str,
+) -> FaFallbackEventTrace {
+    FaFallbackEventTrace {
+        group_index,
+        from_engine: fa_engine_name(from_engine).to_string(),
+        to_engine: fa_engine_name(to_engine).to_string(),
+        reason: reason.to_string(),
+        audio_start_ms: DurationMs(group.audio_start_ms()),
+        audio_end_ms: DurationMs(group.audio_end_ms()),
+    }
+}
+
+fn fa_engine_name(engine: FaEngineType) -> &'static str {
+    match engine {
+        FaEngineType::Wave2Vec => "wave2vec",
+        FaEngineType::WhisperFa => "whisper-fa",
+    }
+}
+
+fn whisper_fallback_reason(engine: FaEngineType, error: &ServerError) -> Option<&'static str> {
+    if engine != FaEngineType::Wave2Vec {
+        return None;
+    }
+
+    match error {
+        ServerError::Validation(message)
+            if message.contains("targets length is too long for CTC") =>
+        {
+            Some("targets length is too long for CTC")
+        }
+        ServerError::Validation(message)
+            if message.contains("targets Tensor shouldn't contain blank index") =>
+        {
+            Some("targets Tensor shouldn't contain blank index")
+        }
+        _ => None,
+    }
 }
 
 /// Build one production-domain `FaInferItem` from the transport-neutral batch
@@ -344,26 +395,65 @@ mod tests {
     }
 
     #[test]
-    fn whisper_fallback_triggers_only_for_wave2vec_ctc_overflow() {
+    fn whisper_fallback_triggers_for_known_wave2vec_target_failures() {
         let overflow = ServerError::Validation(
             "failed to parse worker protocol V2 FA response for group 13 (175765..176365 ms): \
              worker protocol V2 forced-alignment request failed with RuntimeFailure: \
              targets length is too long for CTC"
                 .into(),
         );
-        assert!(should_retry_with_whisper_fallback(
-            FaEngineType::Wave2Vec,
-            &overflow
-        ));
-        assert!(!should_retry_with_whisper_fallback(
-            FaEngineType::WhisperFa,
-            &overflow
-        ));
+        assert_eq!(
+            whisper_fallback_reason(FaEngineType::Wave2Vec, &overflow),
+            Some("targets length is too long for CTC")
+        );
+        assert_eq!(
+            whisper_fallback_reason(FaEngineType::WhisperFa, &overflow),
+            None
+        );
+
+        let blank_index = ServerError::Validation(
+            "failed to parse worker protocol V2 FA response for group 56 (754285..767165 ms): \
+             worker protocol V2 forced-alignment request failed with RuntimeFailure: \
+             ValueError: targets Tensor shouldn't contain blank index. Found tensor([[20, 5, 10, 10]])"
+                .into(),
+        );
+        assert_eq!(
+            whisper_fallback_reason(FaEngineType::Wave2Vec, &blank_index),
+            Some("targets Tensor shouldn't contain blank index")
+        );
+        assert_eq!(
+            whisper_fallback_reason(FaEngineType::WhisperFa, &blank_index),
+            None
+        );
 
         let other = ServerError::Validation("some other parse failure".into());
-        assert!(!should_retry_with_whisper_fallback(
+        assert_eq!(
+            whisper_fallback_reason(FaEngineType::Wave2Vec, &other),
+            None
+        );
+    }
+
+    #[test]
+    fn build_fallback_event_captures_group_and_engine_metadata() {
+        let group = FaGroup {
+            audio_span: TimeSpan::new(175_765, 176_365),
+            words: vec![make_word(0, "hello")],
+            utterance_indices: vec![UtteranceIdx(0)],
+        };
+
+        let event = build_fallback_event(
+            13,
+            &group,
             FaEngineType::Wave2Vec,
-            &other
-        ));
+            FaEngineType::WhisperFa,
+            "targets length is too long for CTC",
+        );
+
+        assert_eq!(event.group_index, 13);
+        assert_eq!(event.from_engine, "wave2vec");
+        assert_eq!(event.to_engine, "whisper-fa");
+        assert_eq!(event.reason, "targets length is too long for CTC");
+        assert_eq!(event.audio_start_ms.0, 175_765);
+        assert_eq!(event.audio_end_ms.0, 176_365);
     }
 }

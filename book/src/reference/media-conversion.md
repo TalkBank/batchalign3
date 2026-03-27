@@ -1,7 +1,7 @@
 # Media Conversion
 
 **Status:** Current
-**Last updated:** 2026-03-27 11:18 EDT
+**Last updated:** 2026-03-27 14:44 EDT
 
 ## Overview
 
@@ -41,8 +41,8 @@ batchalign3 [--server http://net:8001] align input/ output/ --lang eng
   │
   ├─ CLI: discover .cha files in input/ (sorted largest-first)
   ├─ CLI: detect dispatch mode
-  │     paths_mode (local daemon): audio sits alongside .cha files
-  │     content mode (remote --server): .cha text POSTed, server resolves media
+  │     paths_mode / execution-host local: audio sits alongside .cha files
+  │     content mode: .cha text POSTed, server resolves media from its own view
   │
   ├─ Server: POST /jobs/submit → create job (Queued → Running)
   │
@@ -189,7 +189,7 @@ does not abort the entire job.
 Before conversion can happen, the server must find the audio file.
 Resolution depends on the dispatch mode:
 
-### paths_mode (local daemon)
+### paths_mode / execution-host local
 
 Audio files sit alongside the `.cha` files in the input directory. The
 server looks for a file with the same stem and a known media extension:

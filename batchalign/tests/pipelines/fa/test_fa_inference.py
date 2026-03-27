@@ -124,22 +124,38 @@ def _install_whisper_alignment_helpers(monkeypatch) -> None:
     )
 
 
-def _install_torchaudio_alignment_helpers(monkeypatch) -> None:
+def _install_torchaudio_alignment_helpers(
+    monkeypatch,
+    *,
+    dictionary: dict[str, int] | None = None,
+    spans: list[_Span] | None = None,
+    capture: dict[str, Any] | None = None,
+) -> None:
     """Install fake torchaudio alignment helpers for Wave2Vec FA tests."""
 
+    if dictionary is None:
+        dictionary = {"h": 1, "i": 2, "a": 3, "*": 28}
+    if spans is None:
+        spans = [
+            _Span(10, 20),
+            _Span(20, 30),
+            _Span(30, 40),
+        ]
+
     functional = ModuleType("torchaudio.functional")
-    functional.forced_align = lambda emission, transcript: (
-        torch.tensor([[0, 1, 2]], dtype=torch.int64),
-        torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float32),
-    )
-    functional.merge_tokens = lambda alignments, scores: [
-        _Span(10, 20),
-        _Span(20, 30),
-        _Span(30, 40),
-    ]
+    def _forced_align(emission, transcript):
+        if capture is not None:
+            capture["transcript"] = transcript.clone()
+        return (
+            torch.tensor([list(range(len(spans)))], dtype=torch.int64),
+            torch.zeros((1, len(spans)), dtype=torch.float32),
+        )
+
+    functional.forced_align = _forced_align
+    functional.merge_tokens = lambda alignments, scores: spans
 
     pipelines = ModuleType("torchaudio.pipelines")
-    pipelines.MMS_FA = SimpleNamespace(get_dict=lambda: {"h": 1, "i": 2, "a": 3, "*": 0})
+    pipelines.MMS_FA = SimpleNamespace(get_dict=lambda: dictionary)
 
     torchaudio = ModuleType("torchaudio")
     torchaudio.functional = functional
@@ -448,6 +464,62 @@ def test_infer_wave2vec_fa_converts_spans_to_milliseconds(monkeypatch) -> None:
     )
 
     assert result == [("hi", (10, 30)), ("a", (30, 40))]
+
+
+def test_infer_wave2vec_fa_strips_blank_mapped_chars_from_targets(monkeypatch) -> None:
+    """Wave2Vec FA must remove chars whose MMS dictionary maps to CTC blank."""
+
+    captured: dict[str, Any] = {}
+    _install_torchaudio_alignment_helpers(
+        monkeypatch,
+        dictionary={"a": 1, "b": 2, "h": 3, "i": 4, "-": 0, "*": 28},
+        spans=[
+            _Span(10, 20),
+            _Span(20, 30),
+            _Span(30, 40),
+            _Span(40, 50),
+        ],
+        capture=captured,
+    )
+
+    handle = SimpleNamespace(model=_FakeWave2VecModel(), sample_rate=1000)
+
+    result = infer_wave2vec_fa(
+        handle,
+        torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float32),
+        ["a-b", "hi"],
+    )
+
+    assert captured["transcript"].tolist() == [[1, 2, 3, 4]]
+    assert result == [("a-b", (10, 30)), ("hi", (30, 50))]
+
+
+def test_infer_wave2vec_fa_uses_wildcard_when_blank_sanitization_empties_word(
+    monkeypatch,
+) -> None:
+    """Wave2Vec FA should keep word slots even if blank-sanitization removes all chars."""
+
+    captured: dict[str, Any] = {}
+    _install_torchaudio_alignment_helpers(
+        monkeypatch,
+        dictionary={"a": 1, "-": 0, "*": 28},
+        spans=[
+            _Span(10, 20),
+            _Span(20, 30),
+        ],
+        capture=captured,
+    )
+
+    handle = SimpleNamespace(model=_FakeWave2VecModel(), sample_rate=1000)
+
+    result = infer_wave2vec_fa(
+        handle,
+        torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float32),
+        ["-", "a"],
+    )
+
+    assert captured["transcript"].tolist() == [[28, 1]]
+    assert result == [("-", (10, 20)), ("a", (20, 30))]
 
 
 def test_batch_infer_fa_whisper_reuses_audio_cache_and_shapes_token_results(monkeypatch) -> None:

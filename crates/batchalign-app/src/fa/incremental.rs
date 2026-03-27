@@ -91,6 +91,7 @@ pub(crate) async fn process_fa_incremental(
             pre_injection_timings: Vec::new(),
             timing_mode: fa_params.timing_mode,
             violations: Vec::new(),
+            fallback_events: Vec::new(),
         });
     }
 
@@ -123,6 +124,7 @@ pub(crate) async fn process_fa_incremental(
             pre_injection_timings: Vec::new(),
             timing_mode: fa_params.timing_mode,
             violations: Vec::new(),
+            fallback_events: Vec::new(),
         });
     }
 
@@ -235,6 +237,7 @@ pub(crate) async fn process_fa_incremental(
     }
 
     let transport = FaWorkerTransport::production(services);
+    let mut fallback_events = Vec::new();
 
     // Send miss groups through the shared FA worker transport adapter.
     if !miss_indices.is_empty() {
@@ -253,6 +256,9 @@ pub(crate) async fn process_fa_incremental(
         for (parsed_idx, parsed_result) in parsed_results.iter().enumerate() {
             let miss_idx = parsed_result.group_index;
             let timings = parsed_result.timings.clone();
+            if let Some(event) = parsed_result.fallback_event.clone() {
+                fallback_events.push(event);
+            }
 
             let ba_version = env!("CARGO_PKG_VERSION");
             if let Ok(cache_data) = serde_json::to_value(&timings)
@@ -339,6 +345,7 @@ pub(crate) async fn process_fa_incremental(
         pre_injection_timings,
         timing_mode: fa_params.timing_mode,
         violations,
+        fallback_events,
     })
 }
 

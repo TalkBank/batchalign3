@@ -9,7 +9,8 @@ use batchalign_chat_ops::fa::FaTimingMode;
 use batchalign_chat_ops::morphosyntax::RetokenizationInfo;
 
 use super::traces::{
-    FaGroupTrace, FaTimelineTrace, RetokenizationTrace, TimingTrace, ViolationTrace,
+    FaFallbackEventTrace, FaGroupTrace, FaTimelineTrace, RetokenizationTrace, TimingTrace,
+    ViolationTrace,
 };
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,8 @@ pub struct FaResult {
     pub timing_mode: FaTimingMode,
     /// Post-validation violations.
     pub violations: Vec<ViolationTrace>,
+    /// Engine fallback events captured during worker inference.
+    pub fallback_events: Vec<FaFallbackEventTrace>,
 }
 
 impl FaResult {
@@ -39,6 +42,7 @@ impl FaResult {
             post_injection_timings: Vec::new(), // TODO Phase 4
             timing_mode: format!("{:?}", self.timing_mode),
             violations: self.violations,
+            fallback_events: self.fallback_events,
         }
     }
 }

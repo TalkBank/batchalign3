@@ -15,8 +15,9 @@
 //!    numeric exit codes so callers (scripts, CI) can distinguish failure modes.
 //!
 //! The binary itself never loads ML models or processes CHAT files directly.
-//! Processing commands are forwarded to a server (explicit or local
-//! daemon) which in turn delegates to Python worker processes.
+//! Processing commands route either into direct in-process execution via
+//! `DirectHost` or into an explicit server, both of which delegate ML work to
+//! Python worker processes.
 
 use clap::Parser;
 use opentelemetry::KeyValue;

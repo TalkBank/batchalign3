@@ -62,7 +62,7 @@ pub struct DispatchRequest<'a> {
     pub use_tui: bool,
     /// Whether to auto-open the dashboard.
     pub open_dashboard: bool,
-    /// Whether to force CPU execution for local daemons.
+    /// Whether to force CPU execution for local worker processes.
     pub force_cpu: bool,
     /// Optional before-path input for incremental workflows.
     pub before: Option<&'a std::path::Path>,

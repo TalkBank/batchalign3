@@ -131,6 +131,7 @@ pub(crate) async fn run_fa_impl(
             pre_injection_timings: Vec::new(),
             timing_mode: fa_params.timing_mode,
             violations: Vec::new(),
+            fallback_events: Vec::new(),
         });
     }
 
@@ -142,6 +143,7 @@ pub(crate) async fn run_fa_impl(
             pre_injection_timings: Vec::new(),
             timing_mode: fa_params.timing_mode,
             violations: Vec::new(),
+            fallback_events: Vec::new(),
         });
     }
 
@@ -168,6 +170,7 @@ pub(crate) async fn run_fa_impl(
             pre_injection_timings: Vec::new(),
             timing_mode: fa_params.timing_mode,
             violations: Vec::new(),
+            fallback_events: Vec::new(),
         });
     }
 
@@ -200,6 +203,7 @@ pub(crate) async fn run_fa_impl(
             pre_injection_timings: Vec::new(),
             timing_mode: fa_params.timing_mode,
             violations: Vec::new(),
+            fallback_events: Vec::new(),
         });
     }
 
@@ -313,6 +317,7 @@ pub(crate) async fn run_fa_impl(
     }
 
     let transport = FaWorkerTransport::production(services);
+    let mut fallback_events = Vec::new();
 
     // 6. Dispatch miss groups through the FA worker transport adapter
     if !miss_indices.is_empty() {
@@ -331,6 +336,9 @@ pub(crate) async fn run_fa_impl(
         for (parsed_idx, parsed_result) in parsed_results.iter().enumerate() {
             let miss_idx = parsed_result.group_index;
             let timings = parsed_result.timings.clone();
+            if let Some(event) = parsed_result.fallback_event.clone() {
+                fallback_events.push(event);
+            }
 
             // Cache the result
             let ba_version = env!("CARGO_PKG_VERSION");
@@ -431,6 +439,7 @@ pub(crate) async fn run_fa_impl(
         pre_injection_timings,
         timing_mode: fa_params.timing_mode,
         violations,
+        fallback_events,
     })
 }
 

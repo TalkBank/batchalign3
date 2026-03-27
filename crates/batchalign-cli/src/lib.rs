@@ -33,8 +33,9 @@
 //!
 //! 1. **Single-server** (`--server URL`): The CLI reads local `.cha` files,
 //!    POSTs their content (~2 KB each) to the server, polls for completion,
-//!    and writes results to the output directory. Audio-dependent commands
-//!    that need client-local media fall back to direct local execution.
+//!    and writes results to the output directory. Audio-dependent commands in
+//!    this mode must use filesystem paths that are visible on the execution
+//!    host rather than relying on client-local media fallback.
 //!
 //! 2. **Direct local execution**: When no explicit server is specified, the
 //!    CLI prepares a local submission and runs it inline through the shared

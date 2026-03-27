@@ -175,6 +175,8 @@ pub struct FaTimelineTrace {
     pub timing_mode: String,
     /// Validation violations detected (e.g. E362, E704).
     pub violations: Vec<ViolationTrace>,
+    /// Engine fallback events that occurred while aligning this file.
+    pub fallback_events: Vec<FaFallbackEventTrace>,
 }
 
 /// A single FA group (time-windowed batch of utterances).
@@ -188,6 +190,23 @@ pub struct FaGroupTrace {
     pub utterance_indices: Vec<usize>,
     /// Words in this group.
     pub words: Vec<String>,
+}
+
+/// One forced-alignment engine fallback that occurred for a single group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FaFallbackEventTrace {
+    /// Group index within the file-local FA grouping.
+    pub group_index: usize,
+    /// Engine originally requested by the Rust control plane.
+    pub from_engine: String,
+    /// Engine actually used for the retry.
+    pub to_engine: String,
+    /// Human-readable reason why the fallback was triggered.
+    pub reason: String,
+    /// Audio start time of the affected group in ms.
+    pub audio_start_ms: DurationMs,
+    /// Audio end time of the affected group in ms.
+    pub audio_end_ms: DurationMs,
 }
 
 /// Start/end timing for a single word.

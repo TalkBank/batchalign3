@@ -245,6 +245,33 @@ def infer_wave2vec_fa(
     import torchaudio.functional as AF
     from torchaudio.pipelines import MMS_FA as bundle
 
+    def _build_target_tokens(
+        source_words: list[str],
+        dictionary: dict[str, int],
+    ) -> tuple[torch.Tensor, list[int]]:
+        # MMS_FA uses CTC blank index 0 internally, and at least '-' maps there in
+        # the live dictionary. Strip blank-mapped chars at the engine boundary
+        # instead of changing the shared word model. If a word would become empty,
+        # fall back to the wildcard token so word-slot accounting still works.
+        wildcard = dictionary["*"]
+        blank_index = 0
+        transcript_tokens: list[int] = []
+        word_lengths: list[int] = []
+
+        for word in source_words:
+            word_tokens: list[int] = []
+            for char in word.lower():
+                token = dictionary.get(char, wildcard)
+                if token == blank_index:
+                    continue
+                word_tokens.append(token)
+            if not word_tokens:
+                word_tokens = [wildcard]
+            transcript_tokens.extend(word_tokens)
+            word_lengths.append(len(word_tokens))
+
+        return torch.tensor(transcript_tokens, dtype=torch.int64), word_lengths
+
     device = next(handle.model.parameters()).device
 
     audio = audio_chunk.to(device)
@@ -252,11 +279,7 @@ def infer_wave2vec_fa(
     emission = emission.cpu().detach()
 
     dictionary = bundle.get_dict()
-    transcript = torch.tensor([
-        dictionary.get(c, dictionary["*"])
-        for word in words
-        for c in word.lower()
-    ])
+    transcript, word_lengths = _build_target_tokens(words, dictionary)
 
     path, scores = AF.forced_align(emission, transcript.unsqueeze(0))
     alignments, scores = path[0], scores[0]
@@ -271,7 +294,7 @@ def infer_wave2vec_fa(
             i += length
         return ret
 
-    word_spans = unflatten(merged_path, [len(word) for word in words])
+    word_spans = unflatten(merged_path, word_lengths)
     ratio = audio.size(0) / emission.size(1)
     result: list[tuple[str, tuple[int, int]]] = [
         (word, (int(((spans[0].start * ratio) / handle.sample_rate) * 1000),

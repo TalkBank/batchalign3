@@ -69,10 +69,11 @@ fn config_port(layout: &RuntimeLayout) -> Result<u16, CliError> {
 /// do not interfere with each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaemonProfile {
-    /// The primary daemon that handles all commands (morphotag, align,
-    /// translate, etc.). Selected by default when the user runs any
-    /// processing command without `--server`. Uses the system or
-    /// venv Python resolved by [`resolve_python_executable()`].
+    /// The primary managed daemon profile for explicit `serve` lifecycle
+    /// commands and compatibility helpers. Local processing commands no longer
+    /// select this profile by default; they run through direct mode unless the
+    /// user explicitly targets a server. Uses the system or venv Python
+    /// resolved by [`resolve_python_executable()`].
     Main,
     /// A secondary daemon dedicated to transcribe workloads that require
     /// a different Python environment (e.g. Python 3.12 with

@@ -1,7 +1,7 @@
 # Forced Alignment Design
 
 **Status:** Current
-**Last updated:** 2026-03-27 11:18 EDT
+**Last updated:** 2026-03-27 14:44 EDT
 
 ## Overview
 
@@ -63,6 +63,40 @@ Before alignment can begin, two steps must succeed:
    `~/.batchalign3/media_cache/`. See [ensure_wav](media-conversion.md#ensure_wav--conversion-cache).
 
 Both steps happen in the Rust server before any Python worker is invoked.
+
+## Execution flow and ownership
+
+The most important architectural fact is that **direct mode and explicit server
+mode share the same FA pipeline**.
+
+- Without `--server`, the CLI runs `align` through `DirectHost`. No HTTP server
+  or daemon is spawned for that path.
+- With `--server`, `align` submits a shared-filesystem `paths_mode` job. The
+  execution host must be able to read the submitted source path, resolve media
+  from that host's local filesystem view, and write the requested output path.
+
+Both routes end up in `process_one_fa_file()` in
+`crates/batchalign-app/src/runner/dispatch/fa_pipeline.rs`.
+
+```mermaid
+flowchart TD
+    start["align request"]
+    host{"direct or\n--server?"}
+    direct["DirectHost\ninline execution"]
+    server["ServerBackend\nqueued paths_mode job"]
+    media["Resolve media on the\nexecution host"]
+    wav["ensure_wav()\ncontainer → cached WAV if needed"]
+    reuse["%wor / incremental reuse"]
+    utr["Optional UTR pre-pass\nor fallback UTR"]
+    fa["FA worker transport\nWave2Vec / Whisper"]
+    inject["Inject timings\n+ regenerate %wor"]
+    traces["Optional debug traces\n+ final output"]
+
+    start --> host
+    host --> direct --> media
+    host --> server --> media
+    media --> wav --> reuse --> utr --> fa --> inject --> traces
+```
 
 ## Pipeline: UTR then FA
 
@@ -204,6 +238,56 @@ Wave2Vec CTC alignment) to get precise word-level timestamps.
 The FA model returns timestamps **relative to the chunk start** (0-based). These
 must be converted to absolute timestamps by adding the group's `audio_start_ms`
 offset before injection into the AST.
+
+### Failure points, recovery, and what the user now sees
+
+The recent bug fixes were mostly about making this part honest:
+
+- surface the **real per-group FA parse error** instead of collapsing it into a
+  later generic "missing timings" failure,
+- retry one specific real-world Wave2Vec failure mode with Whisper FA,
+- preserve a trace of that fallback so operators can confirm what happened.
+
+```mermaid
+flowchart TD
+    miss["FA miss groups"]
+    cache{"FA cache hit?"}
+    worker["dispatch_group_request()\nexecute_v2('fa')"]
+    parse{"parse_group_response()\nOK?"}
+    ctc{"Wave2Vec CTC overflow?\n('targets length is too long for CTC')"}
+    whisper["Retry same group with\nWhisper FA"]
+    timings["collect_final_timings()"]
+    utr_retry{"Retryable file-level\nfailure on untimed input\nand fallback UTR unused?"}
+    utr["run_utr_pass() once\nthen retry file"]
+    terminal["Terminal align error\nwith real message"]
+    success["Inject timings,\nwrite output,\nstore traces"]
+
+    miss --> cache
+    cache -->|yes| timings
+    cache -->|no| worker --> parse
+    parse -->|yes| timings
+    parse -->|no| ctc
+    ctc -->|yes| whisper --> parse
+    ctc -->|no| utr_retry
+    timings -->|complete| success
+    timings -->|missing group(s)| terminal
+    utr_retry -->|yes| utr --> miss
+    utr_retry -->|no| terminal
+```
+
+Current recovery behavior is intentionally narrow:
+
+1. **Cache hit** — reuse per-group FA timings immediately.
+2. **Worker parse error** — fail fast with the real group-level error message
+   and audio window.
+3. **Exact Wave2Vec CTC overflow** — retry that same group once with Whisper FA.
+4. **Retryable file-level failure on untimed input** — attempt fallback UTR once,
+   then retry the file.
+5. **Anything else** — fail the file with the real surfaced error.
+
+The important nuance is that the new Wave2Vec → Whisper recovery is **not** a
+generic "retry everything with Whisper" policy. Today it is a targeted recovery
+for the known `targets length is too long for CTC` failure.
 
 ### Post-processing
 
@@ -389,6 +473,68 @@ Both caches use the same SQLite database (the analysis cache — see [Filesystem
 a content hash. If you move or rename the audio file, the cache will miss even if the
 content is identical. Conversely, overwriting a file in place with different content
 will miss only if the modification time or size changes (which the OS updates on write).
+
+### Why fallback traces may appear empty on a successful rerun
+
+The new fallback telemetry is attached to the **actual worker inference pass**.
+If the FA cache already contains timings for the relevant group, the rerun may
+succeed without dispatching Wave2Vec at all, so no fallback event will be
+recorded for that run.
+
+When you need to confirm that a real worker pass hit the fallback path, bypass
+FA cache for that run:
+
+```bash
+batchalign3 align \
+  --override-cache-tasks forced_alignment \
+  --debug-dir /tmp/ba-debug \
+  -o output/ \
+  file.cha
+```
+
+That forces a new FA inference pass and makes the fallback event observable in
+the trace payload if the condition is reproduced.
+
+## Diagnostics and trace inspection
+
+`align` now has two useful diagnostic layers:
+
+1. **Better terminal/server errors** — per-group FA parse failures are surfaced
+   with group index and audio window instead of being swallowed and only
+   appearing later as a generic missing-timings failure.
+2. **Optional trace capture** — `--debug-dir PATH` enables `debug_traces`, which
+   stores FA timeline traces including fallback events.
+
+```mermaid
+flowchart TD
+    run["Run align with --debug-dir"]
+    mode{"direct or\nserver?"}
+    direct["DirectHost\nexports debug-traces.json\nin job staging dir"]
+    server["GET /jobs/{id}/traces\nreturns JobTraces JSON"]
+    fa_trace["fa_timeline"]
+    fallback["fallback_events[]\n(group_index, from_engine,\nto_engine, reason,\naudio_start_ms, audio_end_ms)"]
+
+    run --> mode
+    mode -->|direct| direct --> fa_trace
+    mode -->|server| server --> fa_trace
+    fa_trace --> fallback
+```
+
+For explicit server mode:
+
+```bash
+curl http://127.0.0.1:8001/jobs/JOB_ID/traces | python3 -m json.tool
+```
+
+For direct mode, the CLI prints stable debug handles after submission; the trace
+payload is exported as `debug-traces.json` in the job staging directory.
+
+This is especially useful for confirming:
+
+- whether a file succeeded entirely from cache,
+- whether a Wave2Vec group retried with Whisper,
+- which group/audio window triggered the fallback,
+- whether the final output was produced after fallback or after a plain cache hit.
 
 ## Known Pitfalls
 

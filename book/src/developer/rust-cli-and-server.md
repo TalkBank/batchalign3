@@ -1,7 +1,7 @@
 # Rust CLI and Server
 
 **Status:** Current
-**Last updated:** 2026-03-27 09:21 EDT
+**Last updated:** 2026-03-27 14:44 EDT
 
 This page covers the Rust control plane that powers `batchalign3`: the CLI
 client, the HTTP server, and how to extend them.
@@ -62,9 +62,9 @@ The CLI layer now exposes two contributor-facing named seams:
 
 The dispatcher also consults
 `batchalign_app::released_command_uses_local_audio()` and the shared released
-command catalog to decide whether a requested command can stay on an explicit
-`--server` path or must fall back to direct local execution because it needs
-client-side audio files.
+command catalog to decide whether a requested command uses the shared-filesystem
+audio path under an explicit `--server` submission or can use ordinary
+content-mode submission.
 
 On the app side, the current execution split is now:
 
@@ -77,6 +77,51 @@ On the app side, the current execution split is now:
   event subscription, traces, and runtime shutdown
 - `prepare_workers*()` vs `prepare_direct_workers()` — explicit separation
   between server worker bootstrap and direct local worker bootstrap
+
+### Align / FA host flow
+
+The part that was easiest to misunderstand during the recent `align` emergency
+was **where forced alignment actually runs**.
+
+`align` now has two honest host paths:
+
+- **Direct mode** (no `--server`) does **not** start Axum, an HTTP server, a
+  queue, or registry discovery. The CLI prepares local workers and runs the job
+  through `DirectHost`.
+- **Explicit server mode** (`--server URL`) submits a shared-filesystem
+  `paths_mode` job. The server must be able to read the submitted source paths
+  and write the requested output paths on the execution host.
+
+Both paths converge on the same FA runner code in
+`crates/batchalign-app/src/runner/dispatch/fa_pipeline.rs`.
+
+```mermaid
+flowchart TD
+    cli["batchalign3 align"]
+    route{"--server?"}
+    prep["prepare_paths_submission()\nsource_paths + output_paths\nmedia_mapping + media_subdir"]
+
+    direct["dispatch_direct_mode()"]
+    direct_workers["prepare_direct_workers()"]
+    direct_host["DirectHost::submit_submission()\nDirectHost::run_job()"]
+
+    server["dispatch_single_server()"]
+    post["POST /jobs (paths_mode)"]
+    backend["ServerBackend / queue / orchestrator"]
+
+    runner["process_one_fa_file()\nfa_pipeline.rs"]
+    fa["media resolution\n→ ensure_wav\n→ %wor / incremental reuse\n→ optional UTR\n→ FA transport\n→ traces + output"]
+
+    cli --> route
+    route -->|no| direct
+    route -->|yes| server
+    direct --> prep --> direct_workers --> direct_host --> runner
+    server --> prep --> post --> backend --> runner
+    runner --> fa
+```
+
+That shared convergence is deliberate: direct mode and server mode should differ
+in **host/orchestration** behavior, not in the actual forced-alignment logic.
 
 When the CLI is polling or writing file results, `FileErrorDetail` in
 `crates/batchalign-cli/src/dispatch/helpers.rs` keeps file-scoped failures as a

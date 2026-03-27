@@ -1,7 +1,7 @@
 # Troubleshooting
 
 **Status:** Current
-**Last updated:** 2026-03-27 11:18 EDT
+**Last updated:** 2026-03-27 14:44 EDT
 
 ## Start with verbose output
 
@@ -99,8 +99,8 @@ Force CPU mode:
 batchalign3 --force-cpu morphotag corpus/ -o output/
 ```
 
-The first daemon-backed run is usually slower because models may still need to
-load.
+The first real worker-backed run is usually slower because models may still need
+to load.
 
 ## Job deferred or rejected due to memory pressure
 
@@ -163,6 +163,60 @@ After installing, restart the server (`batchalign3 serve stop && serve start`).
 **Media conversion failed — ffmpeg error:** The ffmpeg conversion itself
 failed. Check that the source media file is not corrupted. The error
 message includes ffmpeg's stderr output for diagnosis.
+
+## `align` / forced-alignment failures: where to look first
+
+When `align` fails, the useful distinction is **which stage failed**:
+
+```mermaid
+flowchart TD
+    start["align failed"]
+    media{"Cannot find audio file\nor conversion failed?"}
+    caps{"Command unsupported\nor stale-build warning?"}
+    parse{"Per-group FA parse error\nwith group index/window?"}
+    generic{"Only generic missing-timings\nor unclear success/failure?"}
+
+    media -->|yes| media_fix["Fix execution-host path visibility,\nmedia_mappings, or --media-dir"]
+    media -->|no| caps
+
+    caps -->|yes| caps_fix["Check /health capabilities,\nserver build hash, and client/server versions"]
+    caps -->|no| parse
+
+    parse -->|yes| trace_fix["Re-run with --debug-dir\nand inspect traces / fallback_events"]
+    parse -->|no| generic
+
+    generic -->|yes| cache_fix["Bypass FA cache with\n--override-cache-tasks forced_alignment\nthen inspect traces again"]
+    generic -->|no| done["Use normal output / bug report path"]
+```
+
+The two most useful commands are:
+
+```bash
+batchalign3 -vvvv align \
+  --debug-dir /tmp/ba-debug \
+  --override-cache-tasks forced_alignment \
+  -o output/ \
+  file.cha
+```
+
+and, for server mode:
+
+```bash
+curl http://SERVER:8001/jobs/JOB_ID/traces | python3 -m json.tool
+```
+
+What to look for in the trace payload:
+
+- `fa_timeline.fallback_events[]` — confirms a Wave2Vec group retried with
+  Whisper FA
+- empty `fallback_events` on a successful rerun — often means the run was served
+  from FA cache rather than reproducing the failure
+- group index + `audio_start_ms` / `audio_end_ms` — the exact failing window to
+  reproduce offline
+
+If you are debugging direct mode instead of `--server`, the same `--debug-dir`
+switch enables trace capture, but the trace is exported as `debug-traces.json`
+in the local job staging directory rather than through `/jobs/{id}/traces`.
 
 ## Some utterances lose timing after `align`
 
