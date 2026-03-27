@@ -1,5 +1,9 @@
 //! Shared helper for resolving the current executable path.
 //!
+//! The preferred source of truth is `BATCHALIGN_SELF_EXE`, which the Python
+//! wrapper sets before it `exec`s the packaged Rust binary under
+//! `uv tool install`.
+//!
 //! When installed via `uv tool install`, `std::env::current_exe()` returns the
 //! Python interpreter (e.g. `.../python3.12`) because the `batchalign3` command
 //! is a console_scripts wrapper. Spawning `python3.12 serve start --foreground`
@@ -8,12 +12,25 @@
 //! Detection: if `current_exe()` filename starts with "python", fall back to
 //! bare `"batchalign3"` which `Command::new()` resolves via PATH lookup.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+const SELF_EXE_ENV: &str = "BATCHALIGN_SELF_EXE";
 
 /// Resolve the executable path for spawning a background server or daemon.
 pub(crate) fn resolve_self_exe() -> PathBuf {
+    if let Some(explicit) = resolve_self_exe_env(std::env::var_os(SELF_EXE_ENV)) {
+        return explicit;
+    }
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("batchalign3"));
     resolve_self_exe_from(&exe)
+}
+
+fn resolve_self_exe_env(value: Option<OsString>) -> Option<PathBuf> {
+    match value {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        _ => None,
+    }
 }
 
 /// Testable core of [`resolve_self_exe`].
@@ -35,6 +52,17 @@ pub(crate) fn resolve_self_exe_from(current_exe: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_self_exe_uses_explicit_env_override() {
+        let env = resolve_self_exe_env(Some(OsString::from("/tmp/batchalign3")));
+        assert_eq!(env, Some(PathBuf::from("/tmp/batchalign3")));
+    }
+
+    #[test]
+    fn resolve_self_exe_ignores_empty_env_override() {
+        assert_eq!(resolve_self_exe_env(Some(OsString::new())), None);
+    }
 
     #[test]
     fn resolve_self_exe_detects_python_interpreter() {

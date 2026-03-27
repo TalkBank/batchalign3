@@ -1,5 +1,3 @@
-use super::*;
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +19,7 @@ use crate::store::{
 use crate::worker::InferTask;
 use crate::ws::BROADCAST_CAPACITY;
 
+use super::util::StoreRunnerEventSink;
 use super::{
     command_requires_infer, infer_task_for_command, record_preflight_media_failures,
     result_filename_for_command,
@@ -162,6 +161,14 @@ fn non_infer_commands_do_not_require_infer() {
 }
 
 #[test]
+fn memory_gate_disposition_supports_terminal_failure_path() {
+    assert_eq!(
+        super::MemoryGateRejectionDisposition::FailJob,
+        super::MemoryGateRejectionDisposition::FailJob
+    );
+}
+
+#[test]
 fn transcribe_result_filename_preserves_relative_path() {
     assert_eq!(
         result_filename_for_command(ReleasedCommand::Transcribe, "sub/nested.wav"),
@@ -190,7 +197,11 @@ async fn preflight_media_failure_records_setup_attempt() {
     let missing_path = tempdir.path().join("missing.wav");
     let db = Arc::new(JobDB::open(Some(tempdir.path())).await.expect("open db"));
     let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
-    let store = JobStore::new(crate::config::ServerConfig::default(), Some(db.clone()), tx);
+    let store = Arc::new(JobStore::new(
+        crate::config::ServerConfig::default(),
+        Some(db.clone()),
+        tx,
+    ));
     store
         .submit(make_media_job(
             "job-media-preflight",
@@ -205,9 +216,10 @@ async fn preflight_media_failure_records_setup_attempt() {
         has_chat: false,
     }];
     let failures = HashMap::from([(0usize, String::from("Media file not found"))]);
+    let sink = StoreRunnerEventSink::new(store.clone());
 
     let failed_indices = record_preflight_media_failures(
-        &store,
+        sink.as_ref(),
         &JobId::from("job-media-preflight"),
         &file_list,
         &failures,

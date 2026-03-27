@@ -1,7 +1,7 @@
 # Progress and Feedback
 
 **Status:** Current
-**Last updated:** 2026-03-19
+**Last updated:** 2026-03-27 06:56 EDT
 
 Batchalign reports real-time progress during processing. This page explains what
 to expect for each command, what the progress indicators mean, and when to worry
@@ -9,10 +9,21 @@ versus when to wait.
 
 ## How Progress Works
 
-Every processing job tracks progress at the **file level**. The server reports
-stage transitions and optional sub-file counters (e.g., "Aligning 3/7 groups")
-to all connected clients — the CLI, TUI, and React dashboard all consume the
-same stream.
+Every processing job tracks progress at the **file level**. In server mode, the
+server reports stage transitions and optional sub-file counters (e.g.,
+"Aligning 3/7 groups") to all connected clients — the CLI, TUI, and React
+dashboard all consume the same stream. In direct local mode, the CLI now
+projects the same file-status snapshots from the in-memory direct host, so
+local runs still show live terminal progress without requiring a dashboard.
+
+For direct local runs, the CLI also prints a stable debug handle at startup:
+
+- the direct job ID
+- the local artifact directory for that job
+
+On failures, the CLI prints any persisted bug-report IDs and direct debug
+artifact paths so you can inspect the failed run later without keeping the
+process alive.
 
 There are two progress tiers:
 
@@ -116,8 +127,8 @@ Not every command uses all phases — `morphotag` skips Transcribe and Align;
 |--------|-------------|
 | **Web dashboard** | Two-column layout: job list with pipeline phase bars, system panels (workers, memory, vitals). See [Web Dashboard](dashboard.md) for details. |
 | **Desktop app** | Processing progress view with SSE-driven file list and stage labels |
-| **CLI** | indicatif progress bar with file count and elapsed time |
-| **TUI** | Per-file spinners with pipeline phase dots, elapsed timers, status breakdown, ETA, worker status, memory gauge, scroll indicators |
+| **CLI** | indicatif progress bar with file count, elapsed time, and per-file terminal logs for both server-backed and direct local runs |
+| **TUI** | Per-file spinners with pipeline phase dots, elapsed timers, status breakdown, ETA, worker status, memory gauge, scroll indicators (server-backed jobs only) |
 
 ### TUI Details (`--tui`)
 

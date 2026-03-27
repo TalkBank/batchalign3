@@ -13,7 +13,7 @@ use tokio::sync::Notify;
 use tracing::info;
 
 use crate::api::{JobId, UnixTimestamp};
-use crate::runner::{RunnerContext, job_task};
+use crate::runner::{ServerExecutionHost, job_task};
 use crate::runtime_supervisor::RuntimeSupervisor;
 use crate::store::{JobStore, unix_now};
 
@@ -92,7 +92,7 @@ impl QueueBackend for LocalQueueBackend {
 pub struct QueueDispatcher {
     backend: Arc<dyn QueueBackend>,
     supervisor: RuntimeSupervisor,
-    runner_context: RunnerContext,
+    server_host: ServerExecutionHost,
 }
 
 impl QueueDispatcher {
@@ -100,12 +100,12 @@ impl QueueDispatcher {
     pub fn new(
         backend: Arc<dyn QueueBackend>,
         supervisor: RuntimeSupervisor,
-        runner_context: RunnerContext,
+        server_host: ServerExecutionHost,
     ) -> Self {
         Self {
             backend,
             supervisor,
-            runner_context,
+            server_host,
         }
     }
 
@@ -118,7 +118,7 @@ impl QueueDispatcher {
                 info!(count = poll.ready_job_ids.len(), "Dispatching queued jobs");
                 for job_id in poll.ready_job_ids {
                     self.supervisor
-                        .spawn_job(job_task(job_id, self.runner_context.clone()));
+                        .spawn_job(job_task(job_id, self.server_host.clone()));
                 }
                 continue;
             }

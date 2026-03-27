@@ -1,7 +1,7 @@
 # Installation
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-27 07:46 EDT
 
 Batchalign runs on **Windows, macOS, and Linux**. Pre-built wheels are available from PyPI for all three platforms (macOS ARM + Intel, Linux x86 + ARM, Windows x86).
 
@@ -34,6 +34,11 @@ If you don't have `uv` yet, install it first — then install Batchalign:
 ```bash
 uv tool install batchalign3
 ```
+
+At this stage there is intentionally **not** a separate
+`uv tool install batchalign3-server` package. The default distribution remains
+one install so BA2-style local/direct use stays simple while the unreleased
+server/control-plane architecture is still evolving.
 
 ### macOS
 
@@ -147,6 +152,12 @@ export BATCHALIGN_PYTHON=/path/to/venv/bin/python
 # Windows (PowerShell)
 $env:BATCHALIGN_PYTHON = "C:\path\to\venv\Scripts\python.exe"
 ```
+
+Under `uv tool install`, the visible `batchalign3` command is still a thin
+Python launcher, but it immediately `exec`s the packaged Rust CLI binary. The
+wrapper also preserves the chosen Python runtime for worker subprocesses, so
+`batchalign3 serve ...` and background/daemon flows still run through the same
+Rust CLI/server codepath as direct invocation of the packaged binary.
 
 ## Verify the installation
 

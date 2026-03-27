@@ -36,16 +36,7 @@ pub fn router() -> Router<Arc<AppState>> {
     )
 )]
 pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let (
-        worker_crashes,
-        attempts_started,
-        attempts_retried,
-        deferred_work_units,
-        forced_terminal_errors,
-        memory_gate_aborts,
-    ) = state.control.store.operational_counters().await;
-    let workers_available = state.control.store.workers_available().await;
-    let active_jobs = state.control.store.active_jobs().await;
+    let control_plane = state.control.backend.control_plane_snapshot().await;
     let live_workers = state.workers.pool.worker_count() as i64;
     let live_worker_keys = state.workers.pool.worker_keys();
     let worker_summary = state.workers.pool.worker_summary();
@@ -69,7 +60,7 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
     Json(HealthResponse {
         status: HealthStatus::Ok,
         version: state.build.version.clone(),
-        node_id: state.control.store.node_id().clone(),
+        node_id: control_plane.node_id,
         free_threaded: false, // Rust server dispatches to Python workers
         capabilities: state.workers.capabilities.clone(),
         loaded_pipelines: worker_summary,
@@ -81,20 +72,20 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
             .keys()
             .cloned()
             .collect(),
-        workers_available,
-        job_slots_available: workers_available,
+        workers_available: control_plane.workers_available,
+        job_slots_available: control_plane.workers_available,
         live_workers,
         live_worker_keys,
-        active_jobs,
+        active_jobs: control_plane.active_jobs,
         cache_backend: "sqlite".into(),
         redis_cache_enabled: false,
         redis_cache_connected: false,
-        worker_crashes,
-        attempts_started,
-        attempts_retried,
-        deferred_work_units,
-        forced_terminal_errors,
-        memory_gate_aborts,
+        worker_crashes: control_plane.worker_crashes,
+        attempts_started: control_plane.attempts_started,
+        attempts_retried: control_plane.attempts_retried,
+        deferred_work_units: control_plane.deferred_work_units,
+        forced_terminal_errors: control_plane.forced_terminal_errors,
+        memory_gate_aborts: control_plane.memory_gate_aborts,
         build_hash: state.build.build_hash.clone(),
         warmup_status: state.workers.pool.warmup_status(),
         system_memory_total_mb: total_mb,

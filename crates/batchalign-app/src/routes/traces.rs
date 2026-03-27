@@ -36,13 +36,13 @@ async fn get_job_traces(
     // Verify the job exists
     let _job = state
         .control
-        .store
-        .get(&job_id)
+        .backend
+        .get_job(&job_id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
     // Look up traces from the moka store
-    match state.control.store.trace_store().get(&job_id).await {
+    match state.control.backend.get_job_traces(&job_id).await {
         Some(traces) => Ok(Json((*traces).clone()).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
@@ -58,12 +58,12 @@ async fn get_file_traces(
     let job_id = JobId::from(job_id);
     let _job = state
         .control
-        .store
-        .get(&job_id)
+        .backend
+        .get_job(&job_id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    match state.control.store.trace_store().get(&job_id).await {
+    match state.control.backend.get_job_traces(&job_id).await {
         Some(traces) => match traces.files.get(&file_index) {
             Some(file_traces) => Ok(Json(file_traces.clone()).into_response()),
             None => Ok(StatusCode::NOT_FOUND.into_response()),

@@ -1,9 +1,9 @@
 //! Audio integration tests — real-model forced alignment, transcription,
 //! OpenSMILE, and benchmark with the committed `test.mp3` fixture.
 //!
-//! These tests use paths-mode submissions so the server reads audio from disk.
-//! Assertions are structural (not snapshot-based) because audio model output
-//! is non-deterministic across runs.
+//! These tests use direct paths-mode submissions so the shared direct host reads
+//! audio from disk without an HTTP server hop. Assertions are structural (not
+//! snapshot-based) because audio model output is non-deterministic across runs.
 //!
 //! Requirements:
 //! - Python 3 with batchalign installed
@@ -17,7 +17,7 @@
 
 use crate::common::{
     assert_completed_without_errors, prepare_audio_fixtures, prepare_named_audio,
-    require_live_server, require_revai_key, submit_paths_and_complete,
+    require_live_direct, require_revai_key, submit_paths_and_complete_direct,
 };
 use batchalign_app::api::{JobStatus, ReleasedCommand};
 use batchalign_app::options::{
@@ -125,16 +125,17 @@ fn assert_first_utterance_max_words(chat: &str, label: &str, max_words: usize) {
 /// Forced alignment with Wave2Vec, %wor tier included.
 #[tokio::test]
 async fn golden_align_eng_wav2vec() {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_align_wav2vec");
+    let out_dir = session.state_dir().join("out_align_wav2vec");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -148,9 +149,8 @@ async fn golden_align_eng_wav2vec() {
         ..AlignOptions::default()
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -175,16 +175,17 @@ async fn golden_align_eng_wav2vec() {
 /// Forced alignment with Whisper FA engine, %wor tier included.
 #[tokio::test]
 async fn golden_align_eng_whisper_fa() {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_align_whisper");
+    let out_dir = session.state_dir().join("out_align_whisper");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -198,9 +199,8 @@ async fn golden_align_eng_whisper_fa() {
         ..AlignOptions::default()
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -225,16 +225,17 @@ async fn golden_align_eng_whisper_fa() {
 /// Forced alignment with %wor tier excluded.
 #[tokio::test]
 async fn golden_align_eng_no_wor() {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_align_no_wor");
+    let out_dir = session.state_dir().join("out_align_no_wor");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -248,9 +249,8 @@ async fn golden_align_eng_no_wor() {
         ..AlignOptions::default()
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -280,17 +280,17 @@ async fn golden_align_eng_no_wor() {
 /// Transcribe with Whisper ASR (no diarization).
 #[tokio::test]
 async fn golden_transcribe_eng_whisper() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_whisper");
+    let out_dir = session.state_dir().join("out_transcribe_whisper");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -306,9 +306,8 @@ async fn golden_transcribe_eng_whisper() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -340,17 +339,17 @@ async fn golden_transcribe_eng_revai() {
         return;
     }
 
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_revai");
+    let out_dir = session.state_dir().join("out_transcribe_revai");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -366,9 +365,8 @@ async fn golden_transcribe_eng_revai() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -391,17 +389,17 @@ async fn golden_transcribe_eng_revai() {
 /// Transcribe with Whisper ASR and %wor tier.
 #[tokio::test]
 async fn golden_transcribe_eng_whisper_wor() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_wor");
+    let out_dir = session.state_dir().join("out_transcribe_wor");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -417,9 +415,8 @@ async fn golden_transcribe_eng_whisper_wor() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -450,20 +447,20 @@ async fn golden_transcribe_eng_whisper_wor() {
 /// OpenSMILE feature extraction with real audio.
 #[tokio::test]
 async fn golden_opensmile_eng() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Opensmile,
-        "Server does not support OpenSMILE infer",
+        "Direct session does not support OpenSMILE infer",
     )
     .await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_opensmile");
+    let out_dir = session.state_dir().join("out_opensmile");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.csv");
 
@@ -475,9 +472,8 @@ async fn golden_opensmile_eng() {
         feature_set: "eGeMAPSv02".into(),
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Opensmile,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -503,21 +499,21 @@ async fn golden_opensmile_eng() {
 /// Benchmark (WER) with real audio and gold CHAT.
 #[tokio::test]
 async fn golden_benchmark_eng() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Asr,
-        "Server does not support ASR infer (required for benchmark)",
+        "Direct session does not support ASR infer (required for benchmark)",
     )
     .await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
     // Benchmark needs audio + gold CHAT. Submit both as source paths.
-    let out_dir = server.state_dir().join("out_benchmark");
+    let out_dir = session.state_dir().join("out_benchmark");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_audio = out_dir.join("test.csv");
     let output_gold = out_dir.join("test.cha");
@@ -532,9 +528,8 @@ async fn golden_benchmark_eng() {
         merge_abbrev: false.into(),
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Benchmark,
         "eng",
         vec![
@@ -574,18 +569,18 @@ async fn golden_benchmark_eng() {
 
 /// Helper: transcribe a named audio clip and assert valid CHAT output.
 async fn transcribe_audio_clip(audio_name: &str, lang: &str, label: &str) {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_named_audio(server.state_dir(), audio_name, None) else {
+    let Some(fixtures) = prepare_named_audio(session.state_dir(), audio_name, None) else {
         return;
     };
 
     // Output directory per test — server writes {input_basename}.cha here.
-    let out_dir = server.state_dir().join(format!("out_{label}"));
+    let out_dir = session.state_dir().join(format!("out_{label}"));
     std::fs::create_dir_all(&out_dir).expect("mkdir output dir");
     let output_path = out_dir.join(format!("{audio_name}.cha"));
 
@@ -601,9 +596,8 @@ async fn transcribe_audio_clip(audio_name: &str, lang: &str, label: &str) {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         lang,
         vec![fixtures.audio.to_string_lossy().into()],
@@ -623,18 +617,19 @@ async fn transcribe_audio_clip(audio_name: &str, lang: &str, label: &str) {
 
 /// Helper: align a named audio clip with its timed CHAT and assert timing output.
 async fn align_audio_clip(audio_name: &str, chat_name: &str, lang: &str, label: &str) {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_named_audio(server.state_dir(), audio_name, Some(chat_name))
+    let Some(fixtures) = prepare_named_audio(session.state_dir(), audio_name, Some(chat_name))
     else {
         return;
     };
 
     // Output directory per test — server writes {input_basename}.cha here.
-    let out_dir = server.state_dir().join(format!("out_{label}"));
+    let out_dir = session.state_dir().join(format!("out_{label}"));
     std::fs::create_dir_all(&out_dir).expect("mkdir output dir");
     // Use the stripped_chat's filename as the output name (server preserves input basename).
     let input_basename = fixtures
@@ -654,9 +649,8 @@ async fn align_audio_clip(audio_name: &str, chat_name: &str, lang: &str, label: 
         ..AlignOptions::default()
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         lang,
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -752,17 +746,17 @@ async fn transcribe_eng_multi_speaker_whisper() {
 /// regressions where a lightly punctuated run collapses into one giant turn.
 #[tokio::test]
 async fn transcribe_eng_acr_clip_whisper_produces_multiple_utterances() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_named_audio(server.state_dir(), "eng_acr_first13p5", None) else {
+    let Some(fixtures) = prepare_named_audio(session.state_dir(), "eng_acr_first13p5", None) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_eng_acr_clip");
+    let out_dir = session.state_dir().join("out_transcribe_eng_acr_clip");
     std::fs::create_dir_all(&out_dir).expect("mkdir output dir");
     let output_path = out_dir.join("eng_acr_first13p5.cha");
 
@@ -778,9 +772,8 @@ async fn transcribe_eng_acr_clip_whisper_produces_multiple_utterances() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -808,17 +801,19 @@ async fn transcribe_eng_acr_clip_revai_avoids_giant_first_utterance() {
         return;
     }
 
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_named_audio(server.state_dir(), "eng_acr_first13p5", None) else {
+    let Some(fixtures) = prepare_named_audio(session.state_dir(), "eng_acr_first13p5", None) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_eng_acr_clip_revai");
+    let out_dir = session
+        .state_dir()
+        .join("out_transcribe_eng_acr_clip_revai");
     std::fs::create_dir_all(&out_dir).expect("mkdir output dir");
     let output_path = out_dir.join("eng_acr_first13p5.cha");
 
@@ -834,9 +829,8 @@ async fn transcribe_eng_acr_clip_revai_avoids_giant_first_utterance() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -875,23 +869,23 @@ async fn align_eng_multi_speaker_wav2vec() {
 /// Tests that speaker diarization pipeline works end-to-end.
 #[tokio::test]
 async fn transcribe_eng_diarize() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
     // Also need speaker diarization model.
-    if !server.has_infer_task(InferTask::Speaker) {
-        eprintln!("SKIP: Server does not support speaker diarization");
+    if !session.has_infer_task(InferTask::Speaker) {
+        eprintln!("SKIP: Direct session does not support speaker diarization");
         return;
     }
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_transcribe_diarize");
+    let out_dir = session.state_dir().join("out_transcribe_diarize");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -907,9 +901,8 @@ async fn transcribe_eng_diarize() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -933,17 +926,17 @@ async fn transcribe_eng_diarize() {
 /// This test will FAIL until D1 (DisfluencyReplacementEngine) is implemented.
 #[tokio::test]
 async fn parity_transcribe_disfluency_markup() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_disfluency");
+    let out_dir = session.state_dir().join("out_disfluency");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -959,9 +952,8 @@ async fn parity_transcribe_disfluency_markup() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],
@@ -990,17 +982,17 @@ async fn parity_transcribe_disfluency_markup() {
 /// This test will FAIL until D1b (NgramRetraceEngine) is implemented.
 #[tokio::test]
 async fn parity_transcribe_retrace_markup() {
-    let Some(server) =
-        require_live_server(InferTask::Asr, "Server does not support ASR infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Asr, "Direct session does not support ASR infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
-    let out_dir = server.state_dir().join("out_retrace");
+    let out_dir = session.state_dir().join("out_retrace");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     let output_path = out_dir.join("test.cha");
 
@@ -1016,9 +1008,8 @@ async fn parity_transcribe_retrace_markup() {
         batch_size: 8,
     });
 
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Transcribe,
         "eng",
         vec![fixtures.audio.to_string_lossy().into()],

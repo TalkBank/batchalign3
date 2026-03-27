@@ -14,7 +14,8 @@ pub(super) use error_classification::user_facing_error;
 pub(crate) use error_classification::{classify_worker_error, is_retryable_worker_failure};
 
 pub(crate) use file_status::{
-    FileRunTracker, FileStage, FileTaskOutcome, ProgressSender, ProgressUpdate,
+    FileRunTracker, FileStage, FileTaskOutcome, ProgressSender, ProgressUpdate, RunnerEventSink,
+    StoreRunnerEventSink,
 };
 pub(super) use file_status::{
     drain_supervised_file_tasks, force_terminal_file_states, set_file_progress,

@@ -1,14 +1,15 @@
 //! Compare parity tests backed by committed `batchalign2-master` outputs.
 //!
-//! These tests run the released BA3 compare command end-to-end in paths mode,
-//! then compare both the emitted CHAT and the `.compare.csv` sidecar against
-//! committed artifacts generated from live `batchalign2-master` runs.
+//! These tests run the released BA3 compare command end-to-end in direct
+//! paths mode, then compare both the emitted CHAT and the `.compare.csv`
+//! sidecar against committed artifacts generated from live
+//! `batchalign2-master` runs.
 
 use std::path::PathBuf;
 
 use crate::common::{
     assert_ba2_parity, assert_exact_text_parity, load_ba2_compare_master_golden,
-    load_compare_fixture_pair, require_live_server, submit_paths_and_complete,
+    load_compare_fixture_pair, require_live_direct, submit_paths_and_complete_direct,
 };
 use batchalign_app::api::{JobStatus, ReleasedCommand};
 use batchalign_app::options::{CommandOptions, CommonOptions, CompareOptions};
@@ -25,9 +26,9 @@ fn compare_opts() -> CommandOptions {
 }
 
 async fn run_compare_master_parity(fixture_name: &str) {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer (required for compare parity)",
+        "Direct session does not support morphosyntax infer (required for compare parity)",
     )
     .await
     else {
@@ -53,9 +54,8 @@ async fn run_compare_master_parity(fixture_name: &str) {
     std::fs::write(&gold_path, gold_text).expect("write gold fixture");
 
     let requested_output = output_dir.join(format!("{fixture_name}.cha"));
-    let (info, outputs) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, outputs) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Compare,
         "eng",
         vec![main_path.to_string_lossy().to_string()],

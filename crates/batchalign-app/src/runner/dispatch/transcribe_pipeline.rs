@@ -8,17 +8,18 @@ use crate::api::{DisplayPath, EngineVersion, NumWorkers, RevAiJobId, UnixTimesta
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
 use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
+use crate::runner::DispatchHostContext;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::worker::pool::WorkerPool;
 use tracing::warn;
 
-use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
+use crate::store::{RunnerJobSnapshot, unix_now};
 use crate::transcribe::TranscribeOptions;
 
 use super::super::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, classify_server_error, drain_supervised_file_tasks,
-    is_retryable_worker_failure, spawn_progress_forwarder, spawn_supervised_file_task,
-    user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, RunnerEventSink, classify_server_error,
+    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_progress_forwarder,
+    spawn_supervised_file_task, user_facing_error,
 };
 use super::TranscribeDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -47,7 +48,7 @@ pub(crate) struct TranscribeDispatchRuntime {
 /// processed concurrently up to `num_workers` at a time, bounded by a semaphore.
 pub(crate) async fn dispatch_transcribe_infer(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     runtime: TranscribeDispatchRuntime,
     plan: TranscribeDispatchPlan,
 ) {
@@ -57,6 +58,7 @@ pub(crate) async fn dispatch_transcribe_infer(
         should_merge_abbrev,
     } = plan;
     let job_id = &job.identity.job_id;
+    let sink = host.sink().clone();
 
     // Process files concurrently, bounded by available workers.
     let file_parallelism = runtime
@@ -77,7 +79,7 @@ pub(crate) async fn dispatch_transcribe_infer(
             tracing::warn!("file semaphore closed during shutdown");
             break;
         };
-        let store = store.clone();
+        let sink = sink.clone();
         let pool = runtime.pool.clone();
         let cache = runtime.cache.clone();
         let job = job.clone();
@@ -95,7 +97,7 @@ pub(crate) async fn dispatch_transcribe_infer(
                 let services = PipelineServices::new(&pool, &cache, &engine_version);
                 process_one_transcribe_file(
                     &job,
-                    &store,
+                    sink.clone(),
                     services,
                     &file,
                     &mut opts,
@@ -107,7 +109,8 @@ pub(crate) async fn dispatch_transcribe_infer(
         ));
     }
 
-    let abnormal_exits = drain_supervised_file_tasks(store, job_id, &job.cancel_token, tasks).await;
+    let abnormal_exits =
+        drain_supervised_file_tasks(sink.as_ref(), job_id, &job.cancel_token, tasks).await;
     if abnormal_exits > 0 {
         warn!(
             job_id = %job_id,
@@ -132,7 +135,7 @@ fn transcribe_media_name_for_chat(
 /// Process a single audio file through the transcribe pipeline.
 async fn process_one_transcribe_file(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    sink: Arc<dyn RunnerEventSink>,
     services: PipelineServices<'_>,
     file: &crate::store::PendingJobFile,
     opts: &mut TranscribeOptions,
@@ -143,7 +146,7 @@ async fn process_one_transcribe_file(
     let correlation_id = &*job.identity.correlation_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
-    let lifecycle = FileRunTracker::new(store, job_id, filename);
+    let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename);
     let started_at = unix_now();
 
     lifecycle
@@ -203,7 +206,7 @@ async fn process_one_transcribe_file(
 
         // Create a progress forwarder for the transcribe pipeline stages.
         let progress_tx =
-            spawn_progress_forwarder(store.clone(), job_id.clone(), filename.to_string());
+            spawn_progress_forwarder(sink.clone(), job_id.clone(), filename.to_string());
 
         let debug_dir = job
             .dispatch
@@ -320,11 +323,13 @@ mod tests {
     use crate::api::{LanguageCode3, LanguageSpec};
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
-    use crate::options::{AsrEngineName, FaEngineName};
-    use crate::options::{CommandOptions, CommonOptions, TranscribeOptions as TranscribeCommand};
+    use crate::options::{
+        AsrEngineName, CommandOptions, CommonOptions, TranscribeOptions as TranscribeCommand,
+    };
+    use crate::runner::util::StoreRunnerEventSink;
     use crate::store::{
         FileStatus, Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity,
-        JobLeaseState, JobRuntimeControl, JobScheduleState, JobSourceContext,
+        JobLeaseState, JobRuntimeControl, JobScheduleState, JobSourceContext, JobStore,
     };
     use crate::transcribe::AsrBackend;
     use crate::ws::BROADCAST_CAPACITY;
@@ -439,6 +444,7 @@ mod tests {
             .expect("open cache");
         let engine_version = EngineVersion::from("test-asr");
         let services = PipelineServices::new(&pool, &cache, &engine_version);
+        let sink = StoreRunnerEventSink::new(store.clone());
         let mut opts = crate::transcribe::TranscribeOptions {
             backend: AsrBackend::Worker(crate::transcribe::AsrWorkerMode::LocalWhisperV2),
             diarize: false,
@@ -455,7 +461,7 @@ mod tests {
 
         process_one_transcribe_file(
             &snapshot,
-            &store,
+            sink,
             services,
             &file,
             &mut opts,

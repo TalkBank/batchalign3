@@ -12,18 +12,19 @@ use crate::options::{CommandOptions, EngineBackend as _};
 use crate::params::{AudioContext, FaParams};
 use crate::pipeline::PipelineServices;
 use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
+use crate::runner::DispatchHostContext;
 use crate::runner::debug_dumper::DebugDumper;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::worker::pool::WorkerPool;
 use tracing::{info, warn};
 
-use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
+use crate::store::{RunnerJobSnapshot, unix_now};
 
 use super::super::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, classify_server_error, compute_audio_identity,
-    drain_supervised_file_tasks, get_audio_duration_ms, is_retryable_worker_failure,
-    resolve_audio_for_chat_with_media_dir, spawn_progress_forwarder, spawn_supervised_file_task,
-    user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, RunnerEventSink, classify_server_error,
+    compute_audio_identity, drain_supervised_file_tasks, get_audio_duration_ms,
+    is_retryable_worker_failure, resolve_audio_for_chat_with_media_dir, spawn_progress_forwarder,
+    spawn_supervised_file_task, user_facing_error,
 };
 use super::FaDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -55,8 +56,10 @@ pub(crate) struct FaDispatchRuntime {
 struct FaFileContext<'a> {
     /// Immutable runner snapshot for the current job.
     job: &'a RunnerJobSnapshot,
-    /// Store handle used for file lifecycle updates and result persistence.
-    store: &'a Arc<JobStore>,
+    /// Read-only host/runtime context for media resolution and config access.
+    host: DispatchHostContext,
+    /// File/job lifecycle sink for runner-side status updates.
+    sink: Arc<dyn RunnerEventSink>,
     /// Shared worker/cache services for FA and UTR.
     services: PipelineServices<'a>,
     /// Typed FA parameter bundle.
@@ -88,13 +91,14 @@ struct FaFileContext<'a> {
 /// to the worker.
 pub(crate) async fn dispatch_fa_infer(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     runtime: FaDispatchRuntime,
     plan: FaDispatchPlan,
 ) {
     let job_id = &job.identity.job_id;
     let fallback_lang = LanguageCode3::eng();
     let job_lang = job.dispatch.lang.resolve_or(&fallback_lang);
+    let sink = host.sink().clone();
     let fa_params = plan.options.fa_params;
     let should_merge_abbrev = plan.options.merge_abbrev.should_merge();
     let utr_engine = plan.options.utr_engine;
@@ -122,7 +126,8 @@ pub(crate) async fn dispatch_fa_infer(
             tracing::warn!("file semaphore closed during shutdown");
             break;
         };
-        let store = store.clone();
+        let host = host.clone();
+        let sink = sink.clone();
         let pool = runtime.pool.clone();
         let cache = runtime.cache.clone();
         let job = job.clone();
@@ -162,7 +167,8 @@ pub(crate) async fn dispatch_fa_infer(
                 };
                 let context = FaFileContext {
                     job: &job,
-                    store: &store,
+                    host,
+                    sink: sink.clone(),
                     services,
                     fa_params,
                     should_merge_abbrev,
@@ -179,7 +185,8 @@ pub(crate) async fn dispatch_fa_infer(
         ));
     }
 
-    let abnormal_exits = drain_supervised_file_tasks(store, job_id, &job.cancel_token, tasks).await;
+    let abnormal_exits =
+        drain_supervised_file_tasks(sink.as_ref(), job_id, &job.cancel_token, tasks).await;
     if abnormal_exits > 0 {
         warn!(
             job_id = %job_id,
@@ -196,7 +203,8 @@ async fn process_one_fa_file(
 ) -> FileTaskOutcome {
     let FaFileContext {
         job,
-        store,
+        host,
+        sink,
         services,
         fa_params,
         should_merge_abbrev,
@@ -212,7 +220,7 @@ async fn process_one_fa_file(
     let correlation_id = &*job.identity.correlation_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
-    let lifecycle = FileRunTracker::new(store, job_id, filename);
+    let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename);
     let started_at = unix_now();
 
     lifecycle
@@ -260,7 +268,7 @@ async fn process_one_fa_file(
 
         // Strategy 1: Media mapping
         if found.is_none() && !media_mapping.is_empty() {
-            let mapping_root = store.config().media_mappings.get(&media_mapping).cloned();
+            let mapping_root = host.media_mapping_root(&media_mapping).map(str::to_owned);
             if let Some(root) = mapping_root {
                 let file_path = Path::new(filename);
                 let stem = file_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -304,12 +312,12 @@ async fn process_one_fa_file(
         }
 
         // Strategy 3: Media roots from server config
-        if found.is_none() && !store.config().media_roots.is_empty() {
+        if found.is_none() && !host.media_roots().is_empty() {
             let file_stem = Path::new(filename)
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy();
-            'roots: for root in &store.config().media_roots {
+            'roots: for root in host.media_roots() {
                 for ext in crate::runner::util::KNOWN_MEDIA_EXTENSIONS {
                     let candidate = Path::new(root).join(format!("{file_stem}.{ext}"));
                     if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
@@ -397,7 +405,7 @@ async fn process_one_fa_file(
             // Create a progress forwarder so partial-window UTR can report
             // per-window progress (e.g. "Recovering utterance timing 2/5").
             let utr_progress =
-                spawn_progress_forwarder(store.clone(), job_id.clone(), filename.to_string());
+                spawn_progress_forwarder(sink.clone(), job_id.clone(), filename.to_string());
 
             match run_utr_pass(
                 &chat_text,
@@ -454,7 +462,7 @@ async fn process_one_fa_file(
         // Create a progress forwarder so the FA orchestrator can report
         // per-group progress back to the store.
         let progress_tx =
-            spawn_progress_forwarder(store.clone(), job_id.clone(), filename.to_string());
+            spawn_progress_forwarder(sink.clone(), job_id.clone(), filename.to_string());
 
         // Read "before" text for incremental FA if available
         let before_text = if let Some(bp) = before_path {
@@ -505,8 +513,7 @@ async fn process_one_fa_file(
                         fa_timeline: Some(fa_result.into_timeline_trace()),
                         retokenizations: Vec::new(),
                     };
-                    store
-                        .trace_store()
+                    host.trace_store()
                         .upsert_file(job_id, file_index, file_traces)
                         .await;
                     output_text

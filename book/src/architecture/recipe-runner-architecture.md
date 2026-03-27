@@ -1,7 +1,7 @@
 # Recipe-Driven Command Architecture
 
 **Status:** Draft
-**Last updated:** 2026-03-26 14:05 EDT
+**Last updated:** 2026-03-26 21:12 EDT
 
 This document is the replacement architecture decision for
 `command-trait-proposal.md`. That proposal correctly identifies real pain, but
@@ -134,7 +134,8 @@ those differences easier to ignore and harder to inspect.
 ### 3. It under-models runtime ownership
 
 The command-owned catalog does not only record `InferTask`; it also records
-`RunnerDispatchKind` plus the command's explicit performance profile.
+`RunnerDispatchKind` plus the command's authored `CommandExecutionShape`, from
+which the lower-level runtime policy is derived.
 
 That matters because batching, per-file audio handling, benchmark composition,
 and media-analysis dispatch are not implementation trivia. They drive memory

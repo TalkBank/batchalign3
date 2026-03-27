@@ -14,28 +14,25 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
+
 use crate::api::{
-    ContentType, DisplayPath, EngineVersion, JobId, ReleasedCommand, RevAiJobId, UnixTimestamp,
+    ContentType, DisplayPath, EngineVersion, JobId, NumWorkers, ReleasedCommand, RevAiJobId,
+    UnixTimestamp,
 };
 use crate::cache::UtteranceCache;
 use crate::commands::{RunnerDispatchKind, command_runner_dispatch_kind};
-use crate::commands::{
-    align as align_command, avqi as avqi_command, benchmark as benchmark_command,
-    compare as compare_command, coref as coref_command, morphotag as morphotag_command,
-    opensmile as opensmile_command, transcribe as transcribe_command,
-    translate as translate_command, utseg as utseg_command,
-};
-use crate::host_memory::{HostMemoryCoordinator, HostMemoryError};
+use crate::config::ServerConfig;
+use crate::host_memory::{HostMemoryCoordinator, HostMemoryError, JobExecutionPlan};
 use crate::pipeline::PipelineServices;
 use crate::revai::{RevAiPreflightPlan, preflight_submit_audio_paths};
-use crate::scheduling::{DurationMs, FailureCategory, RetryPolicy, WorkUnitKind};
+use crate::scheduling::{FailureCategory, WorkUnitKind};
 use crate::worker::InferTask;
 use crate::worker::pool::WorkerPool;
 use crate::worker::target::task_name as infer_task_name;
 use tracing::{error, info, warn};
 
 use crate::api::JobStatus;
-use crate::queue::QueueBackend;
 use crate::state::resolve_worker_capability_snapshot;
 use crate::store::{JobStore, LeaseRenewalOutcome, RunnerJobSnapshot, unix_now};
 
@@ -48,51 +45,195 @@ pub(crate) use dispatch::{
 };
 use policy::{command_requires_infer, infer_task_for_command, result_filename_for_command};
 use util::{
-    FileRunTracker, FileStage, apply_result_filename, collect_preflight_audio_paths,
-    compute_job_workers, force_terminal_file_states, preflight_validate_media, should_preflight,
+    FileRunTracker, FileStage, RunnerEventSink, StoreRunnerEventSink, apply_result_filename,
+    collect_preflight_audio_paths, compute_job_workers, force_terminal_file_states,
+    preflight_validate_media, should_preflight,
 };
 
 /// Shared dependencies needed to build per-job runner tasks.
 #[derive(Clone)]
-pub(crate) struct RunnerContext {
-    store: Arc<JobStore>,
+pub(crate) struct RunnerExecutionContext {
     pool: Arc<WorkerPool>,
     cache: Arc<UtteranceCache>,
     infer_tasks: Vec<InferTask>,
     engine_versions: BTreeMap<String, String>,
     test_echo_mode: bool,
-    queue: Arc<dyn QueueBackend>,
 }
 
-impl RunnerContext {
-    /// Create the shared dependency bundle for per-job runner tasks.
+impl RunnerExecutionContext {
     pub(crate) fn new(
-        store: Arc<JobStore>,
         pool: Arc<WorkerPool>,
         cache: Arc<UtteranceCache>,
         infer_tasks: Vec<InferTask>,
         engine_versions: BTreeMap<String, String>,
         test_echo_mode: bool,
-        queue: Arc<dyn QueueBackend>,
     ) -> Self {
         Self {
-            store,
             pool,
             cache,
             infer_tasks,
             engine_versions,
             test_echo_mode,
-            queue,
         }
     }
 }
 
+/// Shared execution engine built on one resolved runtime context.
+#[derive(Clone)]
+pub(crate) struct ExecutionEngine {
+    context: RunnerExecutionContext,
+}
+
+impl ExecutionEngine {
+    /// Build one shared execution engine over a resolved runtime context.
+    pub(crate) fn new(context: RunnerExecutionContext) -> Self {
+        Self { context }
+    }
+
+    async fn dispatch_job(
+        &self,
+        request: JobDispatchRequest,
+        host: &DispatchHostContext,
+    ) -> Result<(), crate::error::ServerError> {
+        dispatch_job_with_execution_context(request, host, &self.context).await
+    }
+}
+
+/// Read-only host/runtime context consulted during shared command dispatch.
+///
+/// This keeps performance policy and media-resolution config explicit host
+/// concerns without threading the full mutable `JobStore` through command code.
+#[derive(Clone)]
+pub(crate) struct DispatchHostContext {
+    store: Arc<JobStore>,
+    config: Arc<ServerConfig>,
+    sink: Arc<dyn RunnerEventSink>,
+}
+
+impl DispatchHostContext {
+    fn from_store(store: Arc<JobStore>) -> Self {
+        Self {
+            store: store.clone(),
+            config: Arc::new(store.config().clone()),
+            sink: StoreRunnerEventSink::new(store),
+        }
+    }
+
+    pub(crate) fn config(&self) -> &ServerConfig {
+        self.config.as_ref()
+    }
+
+    pub(crate) fn sink(&self) -> &Arc<dyn RunnerEventSink> {
+        &self.sink
+    }
+
+    pub(crate) fn media_mapping_root(&self, key: &str) -> Option<&str> {
+        self.config.media_mappings.get(key).map(String::as_str)
+    }
+
+    pub(crate) fn media_roots(&self) -> &[String] {
+        &self.config.media_roots
+    }
+
+    pub(crate) fn trace_store(&self) -> &crate::trace_store::TraceStore {
+        self.store.trace_store()
+    }
+}
+
+/// Shared server-owned host dependencies needed to build per-job runner tasks.
+#[derive(Clone)]
+pub(crate) struct ServerExecutionHost {
+    store: Arc<JobStore>,
+    engine: ExecutionEngine,
+    orchestrator: Arc<dyn QueuedJobOrchestrator>,
+}
+
+impl ServerExecutionHost {
+    /// Build the server-owned host bundle around one execution engine.
+    pub(crate) fn new(
+        store: Arc<JobStore>,
+        engine: ExecutionEngine,
+        orchestrator: Arc<dyn QueuedJobOrchestrator>,
+    ) -> Self {
+        Self {
+            store,
+            engine,
+            orchestrator,
+        }
+    }
+}
+
+/// Shared direct-execution host dependencies needed to run one inline job.
+#[derive(Clone)]
+pub(crate) struct DirectExecutionHost {
+    store: Arc<JobStore>,
+    engine: ExecutionEngine,
+}
+
+impl DirectExecutionHost {
+    /// Build one direct-execution host bundle around one execution engine.
+    pub(crate) fn new(store: Arc<JobStore>, engine: ExecutionEngine) -> Self {
+        Self { store, engine }
+    }
+}
+
+/// Execution-phase request handed from the host-owned runner wrapper into the
+/// shared dispatch kernel.
+struct JobDispatchRequest {
+    job: Arc<RunnerJobSnapshot>,
+    file_list: Vec<crate::store::PendingJobFile>,
+    num_workers: NumWorkers,
+    rev_job_ids: Arc<HashMap<PathBuf, RevAiJobId>>,
+}
+
+/// Host-memory reservation failures separated from the rest of job execution.
+enum ExecutionReservationError {
+    Capacity {
+        requested_workers: NumWorkers,
+        error: HostMemoryError,
+    },
+    Fatal(crate::error::ServerError),
+}
+
+/// Host-owned orchestration decision after a memory-gate rejection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum MemoryGateRejectionDisposition {
+    /// The host re-queued the job for a later eligibility deadline.
+    Requeued { retry_at: UnixTimestamp },
+    /// The host wants the runner to fail the job instead of re-queueing it.
+    FailJob,
+}
+
+/// Host-owned orchestration seam for queued job execution policy.
+///
+/// This keeps the shared runner from knowing how a specific server backend
+/// persists re-queues, computes backoff, or wakes its scheduler when a job
+/// cannot currently run.
+#[async_trait]
+pub(crate) trait QueuedJobOrchestrator: Send + Sync {
+    /// Handle a host-memory rejection for one queued job.
+    async fn handle_memory_gate_rejection(
+        &self,
+        sink: &Arc<dyn RunnerEventSink>,
+        job_id: &JobId,
+        requested_workers: NumWorkers,
+        error: &HostMemoryError,
+    ) -> Result<MemoryGateRejectionDisposition, crate::error::ServerError>;
+}
+
+enum MemoryGateFailurePolicy {
+    Queued {
+        orchestrator: Arc<dyn QueuedJobOrchestrator>,
+    },
+    FailJob,
+}
+
 /// Build the full future that owns one background job lifecycle.
-pub(crate) async fn job_task(job_id: JobId, context: RunnerContext) {
-    let store_for_release = context.store.clone();
-    let lease_store = context.store.clone();
+pub(crate) async fn job_task(job_id: JobId, host: ServerExecutionHost) {
+    let store_for_release = host.store.clone();
+    let lease_store = host.store.clone();
     let lease_job_id = job_id.clone();
-    let correlation_id = context
+    let correlation_id = host
         .store
         .runner_snapshot(&job_id)
         .await
@@ -107,7 +248,7 @@ pub(crate) async fn job_task(job_id: JobId, context: RunnerContext) {
             }
         }
     });
-    if let Err(e) = run_job(&job_id, &context).await {
+    if let Err(e) = run_job(&job_id, &host).await {
         error!(
             job_id = %job_id,
             correlation_id = %correlation_id,
@@ -120,14 +261,44 @@ pub(crate) async fn job_task(job_id: JobId, context: RunnerContext) {
 }
 
 /// Run the server-owned processing lifecycle for one job.
-async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::error::ServerError> {
-    let store = &context.store;
-    let pool = &context.pool;
-    let cache = &context.cache;
-    let startup_infer_tasks = &context.infer_tasks;
-    let startup_engine_versions = &context.engine_versions;
-    let queue = context.queue.as_ref();
-    let test_echo_mode = context.test_echo_mode;
+async fn run_job(
+    job_id: &JobId,
+    host: &ServerExecutionHost,
+) -> Result<(), crate::error::ServerError> {
+    run_hosted_job(
+        job_id,
+        &host.store,
+        &host.engine,
+        MemoryGateFailurePolicy::Queued {
+            orchestrator: host.orchestrator.clone(),
+        },
+    )
+    .await
+}
+
+/// Run one direct inline job through the shared execution engine.
+pub(crate) async fn run_direct_job(
+    job_id: &JobId,
+    host: &DirectExecutionHost,
+) -> Result<(), crate::error::ServerError> {
+    run_hosted_job(
+        job_id,
+        &host.store,
+        &host.engine,
+        MemoryGateFailurePolicy::FailJob,
+    )
+    .await
+}
+
+async fn run_hosted_job(
+    job_id: &JobId,
+    store: &Arc<JobStore>,
+    engine: &ExecutionEngine,
+    memory_gate_policy: MemoryGateFailurePolicy,
+) -> Result<(), crate::error::ServerError> {
+    let pool = &engine.context.pool;
+    let host_context = DispatchHostContext::from_store(store.clone());
+    let sink = host_context.sink().clone();
 
     let Some(job) = store.runner_snapshot(job_id).await else {
         return Ok(());
@@ -138,14 +309,6 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     if job.cancel_token.is_cancelled() {
         return Ok(());
     }
-
-    let context = format!("job {job_id} pre-start");
-    let memory_gate_policy = RetryPolicy {
-        max_attempts: 1,
-        initial_backoff_ms: DurationMs(30_000),
-        max_backoff_ms: DurationMs(120_000),
-        backoff_multiplier: 2,
-    };
 
     // Acquire semaphore (blocks if too many concurrent jobs)
     let _permit = store.acquire_job_slot().await.expect("semaphore closed");
@@ -158,77 +321,63 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     // Collect file list to process
     let mut file_list = job.pending_files.clone();
     let command = job.dispatch.command;
-
-    // Compute the requested per-job file parallelism without host-memory math,
-    // then let the host-memory coordinator clamp it to what the machine can
-    // safely support right now.
-    let requested_workers = compute_job_workers(command, file_list.len(), store.config());
-    let coordinator = HostMemoryCoordinator::from_server_config(store.config());
-    let job_label = format!(
-        "job-execution:{}:{}:{}",
-        job_id,
-        command,
-        job.dispatch.lang.to_worker_language()
-    );
-    let timeout = Duration::from_secs(store.config().memory_gate_timeout_s);
-    let poll_interval = Duration::from_secs(store.config().memory_gate_poll_s.max(1));
-    let execution_plan = tokio::task::spawn_blocking(move || {
-        coordinator.wait_for_job_execution_plan(
-            command,
-            requested_workers,
-            &job_label,
-            timeout,
-            poll_interval,
-        )
-    })
-    .await
-    .map_err(|error| {
-        crate::error::ServerError::Persistence(format!(
-            "host-memory planner task failed for job {job_id}: {error}"
-        ))
-    })?;
-    let execution_plan = match execution_plan {
+    let execution_plan = match reserve_job_execution(&host_context, job_id, &job).await {
         Ok(plan) => plan,
-        Err(
-            error @ (HostMemoryError::CapacityRejected { .. } | HostMemoryError::TimedOut { .. }),
-        ) => {
-            let retry_at = UnixTimestamp(
-                unix_now().0 + (memory_gate_policy.backoff_for_retry(1).0 as f64 / 1000.0),
-            );
-            store.requeue_job_after_memory_gate(job_id, retry_at).await;
-            store.bump_counter(|c| c.deferred_work_units += 1).await;
-            queue.notify();
-            warn!(
-                job_id = %job_id,
-                correlation_id = %correlation_id,
-                requested_workers = requested_workers.0,
-                error = %error,
-                retry_at = %retry_at,
-                context = %context,
-                "Re-queueing job after host-memory capacity rejection"
-            );
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(crate::error::ServerError::Persistence(format!(
-                "host-memory coordinator failed for job {job_id}: {error}"
-            )));
+        Err(ExecutionReservationError::Capacity {
+            requested_workers,
+            error,
+        }) => match &memory_gate_policy {
+            MemoryGateFailurePolicy::Queued { orchestrator } => {
+                let disposition = orchestrator
+                    .handle_memory_gate_rejection(&sink, job_id, requested_workers, &error)
+                    .await?;
+                match disposition {
+                    MemoryGateRejectionDisposition::Requeued { retry_at } => {
+                        warn!(
+                            job_id = %job_id,
+                            correlation_id = %correlation_id,
+                            requested_workers = requested_workers.0,
+                            error = %error,
+                            retry_at = %retry_at,
+                            "Re-queueing job after host-memory capacity rejection"
+                        );
+                        return Ok(());
+                    }
+                    MemoryGateRejectionDisposition::FailJob => {
+                        let message = error.to_string();
+                        sink.bump_memory_gate_aborts().await;
+                        sink.fail_job(job_id, &message, unix_now()).await;
+                        return Err(crate::error::ServerError::MemoryPressure(message));
+                    }
+                }
+            }
+            MemoryGateFailurePolicy::FailJob => {
+                let message = error.to_string();
+                sink.bump_memory_gate_aborts().await;
+                sink.fail_job(job_id, &message, unix_now()).await;
+                return Err(crate::error::ServerError::MemoryPressure(message));
+            }
+        },
+        Err(ExecutionReservationError::Fatal(error)) => {
+            let message = error.to_string();
+            sink.fail_job(job_id, &message, unix_now()).await;
+            return Err(error);
         }
     };
     let num_workers = execution_plan.granted_workers;
     let _job_memory_lease = execution_plan.lease;
 
     // Mark as running only after job execution memory has been reserved.
-    store.mark_job_running(job_id).await;
+    sink.mark_job_running(job_id).await;
 
     // Record on job and DB
-    store.record_job_worker_count(job_id, num_workers.0).await;
+    sink.record_job_worker_count(job_id, num_workers.0).await;
 
     info!(
         job_id = %job_id,
         correlation_id = %correlation_id,
         num_files = file_list.len(),
-        requested_workers = requested_workers.0,
+        requested_workers = execution_plan.requested_workers.0,
         num_workers = num_workers.0,
         reserved_mb = execution_plan.reserved_mb.0,
         command = %command,
@@ -248,7 +397,8 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         file_list
     } else {
         let failed_indices =
-            record_preflight_media_failures(store, job_id, &file_list, &media_failures).await;
+            record_preflight_media_failures(sink.as_ref(), job_id, &file_list, &media_failures)
+                .await;
         file_list
             .into_iter()
             .filter(|file| !failed_indices.contains(&file.file_index))
@@ -328,6 +478,122 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         }
     };
 
+    if let Err(error) = engine
+        .dispatch_job(
+            JobDispatchRequest {
+                job: job.clone(),
+                file_list,
+                num_workers,
+                rev_job_ids,
+            },
+            &host_context,
+        )
+        .await
+    {
+        let message = error.to_string();
+        sink.fail_job(job_id, &message, unix_now()).await;
+        return Err(error);
+    }
+
+    // Force unfinished files to terminal status
+    let forced_errors = force_terminal_file_states(sink.as_ref(), job_id).await;
+
+    // Set final job status
+    let Some(completion) = store.completion_snapshot(job_id).await else {
+        return Ok(());
+    };
+
+    let completed_at = unix_now();
+    let final_status = if completion.cancelled {
+        JobStatus::Cancelled
+    } else if forced_errors > 0 || completion.all_failed {
+        JobStatus::Failed
+    } else {
+        JobStatus::Completed
+    };
+
+    sink.finalize_job(job_id, final_status, completed_at).await;
+
+    info!(
+        job_id = %job_id,
+        correlation_id = %correlation_id,
+        status = %final_status,
+        "Job finished"
+    );
+
+    Ok(())
+}
+
+async fn reserve_job_execution(
+    host: &DispatchHostContext,
+    job_id: &JobId,
+    job: &RunnerJobSnapshot,
+) -> Result<JobExecutionPlan, ExecutionReservationError> {
+    let command = job.dispatch.command;
+    let requested_workers = compute_job_workers(command, job.pending_files.len(), host.config());
+    let coordinator = HostMemoryCoordinator::from_server_config(host.config());
+    let job_label = format!(
+        "job-execution:{}:{}:{}",
+        job_id,
+        command,
+        job.dispatch.lang.to_worker_language()
+    );
+    let timeout = Duration::from_secs(host.config().memory_gate_timeout_s);
+    let poll_interval = Duration::from_secs(host.config().memory_gate_poll_s.max(1));
+    let plan = tokio::task::spawn_blocking(move || {
+        coordinator.wait_for_job_execution_plan(
+            command,
+            requested_workers,
+            &job_label,
+            timeout,
+            poll_interval,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ExecutionReservationError::Fatal(crate::error::ServerError::Persistence(format!(
+            "host-memory planner task failed for job {job_id}: {error}"
+        )))
+    })?;
+
+    match plan {
+        Ok(plan) => Ok(plan),
+        Err(
+            error @ (HostMemoryError::CapacityRejected { .. } | HostMemoryError::TimedOut { .. }),
+        ) => Err(ExecutionReservationError::Capacity {
+            requested_workers,
+            error,
+        }),
+        Err(error) => Err(ExecutionReservationError::Fatal(
+            crate::error::ServerError::Persistence(format!(
+                "host-memory coordinator failed for job {job_id}: {error}"
+            )),
+        )),
+    }
+}
+
+async fn dispatch_job_with_execution_context(
+    request: JobDispatchRequest,
+    host: &DispatchHostContext,
+    execution: &RunnerExecutionContext,
+) -> Result<(), crate::error::ServerError> {
+    let sink = host.sink().clone();
+    let JobDispatchRequest {
+        job,
+        file_list,
+        num_workers,
+        rev_job_ids,
+    } = request;
+    let job_id = &job.identity.job_id;
+    let correlation_id = job.identity.correlation_id.clone();
+    let command = job.dispatch.command;
+    let pool = &execution.pool;
+    let cache = &execution.cache;
+    let startup_infer_tasks = &execution.infer_tasks;
+    let startup_engine_versions = &execution.engine_versions;
+    let test_echo_mode = execution.test_echo_mode;
+    let job_engine_overrides = job.dispatch.options.common().engine_overrides_json();
+
     // Choose between infer path or per-file dispatch.
     let capability_snapshot = match resolve_runtime_capability_snapshot(
         pool,
@@ -343,7 +609,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         Ok(snapshot) => snapshot,
         Err(err_msg) => {
             warn!(job_id = %job_id, correlation_id = %correlation_id, "{}", err_msg);
-            store.fail_job(job_id, &err_msg, unix_now()).await;
+            sink.fail_job(job_id, &err_msg, unix_now()).await;
             return Ok(());
         }
     };
@@ -364,7 +630,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
         );
         warn!(job_id = %job_id, correlation_id = %correlation_id, "{}", err_msg);
         let failed_at = unix_now();
-        store.fail_job(job_id, &err_msg, failed_at).await;
+        sink.fail_job(job_id, &err_msg, failed_at).await;
         return Ok(());
     }
 
@@ -386,7 +652,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
     ) && infer_task.is_some_and(|task| infer_tasks.contains(&task));
 
     if test_echo_mode {
-        dispatch_test_echo_files(&job, store, &file_list).await;
+        dispatch_test_echo_files(&job, sink.as_ref(), &file_list).await;
     } else if use_transcribe_infer {
         let engine_version = EngineVersion::from(
             engine_versions
@@ -403,16 +669,14 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side transcribe orchestrator"
         );
 
-        transcribe_command::run(
+        dispatch_transcribe_command(
             &job,
-            store,
-            TranscribeDispatchRuntime {
-                pool: pool.clone(),
-                cache: cache.clone(),
-                engine_version: engine_version.clone(),
-                rev_job_ids: rev_job_ids.clone(),
-                num_workers,
-            },
+            host,
+            pool,
+            cache,
+            &engine_version,
+            &rev_job_ids,
+            num_workers,
         )
         .await;
     } else if use_benchmark_infer {
@@ -431,16 +695,14 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side benchmark orchestrator"
         );
 
-        benchmark_command::run(
+        dispatch_benchmark_command(
             &job,
-            store,
-            BenchmarkDispatchRuntime {
-                pool: pool.clone(),
-                cache: cache.clone(),
-                engine_version: engine_version.clone(),
-                rev_job_ids: rev_job_ids.clone(),
-                num_workers,
-            },
+            host,
+            pool,
+            cache,
+            &engine_version,
+            &rev_job_ids,
+            num_workers,
         )
         .await;
     } else if use_media_analysis_infer {
@@ -462,23 +724,7 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side media-analysis V2 path"
         );
 
-        let runtime = MediaAnalysisDispatchRuntime {
-            pool: pool.clone(),
-            num_workers,
-        };
-        match command {
-            ReleasedCommand::Opensmile => opensmile_command::run(&job, store, runtime).await,
-            ReleasedCommand::Avqi => avqi_command::run(&job, store, runtime).await,
-            _ => {
-                tracing::error!(
-                    job_id = %job_id,
-                    correlation_id = %correlation_id,
-                    command = %command,
-                    "Media-analysis infer path selected for unsupported command"
-                );
-                return Ok(());
-            }
-        }
+        dispatch_media_analysis_command(&job, host, pool, num_workers).await;
     } else if use_infer {
         // --- Server-side infer path ---
         // The server owns CHAT parse/cache/inject/serialize.
@@ -504,113 +750,32 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             "Using server-side infer path"
         );
 
-        if command == "align" {
-            // FA is per-file (each file has its own audio) — not cross-file batchable.
-            // Files are processed concurrently, bounded by num_workers.
-            align_command::run(
-                &job,
-                store,
-                FaDispatchRuntime {
-                    pool: pool.clone(),
-                    cache: cache.clone(),
-                    engine_version: engine_version.clone(),
-                    rev_job_ids: rev_job_ids.clone(),
+        match runner_dispatch_kind {
+            Some(RunnerDispatchKind::ForcedAlignment) => {
+                dispatch_forced_alignment_command(
+                    &job,
+                    host,
+                    pool,
+                    cache,
+                    &engine_version,
+                    &rev_job_ids,
                     num_workers,
-                },
-            )
-            .await;
-        } else if command == ReleasedCommand::Morphotag {
-            let debug_dir = job
-                .dispatch
-                .options
-                .common()
-                .debug_dir
-                .as_deref()
-                .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
-            morphotag_command::run(
-                &job,
-                store,
-                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
-            )
-            .await;
-        } else if command == ReleasedCommand::Compare {
-            let debug_dir = job
-                .dispatch
-                .options
-                .common()
-                .debug_dir
-                .as_deref()
-                .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
-            compare_command::run(
-                &job,
-                store,
-                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
-            )
-            .await;
-        } else if command == ReleasedCommand::Utseg {
-            let debug_dir = job
-                .dispatch
-                .options
-                .common()
-                .debug_dir
-                .as_deref()
-                .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
-            utseg_command::run(
-                &job,
-                store,
-                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
-            )
-            .await;
-        } else if command == ReleasedCommand::Translate {
-            let debug_dir = job
-                .dispatch
-                .options
-                .common()
-                .debug_dir
-                .as_deref()
-                .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
-            translate_command::run(
-                &job,
-                store,
-                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
-            )
-            .await;
-        } else if command == ReleasedCommand::Coref {
-            let debug_dir = job
-                .dispatch
-                .options
-                .common()
-                .debug_dir
-                .as_deref()
-                .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
-            coref_command::run(
-                &job,
-                store,
-                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
-            )
-            .await;
-        } else {
-            let plan = BatchedInferDispatchPlan::from_job(&job, store.config());
-            let debug_dir = job
-                .dispatch
-                .options
-                .common()
-                .debug_dir
-                .as_deref()
-                .map(std::path::PathBuf::from);
-            let dumper = crate::runner::debug_dumper::DebugDumper::new(debug_dir.as_deref());
-            dispatch_batched_infer(
-                &job,
-                store,
-                PipelineServices::with_debug(pool, cache, &engine_version, &dumper),
-                plan,
-            )
-            .await;
+                )
+                .await;
+            }
+            Some(RunnerDispatchKind::BatchedTextInfer) => {
+                dispatch_batched_text_command(&job, host, pool, cache, &engine_version).await;
+            }
+            other => {
+                tracing::error!(
+                    job_id = %job_id,
+                    correlation_id = %correlation_id,
+                    command = %command,
+                    runner_dispatch_kind = ?other,
+                    "Infer path selected for unsupported command dispatch kind"
+                );
+                return Ok(());
+            }
         }
     } else {
         let err_msg = format!(
@@ -618,37 +783,159 @@ async fn run_job(job_id: &JobId, context: &RunnerContext) -> Result<(), crate::e
             command, all_chat, infer_task, infer_supported
         );
         warn!(job_id = %job_id, correlation_id = %correlation_id, "{}", err_msg);
-        store.fail_job(job_id, &err_msg, unix_now()).await;
+        sink.fail_job(job_id, &err_msg, unix_now()).await;
         return Ok(());
     }
 
-    // Force unfinished files to terminal status
-    let forced_errors = force_terminal_file_states(store, job_id).await;
-
-    // Set final job status
-    let Some(completion) = store.completion_snapshot(job_id).await else {
-        return Ok(());
-    };
-
-    let completed_at = unix_now();
-    let final_status = if completion.cancelled {
-        JobStatus::Cancelled
-    } else if forced_errors > 0 || completion.all_failed {
-        JobStatus::Failed
-    } else {
-        JobStatus::Completed
-    };
-
-    store.finalize_job(job_id, final_status, completed_at).await;
-
-    info!(
-        job_id = %job_id,
-        correlation_id = %correlation_id,
-        status = %final_status,
-        "Job finished"
-    );
-
     Ok(())
+}
+
+fn warn_invalid_dispatch_plan(job: &RunnerJobSnapshot) {
+    warn!(
+        job_id = %job.identity.job_id,
+        correlation_id = %job.identity.correlation_id,
+        command = %job.dispatch.command,
+        "Command plan could not be built from job options"
+    );
+}
+
+fn debug_dumper_for_job(job: &RunnerJobSnapshot) -> crate::runner::debug_dumper::DebugDumper {
+    crate::runner::debug_dumper::DebugDumper::new(
+        job.dispatch
+            .options
+            .common()
+            .debug_dir
+            .as_deref()
+            .map(std::path::Path::new),
+    )
+}
+
+async fn dispatch_batched_text_command(
+    job: &RunnerJobSnapshot,
+    host: &DispatchHostContext,
+    pool: &Arc<WorkerPool>,
+    cache: &Arc<UtteranceCache>,
+    engine_version: &EngineVersion,
+) {
+    let plan = BatchedInferDispatchPlan::from_job(job, host.config());
+    let dumper = debug_dumper_for_job(job);
+    dispatch_batched_infer(
+        job,
+        host,
+        PipelineServices::with_debug(pool, cache, engine_version, &dumper),
+        plan,
+    )
+    .await;
+}
+
+async fn dispatch_forced_alignment_command(
+    job: &RunnerJobSnapshot,
+    host: &DispatchHostContext,
+    pool: &Arc<WorkerPool>,
+    cache: &Arc<UtteranceCache>,
+    engine_version: &EngineVersion,
+    rev_job_ids: &Arc<HashMap<PathBuf, RevAiJobId>>,
+    num_workers: NumWorkers,
+) {
+    let Some(plan) = FaDispatchPlan::from_job(job, host.config()) else {
+        warn_invalid_dispatch_plan(job);
+        return;
+    };
+
+    dispatch_fa_infer(
+        job,
+        host,
+        FaDispatchRuntime {
+            pool: pool.clone(),
+            cache: cache.clone(),
+            engine_version: engine_version.clone(),
+            rev_job_ids: rev_job_ids.clone(),
+            num_workers,
+        },
+        plan,
+    )
+    .await;
+}
+
+async fn dispatch_transcribe_command(
+    job: &RunnerJobSnapshot,
+    host: &DispatchHostContext,
+    pool: &Arc<WorkerPool>,
+    cache: &Arc<UtteranceCache>,
+    engine_version: &EngineVersion,
+    rev_job_ids: &Arc<HashMap<PathBuf, RevAiJobId>>,
+    num_workers: NumWorkers,
+) {
+    let Some(plan) = TranscribeDispatchPlan::from_job(job, host.config()) else {
+        warn_invalid_dispatch_plan(job);
+        return;
+    };
+
+    dispatch_transcribe_infer(
+        job,
+        host,
+        TranscribeDispatchRuntime {
+            pool: pool.clone(),
+            cache: cache.clone(),
+            engine_version: engine_version.clone(),
+            rev_job_ids: rev_job_ids.clone(),
+            num_workers,
+        },
+        plan,
+    )
+    .await;
+}
+
+async fn dispatch_benchmark_command(
+    job: &RunnerJobSnapshot,
+    host: &DispatchHostContext,
+    pool: &Arc<WorkerPool>,
+    cache: &Arc<UtteranceCache>,
+    engine_version: &EngineVersion,
+    rev_job_ids: &Arc<HashMap<PathBuf, RevAiJobId>>,
+    num_workers: NumWorkers,
+) {
+    let Some(plan) = BenchmarkDispatchPlan::from_job(job, host.config()) else {
+        warn_invalid_dispatch_plan(job);
+        return;
+    };
+
+    dispatch_benchmark_infer(
+        job,
+        host,
+        BenchmarkDispatchRuntime {
+            pool: pool.clone(),
+            cache: cache.clone(),
+            engine_version: engine_version.clone(),
+            rev_job_ids: rev_job_ids.clone(),
+            num_workers,
+        },
+        plan,
+    )
+    .await;
+}
+
+async fn dispatch_media_analysis_command(
+    job: &RunnerJobSnapshot,
+    host: &DispatchHostContext,
+    pool: &Arc<WorkerPool>,
+    num_workers: NumWorkers,
+) {
+    let Some(plan) = MediaAnalysisDispatchPlan::from_job(job, host.config()) else {
+        warn_invalid_dispatch_plan(job);
+        return;
+    };
+
+    dispatch_media_analysis_v2(
+        job,
+        host,
+        MediaAnalysisDispatchRuntime {
+            pool: pool.clone(),
+            num_workers,
+        },
+        plan,
+    )
+    .await;
 }
 
 async fn resolve_runtime_capability_snapshot(
@@ -660,7 +947,10 @@ async fn resolve_runtime_capability_snapshot(
     lang: impl Into<crate::api::WorkerLanguage>,
     engine_overrides: &str,
 ) -> Result<crate::state::WorkerCapabilitySnapshot, String> {
-    if !test_echo_mode && pool.detected_capabilities().is_none() && infer_task_for_command(command).is_some() {
+    if !test_echo_mode
+        && pool.detected_capabilities().is_none()
+        && infer_task_for_command(command).is_some()
+    {
         pool.ensure_command_capabilities_with_overrides(command, lang, engine_overrides)
             .await
             .map_err(|error| {
@@ -683,7 +973,7 @@ async fn resolve_runtime_capability_snapshot(
 
 async fn dispatch_test_echo_files(
     job: &RunnerJobSnapshot,
-    store: &JobStore,
+    sink: &dyn util::RunnerEventSink,
     file_list: &[crate::store::PendingJobFile],
 ) {
     let job_id = &job.identity.job_id;
@@ -694,7 +984,7 @@ async fn dispatch_test_echo_files(
         }
 
         let filename = file.filename.as_ref();
-        let lifecycle = FileRunTracker::new(store, job_id, filename);
+        let lifecycle = FileRunTracker::new(sink, job_id, filename);
         let started_at = unix_now();
         lifecycle
             .begin_first_attempt(WorkUnitKind::FileProcess, started_at, FileStage::Processing)
@@ -762,7 +1052,7 @@ async fn dispatch_test_echo_files(
 /// Record media-prevalidation failures as explicit setup attempts before the
 /// job enters any concrete dispatch path.
 async fn record_preflight_media_failures(
-    store: &JobStore,
+    sink: &dyn util::RunnerEventSink,
     job_id: &JobId,
     file_list: &[crate::store::PendingJobFile],
     media_failures: &HashMap<usize, String>,
@@ -773,7 +1063,7 @@ async fn record_preflight_media_failures(
     for (&idx, err_msg) in media_failures {
         failed_indices.insert(idx);
         if let Some(file) = file_list.iter().find(|file| file.file_index == idx) {
-            FileRunTracker::new(store, job_id, &file.filename)
+            FileRunTracker::new(sink, job_id, &file.filename)
                 .record_setup_failure(now, err_msg, FailureCategory::Validation, now)
                 .await;
         }

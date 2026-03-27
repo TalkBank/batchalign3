@@ -1,21 +1,23 @@
 # Server Mode
 
 **Status:** Current
-**Last updated:** 2026-03-26 16:08 EDT
+**Last updated:** 2026-03-26 18:12 EDT
 
 Batchalign includes a built-in HTTP server managed by `batchalign3 serve ...`.
-The CLI is always a client: it either talks to an explicit remote server
-(`--server`) or to a local daemon.
+Ordinary local processing commands no longer require that server. The CLI now
+defaults to **direct local execution** and only enters server mode when the user
+explicitly chooses `--server` or starts a server for remote/dashboard workflows.
 
 ## Current routing rules
 
 - With `--server URL`, the CLI submits supported jobs to that server.
-- Without `--server`, the CLI tries the local auto-daemon when `auto_daemon`
-  is enabled in `~/.batchalign3/server.yaml`.
-- `transcribe` and `avqi` currently ignore explicit remote `--server` because
-  the remote server cannot access client-local audio files.
-- When the main local daemon lacks a needed capability, the CLI may try a
-  sidecar daemon for local `transcribe`, `benchmark`, or `avqi` work.
+- Without `--server`, the CLI runs the command locally through the shared
+  direct host.
+- Audio-dependent commands such as `transcribe`, `transcribe_s`, `benchmark`,
+  and `avqi` still ignore explicit remote `--server`, but they now fall back to
+  **direct local execution**, not to a daemon path.
+- `batchalign3 serve ...` remains useful for remote access, dashboard-backed
+  job monitoring, persistent warm workers, and explicit server-managed queues.
 
 ## Start a server
 
@@ -82,7 +84,8 @@ longer a promise that those workers will preload on every boot.
 When warmup does spawn TCP daemons, they are now treated as **server-owned**
 workers: reusable for that server instance, but cleaned up on routine shutdown.
 If you want a daemon to survive server restarts, start it externally and let the
-server discover it from `workers.json`.
+server discover it from `workers.json`. Direct local execution does not perform
+that registry discovery step.
 
 ## Cold-start capability checks
 
@@ -122,7 +125,7 @@ Important keys:
 - `port` — server listen port
 - `host` — bind address (defaults to `0.0.0.0`)
 - `max_concurrent_jobs` — `0` means auto-tune
-- `auto_daemon` — allow the CLI to auto-start a local daemon when no `--server` is given
+- `auto_daemon` — legacy compatibility field; the CLI now defaults to direct local execution instead of auto-starting a daemon
 - `warmup_commands` — list of commands eligible for warmup (see [Worker Tuning](worker-tuning.md))
 - `media_roots` — directories searched for media
 - `media_mappings` — named client-path to server-path mappings

@@ -1,4 +1,4 @@
-//! Command-owned catalog types and performance profiles.
+//! Command-owned catalog types and derived runtime policy.
 
 use crate::ReleasedCommand;
 use crate::command_family::WorkflowFamily;
@@ -119,27 +119,6 @@ pub(crate) enum ResourceLane {
     Mixed,
 }
 
-/// Explicit performance contract for one command module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommandPerformanceProfile {
-    /// High-level scheduling shape.
-    pub scheduling: SchedulingPolicy,
-    /// How model state should be shared or delegated.
-    pub model_sharing: ModelSharingPolicy,
-    /// Whether the command benefits from batching.
-    pub batching: BatchingPolicy,
-    /// How the kernel should expose per-command concurrency.
-    pub parallelism: ParallelismPolicy,
-    /// Dominant resource lane for the command.
-    pub resource_lane: ResourceLane,
-    /// How the command should behave on constrained-memory hosts.
-    pub constrained_host: ConstrainedHostPolicy,
-    /// Whether the command is eligible for speculative/background warmup.
-    pub warmup: WarmupPolicy,
-    /// Whether the host-memory gate must stay in play for this command.
-    pub uses_host_memory_gate: bool,
-}
-
 /// Typed descriptor for one released command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CommandWorkflowDescriptor {
@@ -159,11 +138,563 @@ pub(crate) struct CommandWorkflowDescriptor {
     pub runner_dispatch_kind: RunnerDispatchKind,
 }
 
-/// Command-owned metadata plus the explicit performance contract.
+/// Higher-level execution shape authored by commands.
+///
+/// This deliberately collapses the repeated low-level scheduling/profile knobs
+/// into a smaller semantic vocabulary. Runtime-facing code derives its lower-
+/// level policy directly from this shape instead of from a second authored
+/// profile object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommandModuleSpec {
-    /// Released command descriptor used by the compatibility facade.
+pub(crate) enum CommandExecutionShape {
+    /// Cross-file text pooling with one top-level dispatch per job.
+    BatchedText,
+    /// Main transcript plus paired reference projection.
+    ReferenceProjection,
+    /// Audio-first sequential processing with bounded file-level concurrency.
+    AudioSequential,
+    /// Per-file media analysis over non-CHAT/audio feature inputs.
+    MediaAnalysis,
+    /// Composite command that delegates runtime policy to child flows.
+    Composite,
+}
+
+impl CommandExecutionShape {
+    /// High-level workflow family implied by this authored execution shape.
+    pub(crate) const fn workflow_family(self) -> WorkflowFamily {
+        match self {
+            Self::BatchedText => WorkflowFamily::CrossFileBatchTransform,
+            Self::ReferenceProjection => WorkflowFamily::ReferenceProjection,
+            Self::AudioSequential | Self::MediaAnalysis => WorkflowFamily::PerFileTransform,
+            Self::Composite => WorkflowFamily::Composite,
+        }
+    }
+
+    /// High-level scheduling shape implied by this authored execution shape.
+    pub(crate) const fn scheduling_policy(self) -> SchedulingPolicy {
+        match self {
+            Self::BatchedText => SchedulingPolicy::CrossFileBatch,
+            Self::ReferenceProjection => SchedulingPolicy::ReferenceProjection,
+            Self::AudioSequential => SchedulingPolicy::PerFileAudio,
+            Self::MediaAnalysis => SchedulingPolicy::PerFileMediaAnalysis,
+            Self::Composite => SchedulingPolicy::Composite,
+        }
+    }
+
+    /// Model-sharing policy implied by this authored execution shape.
+    pub(crate) const fn model_sharing_policy(self) -> ModelSharingPolicy {
+        match self {
+            Self::Composite => ModelSharingPolicy::DelegatedToSubcommands,
+            Self::BatchedText
+            | Self::ReferenceProjection
+            | Self::AudioSequential
+            | Self::MediaAnalysis => ModelSharingPolicy::SharedWarmWorkers,
+        }
+    }
+
+    /// Batching policy implied by this authored execution shape.
+    pub(crate) const fn batching_policy(self) -> BatchingPolicy {
+        match self {
+            Self::BatchedText => BatchingPolicy::CrossFileBatch,
+            Self::ReferenceProjection => BatchingPolicy::PairedInputs,
+            Self::AudioSequential => BatchingPolicy::InternalStageBatching,
+            Self::MediaAnalysis | Self::Composite => BatchingPolicy::None,
+        }
+    }
+
+    /// Parallelism policy implied by this authored execution shape.
+    pub(crate) const fn parallelism_policy(self) -> ParallelismPolicy {
+        match self {
+            Self::AudioSequential | Self::MediaAnalysis => ParallelismPolicy::BoundedFileWorkers,
+            Self::BatchedText | Self::ReferenceProjection => {
+                ParallelismPolicy::SingleDispatchPerJob
+            }
+            Self::Composite => ParallelismPolicy::DelegatedToSubcommands,
+        }
+    }
+
+    /// Dominant resource lane implied by this authored execution shape.
+    pub(crate) const fn resource_lane(self) -> ResourceLane {
+        match self {
+            Self::BatchedText => ResourceLane::CpuBound,
+            Self::ReferenceProjection | Self::Composite => ResourceLane::Mixed,
+            Self::AudioSequential => ResourceLane::GpuHeavy,
+            Self::MediaAnalysis => ResourceLane::IoBound,
+        }
+    }
+
+    /// Constrained-host behavior implied by this authored execution shape.
+    pub(crate) const fn constrained_host_policy(self) -> ConstrainedHostPolicy {
+        match self {
+            Self::Composite => ConstrainedHostPolicy::DelegatedToSubcommands,
+            Self::BatchedText
+            | Self::ReferenceProjection
+            | Self::AudioSequential
+            | Self::MediaAnalysis => ConstrainedHostPolicy::SequentialFallback,
+        }
+    }
+
+    /// Warmup behavior implied by this authored execution shape.
+    pub(crate) const fn warmup_policy(self) -> WarmupPolicy {
+        match self {
+            Self::MediaAnalysis => WarmupPolicy::LazyOnDemand,
+            Self::Composite => WarmupPolicy::DelegatedToSubcommands,
+            Self::BatchedText | Self::ReferenceProjection | Self::AudioSequential => {
+                WarmupPolicy::BackgroundEligible
+            }
+        }
+    }
+
+    /// Whether host-memory admission should remain enabled for this shape.
+    pub(crate) const fn uses_host_memory_gate(self) -> bool {
+        true
+    }
+}
+
+/// Canonical authored command definition.
+///
+/// Prefer the family authoring traits/macros below for ordinary command work.
+/// These constructor helpers are the lower-level substrate those generated
+/// declarations build on. Command modules should only hand-write a full
+/// [`CommandWorkflowDescriptor`] when they are introducing a genuinely new
+/// execution family or an unusual routing shape that the existing helpers do
+/// not model yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommandDefinition {
+    /// Stable released-command descriptor.
     pub descriptor: CommandWorkflowDescriptor,
-    /// Resource-aware execution profile for the new command-owned architecture.
-    pub performance: CommandPerformanceProfile,
+    /// Higher-level execution shape authored by the command.
+    pub execution_shape: CommandExecutionShape,
+}
+
+impl CommandDefinition {
+    const fn new(
+        command: ReleasedCommand,
+        infer_task: InferTask,
+        capability_kind: CommandCapabilityKind,
+        uses_local_audio: bool,
+        output_path_kind: CommandOutputPathKind,
+        runner_dispatch_kind: RunnerDispatchKind,
+        execution_shape: CommandExecutionShape,
+    ) -> Self {
+        Self {
+            descriptor: CommandWorkflowDescriptor {
+                command,
+                family: execution_shape.workflow_family(),
+                infer_task,
+                capability_kind,
+                uses_local_audio,
+                output_path_kind,
+                runner_dispatch_kind,
+            },
+            execution_shape,
+        }
+    }
+
+    /// Author-facing constructor for a text-first direct infer command.
+    pub(crate) const fn batched_text(command: ReleasedCommand, infer_task: InferTask) -> Self {
+        Self::new(
+            command,
+            infer_task,
+            CommandCapabilityKind::DirectInfer,
+            false,
+            CommandOutputPathKind::PreserveInputName,
+            RunnerDispatchKind::BatchedTextInfer,
+            CommandExecutionShape::BatchedText,
+        )
+    }
+
+    /// Author-facing constructor for a reference-projection command.
+    pub(crate) const fn reference_projection(
+        command: ReleasedCommand,
+        infer_task: InferTask,
+    ) -> Self {
+        Self::new(
+            command,
+            infer_task,
+            CommandCapabilityKind::DirectInfer,
+            false,
+            CommandOutputPathKind::PreserveInputName,
+            RunnerDispatchKind::BatchedTextInfer,
+            CommandExecutionShape::ReferenceProjection,
+        )
+    }
+
+    /// Author-facing constructor for the current forced-alignment family.
+    pub(crate) const fn forced_alignment(command: ReleasedCommand) -> Self {
+        Self::new(
+            command,
+            InferTask::Fa,
+            CommandCapabilityKind::DirectInfer,
+            false,
+            CommandOutputPathKind::PreserveInputName,
+            RunnerDispatchKind::ForcedAlignment,
+            CommandExecutionShape::AudioSequential,
+        )
+    }
+
+    /// Author-facing constructor for the current ASR transcription family.
+    pub(crate) const fn transcription(command: ReleasedCommand) -> Self {
+        Self::new(
+            command,
+            InferTask::Asr,
+            CommandCapabilityKind::ServerComposed,
+            true,
+            CommandOutputPathKind::ReplaceExtension("cha"),
+            RunnerDispatchKind::TranscribeAudioInfer,
+            CommandExecutionShape::AudioSequential,
+        )
+    }
+
+    /// Author-facing constructor for the current benchmark orchestration family.
+    pub(crate) const fn benchmark(command: ReleasedCommand) -> Self {
+        Self::new(
+            command,
+            InferTask::Asr,
+            CommandCapabilityKind::ServerComposed,
+            true,
+            CommandOutputPathKind::PreserveInputName,
+            RunnerDispatchKind::BenchmarkAudioInfer,
+            CommandExecutionShape::Composite,
+        )
+    }
+
+    /// Author-facing constructor for the current media-analysis family.
+    pub(crate) const fn media_analysis(
+        command: ReleasedCommand,
+        infer_task: InferTask,
+        uses_local_audio: bool,
+    ) -> Self {
+        Self::new(
+            command,
+            infer_task,
+            CommandCapabilityKind::DirectInfer,
+            uses_local_audio,
+            CommandOutputPathKind::PreserveInputName,
+            RunnerDispatchKind::MediaAnalysisV2,
+            CommandExecutionShape::MediaAnalysis,
+        )
+    }
+
+    /// High-level scheduling shape derived from the authored execution shape.
+    pub(crate) const fn scheduling_policy(self) -> SchedulingPolicy {
+        self.execution_shape.scheduling_policy()
+    }
+
+    /// Model-sharing policy derived from the authored execution shape.
+    pub(crate) const fn model_sharing_policy(self) -> ModelSharingPolicy {
+        self.execution_shape.model_sharing_policy()
+    }
+
+    /// Batching policy derived from the authored execution shape.
+    pub(crate) const fn batching_policy(self) -> BatchingPolicy {
+        self.execution_shape.batching_policy()
+    }
+
+    /// Parallelism policy derived from the authored execution shape.
+    pub(crate) const fn parallelism_policy(self) -> ParallelismPolicy {
+        self.execution_shape.parallelism_policy()
+    }
+
+    /// Dominant resource lane derived from the authored execution shape.
+    pub(crate) const fn resource_lane(self) -> ResourceLane {
+        self.execution_shape.resource_lane()
+    }
+
+    /// Constrained-host behavior derived from the authored execution shape.
+    pub(crate) const fn constrained_host_policy(self) -> ConstrainedHostPolicy {
+        self.execution_shape.constrained_host_policy()
+    }
+
+    /// Warmup behavior derived from the authored execution shape.
+    pub(crate) const fn warmup_policy(self) -> WarmupPolicy {
+        self.execution_shape.warmup_policy()
+    }
+
+    /// Whether host-memory admission should remain enabled.
+    pub(crate) const fn uses_host_memory_gate(self) -> bool {
+        self.execution_shape.uses_host_memory_gate()
+    }
+}
+
+/// Type-level authoring seam for ordinary batched-text commands.
+pub(crate) trait BatchedTextCommand {
+    /// Stable released command name.
+    const COMMAND: ReleasedCommand;
+    /// Worker infer task for this text family command.
+    const INFER_TASK: InferTask;
+    /// Generated canonical command definition.
+    const DEFINITION: CommandDefinition =
+        CommandDefinition::batched_text(Self::COMMAND, Self::INFER_TASK);
+}
+
+/// Type-level authoring seam for reference-projection commands.
+pub(crate) trait ReferenceProjectionCommand {
+    /// Stable released command name.
+    const COMMAND: ReleasedCommand;
+    /// Worker infer task for the projection pass.
+    const INFER_TASK: InferTask;
+    /// Generated canonical command definition.
+    const DEFINITION: CommandDefinition =
+        CommandDefinition::reference_projection(Self::COMMAND, Self::INFER_TASK);
+}
+
+/// Type-level authoring seam for forced-alignment commands.
+pub(crate) trait ForcedAlignmentCommand {
+    /// Stable released command name.
+    const COMMAND: ReleasedCommand;
+    /// Generated canonical command definition.
+    const DEFINITION: CommandDefinition = CommandDefinition::forced_alignment(Self::COMMAND);
+}
+
+/// Type-level authoring seam for transcription commands.
+pub(crate) trait TranscriptionCommand {
+    /// Stable released command name.
+    const COMMAND: ReleasedCommand;
+    /// Generated canonical command definition.
+    const DEFINITION: CommandDefinition = CommandDefinition::transcription(Self::COMMAND);
+}
+
+/// Type-level authoring seam for benchmark commands.
+pub(crate) trait BenchmarkCommand {
+    /// Stable released command name.
+    const COMMAND: ReleasedCommand;
+    /// Generated canonical command definition.
+    const DEFINITION: CommandDefinition = CommandDefinition::benchmark(Self::COMMAND);
+}
+
+/// Type-level authoring seam for media-analysis commands.
+pub(crate) trait MediaAnalysisCommand {
+    /// Stable released command name.
+    const COMMAND: ReleasedCommand;
+    /// Worker infer task for this media-analysis command.
+    const INFER_TASK: InferTask;
+    /// Whether the command requires client-local audio access.
+    const USES_LOCAL_AUDIO: bool;
+    /// Generated canonical command definition.
+    const DEFINITION: CommandDefinition =
+        CommandDefinition::media_analysis(Self::COMMAND, Self::INFER_TASK, Self::USES_LOCAL_AUDIO);
+}
+
+macro_rules! declare_batched_text_command {
+    ($marker:ident, $definition:ident, $command:expr, $infer_task:expr $(,)?) => {
+        pub(crate) struct $marker;
+        impl $crate::commands::spec::BatchedTextCommand for $marker {
+            const COMMAND: $crate::ReleasedCommand = $command;
+            const INFER_TASK: $crate::worker::InferTask = $infer_task;
+        }
+        pub(crate) const $definition: $crate::commands::spec::CommandDefinition =
+            <$marker as $crate::commands::spec::BatchedTextCommand>::DEFINITION;
+    };
+}
+pub(crate) use declare_batched_text_command;
+
+macro_rules! declare_reference_projection_command {
+    ($marker:ident, $definition:ident, $command:expr, $infer_task:expr $(,)?) => {
+        pub(crate) struct $marker;
+        impl $crate::commands::spec::ReferenceProjectionCommand for $marker {
+            const COMMAND: $crate::ReleasedCommand = $command;
+            const INFER_TASK: $crate::worker::InferTask = $infer_task;
+        }
+        pub(crate) const $definition: $crate::commands::spec::CommandDefinition =
+            <$marker as $crate::commands::spec::ReferenceProjectionCommand>::DEFINITION;
+    };
+}
+pub(crate) use declare_reference_projection_command;
+
+macro_rules! declare_forced_alignment_command {
+    ($marker:ident, $definition:ident, $command:expr $(,)?) => {
+        pub(crate) struct $marker;
+        impl $crate::commands::spec::ForcedAlignmentCommand for $marker {
+            const COMMAND: $crate::ReleasedCommand = $command;
+        }
+        pub(crate) const $definition: $crate::commands::spec::CommandDefinition =
+            <$marker as $crate::commands::spec::ForcedAlignmentCommand>::DEFINITION;
+    };
+}
+pub(crate) use declare_forced_alignment_command;
+
+macro_rules! declare_transcription_command {
+    ($marker:ident, $definition:ident, $command:expr $(,)?) => {
+        pub(crate) struct $marker;
+        impl $crate::commands::spec::TranscriptionCommand for $marker {
+            const COMMAND: $crate::ReleasedCommand = $command;
+        }
+        pub(crate) const $definition: $crate::commands::spec::CommandDefinition =
+            <$marker as $crate::commands::spec::TranscriptionCommand>::DEFINITION;
+    };
+}
+pub(crate) use declare_transcription_command;
+
+macro_rules! declare_benchmark_command {
+    ($marker:ident, $definition:ident, $command:expr $(,)?) => {
+        pub(crate) struct $marker;
+        impl $crate::commands::spec::BenchmarkCommand for $marker {
+            const COMMAND: $crate::ReleasedCommand = $command;
+        }
+        pub(crate) const $definition: $crate::commands::spec::CommandDefinition =
+            <$marker as $crate::commands::spec::BenchmarkCommand>::DEFINITION;
+    };
+}
+pub(crate) use declare_benchmark_command;
+
+macro_rules! declare_media_analysis_command {
+    ($marker:ident, $definition:ident, $command:expr, $infer_task:expr, $uses_local_audio:expr $(,)?) => {
+        pub(crate) struct $marker;
+        impl $crate::commands::spec::MediaAnalysisCommand for $marker {
+            const COMMAND: $crate::ReleasedCommand = $command;
+            const INFER_TASK: $crate::worker::InferTask = $infer_task;
+            const USES_LOCAL_AUDIO: bool = $uses_local_audio;
+        }
+        pub(crate) const $definition: $crate::commands::spec::CommandDefinition =
+            <$marker as $crate::commands::spec::MediaAnalysisCommand>::DEFINITION;
+    };
+}
+pub(crate) use declare_media_analysis_command;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BatchedTextCommand, BatchingPolicy, CommandCapabilityKind, CommandDefinition,
+        CommandExecutionShape, CommandOutputPathKind, ConstrainedHostPolicy, MediaAnalysisCommand,
+        RunnerDispatchKind, SchedulingPolicy, TranscriptionCommand, WarmupPolicy,
+    };
+    use crate::ReleasedCommand;
+    use crate::worker::InferTask;
+
+    #[test]
+    fn batched_text_shape_keeps_cross_file_batch_contract() {
+        let shape = CommandExecutionShape::BatchedText;
+        assert_eq!(shape.scheduling_policy(), SchedulingPolicy::CrossFileBatch);
+        assert_eq!(shape.batching_policy(), BatchingPolicy::CrossFileBatch);
+        assert_eq!(
+            shape.constrained_host_policy(),
+            ConstrainedHostPolicy::SequentialFallback
+        );
+        assert_eq!(shape.warmup_policy(), WarmupPolicy::BackgroundEligible);
+        assert!(shape.uses_host_memory_gate());
+    }
+
+    #[test]
+    fn media_analysis_shape_stays_lazy_on_demand() {
+        let shape = CommandExecutionShape::MediaAnalysis;
+        assert_eq!(
+            shape.scheduling_policy(),
+            SchedulingPolicy::PerFileMediaAnalysis
+        );
+        assert_eq!(shape.batching_policy(), BatchingPolicy::None);
+        assert_eq!(shape.warmup_policy(), WarmupPolicy::LazyOnDemand);
+        assert!(shape.uses_host_memory_gate());
+    }
+
+    #[test]
+    fn composite_shape_delegates_runtime_policy() {
+        let shape = CommandExecutionShape::Composite;
+        assert_eq!(shape.scheduling_policy(), SchedulingPolicy::Composite);
+        assert_eq!(
+            shape.constrained_host_policy(),
+            ConstrainedHostPolicy::DelegatedToSubcommands
+        );
+        assert_eq!(shape.warmup_policy(), WarmupPolicy::DelegatedToSubcommands);
+    }
+
+    #[test]
+    fn batched_text_constructor_keeps_author_surface_direct_first() {
+        let definition =
+            CommandDefinition::batched_text(ReleasedCommand::Morphotag, InferTask::Morphosyntax);
+        assert_eq!(
+            definition.descriptor.family,
+            definition.execution_shape.workflow_family()
+        );
+        assert_eq!(
+            definition.descriptor.capability_kind,
+            CommandCapabilityKind::DirectInfer
+        );
+        assert_eq!(
+            definition.descriptor.runner_dispatch_kind,
+            RunnerDispatchKind::BatchedTextInfer
+        );
+        assert_eq!(
+            definition.descriptor.output_path_kind,
+            CommandOutputPathKind::PreserveInputName
+        );
+    }
+
+    #[test]
+    fn transcription_constructor_hides_server_composed_defaults() {
+        let definition = CommandDefinition::transcription(ReleasedCommand::Transcribe);
+        assert_eq!(
+            definition.descriptor.family,
+            definition.execution_shape.workflow_family()
+        );
+        assert_eq!(
+            definition.descriptor.capability_kind,
+            CommandCapabilityKind::ServerComposed
+        );
+        assert!(definition.descriptor.uses_local_audio);
+        assert_eq!(
+            definition.descriptor.runner_dispatch_kind,
+            RunnerDispatchKind::TranscribeAudioInfer
+        );
+        assert_eq!(
+            definition.descriptor.output_path_kind,
+            CommandOutputPathKind::ReplaceExtension("cha")
+        );
+    }
+
+    struct GeneratedMorphotagCommand;
+    impl BatchedTextCommand for GeneratedMorphotagCommand {
+        const COMMAND: ReleasedCommand = ReleasedCommand::Morphotag;
+        const INFER_TASK: InferTask = InferTask::Morphosyntax;
+    }
+
+    struct GeneratedAvqiCommand;
+    impl MediaAnalysisCommand for GeneratedAvqiCommand {
+        const COMMAND: ReleasedCommand = ReleasedCommand::Avqi;
+        const INFER_TASK: InferTask = InferTask::Avqi;
+        const USES_LOCAL_AUDIO: bool = true;
+    }
+
+    struct GeneratedTranscribeCommand;
+    impl TranscriptionCommand for GeneratedTranscribeCommand {
+        const COMMAND: ReleasedCommand = ReleasedCommand::Transcribe;
+    }
+
+    declare_batched_text_command!(
+        GeneratedTranslateCommand,
+        GENERATED_TRANSLATE_DEFINITION,
+        ReleasedCommand::Translate,
+        InferTask::Translate,
+    );
+
+    #[test]
+    fn batched_text_trait_generates_same_definition_as_constructor() {
+        assert_eq!(
+            <GeneratedMorphotagCommand as BatchedTextCommand>::DEFINITION,
+            CommandDefinition::batched_text(ReleasedCommand::Morphotag, InferTask::Morphosyntax)
+        );
+    }
+
+    #[test]
+    fn media_analysis_trait_generates_same_definition_as_constructor() {
+        assert_eq!(
+            <GeneratedAvqiCommand as MediaAnalysisCommand>::DEFINITION,
+            CommandDefinition::media_analysis(ReleasedCommand::Avqi, InferTask::Avqi, true)
+        );
+    }
+
+    #[test]
+    fn transcription_trait_generates_same_definition_as_constructor() {
+        assert_eq!(
+            <GeneratedTranscribeCommand as TranscriptionCommand>::DEFINITION,
+            CommandDefinition::transcription(ReleasedCommand::Transcribe)
+        );
+    }
+
+    #[test]
+    fn declaration_macro_generates_batched_text_definition() {
+        assert_eq!(
+            GENERATED_TRANSLATE_DEFINITION,
+            CommandDefinition::batched_text(ReleasedCommand::Translate, InferTask::Translate)
+        );
+    }
 }

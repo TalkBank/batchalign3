@@ -1,7 +1,8 @@
 //! BA2 parity tests — compare BA3 output against committed batchalignjan9
 //! golden reference outputs.
 //!
-//! Each test loads a curated CHAT fixture, submits it to BA3, and compares
+//! Each test loads a curated CHAT fixture, runs it through BA3 direct execution,
+//! and compares
 //! the output against the corresponding BA2 Jan 9 golden file. Tests also
 //! include structural assertions as a fallback when golden files haven't
 //! been generated yet.
@@ -11,7 +12,7 @@
 
 use crate::common::{
     assert_ba2_parity, assert_completed_without_errors, load_ba2_golden, load_parity_fixture,
-    require_live_server, submit_and_complete,
+    require_live_direct, submit_and_complete_direct,
 };
 use batchalign_app::api::{FilePayload, JobStatus, ReleasedCommand};
 use batchalign_app::options::{
@@ -31,8 +32,11 @@ async fn run_parity_test(
     lang: &str,
     options: CommandOptions,
 ) {
-    let Some(server) =
-        require_live_server(task, &format!("Server does not support {task:?} infer")).await
+    let Some(session) = require_live_direct(
+        task,
+        &format!("Direct session does not support {task:?} infer"),
+    )
+    .await
     else {
         return;
     };
@@ -46,15 +50,7 @@ async fn run_parity_test(
         content: input,
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        command,
-        lang,
-        files,
-        options,
-    )
-    .await;
+    let (info, results) = submit_and_complete_direct(&session, command, lang, files, options).await;
 
     // Some non-English models may not be downloaded — treat as skip.
     if info.status == JobStatus::Failed {

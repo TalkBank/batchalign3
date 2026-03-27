@@ -1,17 +1,17 @@
 //! Batched text NLP dispatch (morphotag, utseg, translate, coref, compare).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::api::{LanguageCode3, ReleasedCommand};
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
+use crate::runner::DispatchHostContext;
 use crate::scheduling::{FailureCategory, WorkUnitKind};
 use crate::text_batch::{TextBatchFileInput, TextBatchFileResult, TextBatchFileResults};
 use tracing::warn;
 
-use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
+use crate::store::{RunnerJobSnapshot, unix_now};
 
 use super::super::util::{FileRunTracker, FileStage, set_file_progress};
 use super::BatchedInferDispatchPlan;
@@ -32,7 +32,7 @@ pub(in crate::runner) fn apply_merge_abbrev(chat_text: &str) -> String {
 /// cache -> infer -> inject -> serialize), and records results per file.
 pub(crate) async fn dispatch_batched_infer(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     services: PipelineServices<'_>,
     plan: BatchedInferDispatchPlan,
 ) {
@@ -53,6 +53,7 @@ pub(crate) async fn dispatch_batched_infer(
     debug_assert_eq!(kernel_plan.file_parallelism_hint, 1);
 
     let started_at = unix_now();
+    let sink = host.sink().clone();
 
     let stage = FileStage::for_batch_command(command);
 
@@ -60,7 +61,7 @@ pub(crate) async fn dispatch_batched_infer(
     // initial stage label.
     for file in file_list {
         let filename = file.filename.as_ref();
-        FileRunTracker::new(store, job_id, filename)
+        FileRunTracker::new(sink.as_ref(), job_id, filename)
             .begin_first_attempt(WorkUnitKind::BatchInfer, started_at, stage)
             .await;
     }
@@ -73,7 +74,7 @@ pub(crate) async fn dispatch_batched_infer(
     for file in file_list {
         let file_index = file.file_index;
         let filename = file.filename.as_ref();
-        let lifecycle = FileRunTracker::new(store, job_id, filename);
+        let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename);
 
         // Transition to Reading while doing I/O so the frontend shows activity.
         lifecycle.stage(FileStage::Reading).await;
@@ -119,7 +120,7 @@ pub(crate) async fn dispatch_batched_infer(
     let total_files = file_texts.len() as i64;
     for file in &file_texts {
         set_file_progress(
-            store,
+            sink.as_ref(),
             job_id,
             file.filename.as_ref(),
             stage,
@@ -201,7 +202,7 @@ pub(crate) async fn dispatch_batched_infer(
         ReleasedCommand::Compare => {
             dispatch_compare(
                 job,
-                store,
+                host,
                 services,
                 &file_texts,
                 cache_policy,
@@ -224,7 +225,7 @@ pub(crate) async fn dispatch_batched_infer(
     for (result_idx, file_result) in results.into_iter().enumerate() {
         let filename = file_result.filename;
         let result = file_result.result;
-        let lifecycle = FileRunTracker::new(store, job_id, filename.as_ref());
+        let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename.as_ref());
         // Find the file_index for this filename
         let file_index = file_list
             .iter()
@@ -236,7 +237,7 @@ pub(crate) async fn dispatch_batched_infer(
             Ok(output_chat) => {
                 // Signal the Writing stage with a per-file counter.
                 set_file_progress(
-                    store,
+                    sink.as_ref(),
                     job_id,
                     filename.as_ref(),
                     FileStage::Writing,

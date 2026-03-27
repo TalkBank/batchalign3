@@ -764,12 +764,16 @@ pub struct ServeStatusArgs {
 /// Arguments for the `jobs` subcommand.
 #[derive(Args, Debug, Clone)]
 pub struct JobsArgs {
-    /// Job ID to inspect. Omit to list all jobs.
+    /// Job ID to inspect. Without `--server`, this inspects local job artifacts.
     pub job_id: Option<String>,
 
-    /// Server URL (or set BATCHALIGN_SERVER env var).
+    /// Server URL (or set BATCHALIGN_SERVER env var) for remote job listing/detail.
     #[arg(long, env = "BATCHALIGN_SERVER")]
     pub server: Option<String>,
+
+    /// Emit machine-readable JSON instead of the default human-readable summary.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Arguments for the `logs` subcommand.

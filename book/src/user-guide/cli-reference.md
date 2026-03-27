@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Current
-**Last updated:** 2026-03-26 01:21 EDT
+**Last updated:** 2026-03-27 07:31 EDT
 
 This page documents the current public `batchalign3` CLI surface. For anything
 you are scripting against, confirm with `batchalign3 <command> --help`.
@@ -24,11 +24,11 @@ Global options go before the command name.
 | `-v`, `-vv`, `-vvv` | Increase verbosity |
 | `--workers N` | Maximum concurrent files per job (default: auto-tune based on RAM and CPU; capped at 8 for GPU commands) |
 | `--force-cpu` | Disable MPS/CUDA and force CPU-only models |
-| `--server URL` | Explicit remote server URL |
+| `--server URL` | Explicit server URL for server-backed dispatch |
 | `--override-cache` | Bypass the utterance analysis cache |
 | `--lazy-audio` / `--no-lazy-audio` | Toggle lazy audio loading for ASR/alignment |
-| `--tui` / `--no-tui` | Toggle full-screen TUI |
-| `--open-dashboard` / `--no-open-dashboard` | Toggle browser auto-open for submitted job pages (macOS only, interactive TTY only) |
+| `--tui` / `--no-tui` | Toggle full-screen TUI for server-backed jobs (`DirectHost` local runs stay on terminal progress bars) |
+| `--open-dashboard` / `--no-open-dashboard` | Toggle browser auto-open for submitted server job pages (macOS only, interactive TTY only) |
 | `--engine-overrides JSON` | Select built-in alternative engines with a flat `{string:string}` JSON object; invalid JSON is rejected |
 
 BA2 compatibility flags (`--memlog`, `--mem-guard`, `--adaptive-workers`,
@@ -41,6 +41,10 @@ On macOS, when you run a processing command interactively (e.g.,
 `batchalign3 transcribe corpus/ output/`), the CLI automatically opens the
 job's dashboard page in your default browser. This lets you monitor progress
 in real time.
+
+Direct local execution does not submit an HTTP job, so there is no dashboard
+page to open. In that mode, `--open-dashboard` is a no-op and the CLI shows
+local terminal progress inline instead.
 
 The dashboard auto-open is **only** triggered when:
 
@@ -143,7 +147,8 @@ are bypassed since they are trained for a single language). Rev.AI handles
 auto-detection separately through its own API.
 
 Routing note: explicit remote `--server` is ignored for `transcribe` because
-the remote server cannot access client-local audio paths.
+the remote server cannot access client-local audio paths. The CLI runs that
+work locally through the direct host instead.
 
 ### `morphotag`
 
@@ -234,10 +239,30 @@ batchalign3 serve stop
 ```bash
 batchalign3 jobs --server http://myserver:8000
 batchalign3 jobs --server http://myserver:8000 <JOB_ID>
+batchalign3 jobs <JOB_ID>
+batchalign3 jobs --json <JOB_ID>
 ```
 
-`jobs` requires an explicit server URL, either from `--server` or
-`BATCHALIGN_SERVER`.
+With `--server`, `jobs` lists or inspects remote jobs as before.
+
+Without `--server`, `jobs <JOB_ID>` inspects the local runtime-owned job
+directory (`~/.batchalign3/jobs/<JOB_ID>` by default, or `BATCHALIGN_STATE_DIR`)
+and prints stable debug handles such as:
+
+- the artifact/staging directory
+- `debug-artifacts.json` when present
+- `debug-traces.json` when present
+- referenced bug-report files
+
+This is meant for post-failure inspection by humans or LLM agents on the same
+machine where the job ran.
+
+Pass `--json` to emit machine-readable JSON instead of the default summary. This
+works for:
+
+- remote job lists
+- remote single-job detail
+- local artifact inspection by job ID
 
 ### `cache`
 

@@ -16,6 +16,14 @@ from pathlib import Path
 _BIN_NAME = "batchalign3.exe" if sys.platform == "win32" else "batchalign3"
 
 
+def _prime_runtime_env(binary: Path | None = None) -> None:
+    """Propagate runtime discovery hints into the Rust CLI process."""
+    if "BATCHALIGN_PYTHON" not in os.environ:
+        os.environ["BATCHALIGN_PYTHON"] = sys.executable
+    if binary is not None and "BATCHALIGN_SELF_EXE" not in os.environ:
+        os.environ["BATCHALIGN_SELF_EXE"] = str(binary)
+
+
 def _exec_binary(binary: Path) -> None:
     """Replace this process with the Rust binary.
 
@@ -24,8 +32,7 @@ def _exec_binary(binary: Path) -> None:
     installed. Without this, the binary would fall back to system Python
     which doesn't have the batchalign package.
     """
-    if "BATCHALIGN_PYTHON" not in os.environ:
-        os.environ["BATCHALIGN_PYTHON"] = sys.executable
+    _prime_runtime_env(binary)
 
     if sys.platform == "win32":
         import subprocess
@@ -61,6 +68,7 @@ def main() -> None:
         # 3. Dev checkout: compile on the fly
         cargo = shutil.which("cargo")
         if cargo:
+            _prime_runtime_env()
             os.execvp(
                 cargo,
                 [

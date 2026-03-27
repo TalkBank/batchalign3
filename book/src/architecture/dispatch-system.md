@@ -1,29 +1,25 @@
 # Dispatch System
 
 **Status:** Current
-**Last modified:** 2026-03-21 07:16 EDT
+**Last modified:** 2026-03-26 18:12 EDT
 
 The dispatch router lives in `crates/batchalign-cli/src/dispatch/mod.rs`.
-The CLI never loads ML models directly. It always routes processing commands to
-either an explicit server or a local daemon.
+The CLI never owns the ML runtime directly. It now routes processing commands
+to either an explicit server host or the in-process direct host.
 
 ```mermaid
 flowchart TD
     args["Parse CLI args"]
     explicit{"--server\nflag?"}
     media_local{"command needs\nlocal media?"}
-    remote["Explicit remote server\n(content mode:\nPOST CHAT / media names)"]
-    daemon{"auto_daemon\nenabled?"}
-    local["Local daemon\n(paths mode:\nfilesystem paths)"]
-    err["Error:\nno server available"]
+    remote["Explicit server host\n(content mode:\nPOST jobs / poll results)"]
+    local["Direct local host\n(inline execution:\nshared engine, local paths)"]
 
     args --> explicit
     explicit -->|yes| media_local
     media_local -->|no| remote
     media_local -->|yes| local
-    explicit -->|no| daemon
-    daemon -->|yes| local
-    daemon -->|no| err
+    explicit -->|no| local
 ```
 
 ## Dispatch paths
@@ -38,41 +34,34 @@ single-server HTTP dispatch.
   them from `media_roots` or `media_mappings`
 - multi-server fan-out is not part of the documented release surface
 
-### 2. Local daemon (paths mode)
+### 2. Direct local execution
 
-If no explicit server is set and `auto_daemon` is enabled in
-`~/.batchalign3/server.yaml`, the CLI starts or reuses a local daemon and
-submits jobs in paths mode.
+If no explicit server is set, the CLI prepares a local paths-mode submission and
+runs it inline through `DirectHost`.
 
-In paths mode, the CLI sends canonical source/output paths and the daemon reads
-and writes files directly on the shared local filesystem.
+In this path, the CLI and direct host stay in one process: there is no HTTP hop,
+no queue, no registry discovery, and no persistent daemon requirement. The same
+shared execution engine still runs the command recipe and worker orchestration.
 
 ### 3. Commands forced to local media access
 
-`transcribe`, `transcribe_s`, and `avqi` require local media discovery. If the
-user passes `--server` for one of these commands, the CLI warns and falls back
-to the local daemon path instead of using the remote URL.
+`transcribe`, `transcribe_s`, `benchmark`, and `avqi` require client-local media
+discovery or local audio access. If the user passes `--server` for one of these
+commands, the CLI warns and falls back to direct local execution instead of
+using the remote URL.
 
-`benchmark` is a composite workflow that follows the same server-selection
-rules as other audio-dependent commands, but its internal execution is still
-Rust-owned (`transcribe` followed by `compare`).
-
-### 4. No server available
-
-If no explicit server is configured and local-daemon startup is unavailable,
-dispatch exits with an actionable error such as:
-
-```text
-error: no server available. Use --server URL or enable auto_daemon in server.yaml.
-```
+`benchmark` is still a composite Rust-owned workflow (`transcribe` followed by
+`compare`), but it now follows the same direct-vs-server host selection rules
+as the other audio-dependent commands.
 
 ## Current scope
 
 This release documents only:
 
 - one explicit remote server URL
-- one local daemon profile
-- one optional sidecar daemon profile for transcribe-heavy workloads
+- one direct local host
+- one explicit server host that owns queueing, persistence, warmup, registry
+  discovery, and dashboard state
 
 It does not document public fleet or multi-server scheduling behavior.
 

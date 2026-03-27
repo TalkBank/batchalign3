@@ -34,7 +34,7 @@ pub(crate) async fn cancel_job(
     let job_id = JobId::from(job_id);
     let status = state
         .control
-        .store
+        .backend
         .job_status(&job_id)
         .await
         .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
@@ -50,7 +50,7 @@ pub(crate) async fn cancel_job(
         })));
     }
 
-    state.control.store.cancel(&job_id).await?;
+    state.control.backend.cancel_job(&job_id).await?;
     Ok(Json(serde_json::json!({
         "status": "cancelled",
         "message": format!("Job {job_id} cancelled.")
@@ -82,8 +82,8 @@ pub(crate) async fn delete_job(
     let job_id = JobId::from(job_id);
     let is_running = state
         .control
-        .store
-        .is_running(&job_id)
+        .backend
+        .is_job_running(&job_id)
         .await
         .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
 
@@ -94,7 +94,7 @@ pub(crate) async fn delete_job(
         });
     }
 
-    state.control.store.delete(&job_id).await?;
+    state.control.backend.delete_job(&job_id).await?;
     Ok(Json(serde_json::json!({
         "status": "deleted",
         "message": format!("Job {job_id} deleted.")
@@ -125,9 +125,7 @@ pub(crate) async fn restart_job(
     Path(job_id): Path<String>,
 ) -> Result<Json<JobInfo>, ServerError> {
     let job_id = JobId::from(job_id);
-    let info = state.control.store.restart(&job_id).await?;
-
-    state.control.queue.notify();
+    let info = state.control.backend.restart_job(&job_id).await?;
 
     Ok(Json(info))
 }

@@ -142,6 +142,8 @@ pub(crate) mod commands;
 pub mod compare;
 pub mod coref;
 pub mod db;
+pub mod debug_artifacts;
+pub mod direct;
 pub mod ensure_wav;
 pub mod error;
 pub mod fa;
@@ -161,8 +163,10 @@ pub mod runner;
 pub mod runtime_paths;
 pub(crate) mod runtime_supervisor;
 pub mod server;
+pub mod server_backend;
 pub mod state;
 pub mod store;
+pub(crate) mod submission;
 pub(crate) mod text_batch;
 pub mod trace_store;
 pub mod transcribe;
@@ -173,9 +177,10 @@ pub mod worker;
 pub mod ws;
 
 // Re-export primary API surface from submodules.
+pub use direct::{DirectHost, DirectRunOutcome};
 pub use server::{
     PreparedWorkers, create_app, create_app_with_prepared_workers, create_app_with_runtime,
-    prepare_workers, serve, serve_with_runtime,
+    prepare_direct_workers, prepare_workers, serve, serve_with_runtime,
 };
 pub use state::AppState;
 pub(crate) use websocket::ws_route;

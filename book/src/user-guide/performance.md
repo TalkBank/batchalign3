@@ -1,7 +1,7 @@
 # Performance
 
 **Status:** Current
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-26 18:12 EDT
 
 This page covers what to expect from Batchalign's processing times and how to
 improve throughput.
@@ -13,8 +13,9 @@ The first run of any command downloads ML models and initializes them — expect
 
 - **Model cache:** Stanza, Whisper, and other ML models are cached on disk
   (~2 GB total). They load from cache on subsequent runs.
-- **Daemon warmth:** When the local daemon is running, models stay in memory.
-  Back-to-back runs skip model loading entirely.
+- **Server warmth:** When an explicit server is running, workers can stay warm
+  in memory across multiple jobs. Direct local execution does not keep a daemon
+  alive between CLI invocations.
 - **Analysis cache:** Batchalign caches NLP results (morphosyntax, alignment)
   in a local SQLite database keyed by content hash. Re-running the same file
   returns cached results instantly.
@@ -23,7 +24,7 @@ The first run of any command downloads ML models and initializes them — expect
 |----------|---------------|
 | First run (model download + init) | 1x (baseline) |
 | Cold start (models cached on disk) | 3-5x faster |
-| Warm daemon (models in memory) | 5-20x faster |
+| Warm server (models in memory) | 5-20x faster |
 | Cached result (identical input) | Near-instant |
 
 ## Worker count

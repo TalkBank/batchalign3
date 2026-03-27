@@ -97,8 +97,9 @@ fn unix_now() -> f64 {
 mod tests {
     use super::*;
     use crate::api::UnixTimestamp;
-    use crate::options::{AlignOptions, CommandOptions, CommonOptions, MorphotagOptions};
-    use crate::options::{AsrEngineName, FaEngineName};
+    use crate::options::{
+        AlignOptions, CommandOptions, CommonOptions, FaEngineName, MorphotagOptions,
+    };
     use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
     use crate::worker::WorkerPid;
 

@@ -35,8 +35,8 @@ pub(crate) async fn get_job(
     let job_id = JobId::from(job_id);
     state
         .control
-        .store
-        .get(&job_id)
+        .backend
+        .get_job(&job_id)
         .await
         .map(Json)
         .ok_or_else(|| ServerError::JobNotFound(job_id))
@@ -69,7 +69,7 @@ pub(crate) async fn get_results(
     let job_id = JobId::from(job_id);
     let detail = state
         .control
-        .store
+        .backend
         .get_job_detail(&job_id)
         .await
         .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
@@ -154,7 +154,7 @@ pub(crate) async fn get_single_result(
     let job_id = JobId::from(job_id);
     let detail = state
         .control
-        .store
+        .backend
         .get_job_detail(&job_id)
         .await
         .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;

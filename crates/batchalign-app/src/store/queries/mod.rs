@@ -148,7 +148,7 @@ mod tests {
     use super::*;
     use crate::api::{DisplayPath, UnixTimestamp};
     use crate::db::JobDB;
-    use crate::options::{AsrEngineName, FaEngineName};
+    use crate::options::FaEngineName;
     use crate::store::job::{
         Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity, JobLeaseState,
         JobRuntimeControl, JobScheduleState, JobSourceContext,

@@ -1,7 +1,6 @@
 //! Compare dispatch: per-file morphosyntax + DP alignment against gold.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::api::{LanguageCode3, ReleasedCommand};
 use crate::params::CachePolicy;
@@ -10,11 +9,12 @@ use crate::recipe_runner::runtime::{
     output_write_path, plan_work_units_for_job, primary_output_artifact, sidecar_output_artifacts,
 };
 use crate::recipe_runner::work_unit::{CompareWorkUnit, PlannedWorkUnit};
+use crate::runner::DispatchHostContext;
 use crate::scheduling::FailureCategory;
 use crate::text_batch::TextBatchFileInput;
 use tracing::{info, warn};
 
-use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
+use crate::store::{RunnerJobSnapshot, unix_now};
 
 use super::super::util::{FileRunTracker, classify_server_error};
 use super::infer_batched::apply_merge_abbrev;
@@ -28,7 +28,7 @@ use super::infer_batched::apply_merge_abbrev;
 #[allow(clippy::too_many_arguments)]
 pub(in crate::runner) async fn dispatch_compare(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     services: PipelineServices<'_>,
     file_texts: &[TextBatchFileInput],
     cache_policy: CachePolicy,
@@ -38,6 +38,7 @@ pub(in crate::runner) async fn dispatch_compare(
     let job_id = &job.identity.job_id;
     let correlation_id = &*job.identity.correlation_id;
     let file_list = &job.pending_files;
+    let sink = host.sink().clone();
     let fallback_lang = crate::api::LanguageCode3::eng();
     let lang: &LanguageCode3 = job.dispatch.lang.as_resolved().unwrap_or(&fallback_lang);
     let compare_units: HashMap<String, CompareWorkUnit> =
@@ -57,7 +58,7 @@ pub(in crate::runner) async fn dispatch_compare(
                     if crate::compare::is_gold_file(filename) {
                         continue;
                     }
-                    FileRunTracker::new(store, job_id, filename)
+                    FileRunTracker::new(sink.as_ref(), job_id, filename)
                         .fail(
                             &format!("Compare planning failed: {error}"),
                             FailureCategory::Validation,
@@ -72,7 +73,7 @@ pub(in crate::runner) async fn dispatch_compare(
     for file in file_texts {
         let filename = file.filename.as_ref();
         let chat_text = file.chat_text.as_ref();
-        let lifecycle = FileRunTracker::new(store, job_id, filename);
+        let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename);
         // Skip gold files — they're companions, not inputs
         if crate::compare::is_gold_file(filename) {
             let now = unix_now();
@@ -207,10 +208,11 @@ mod tests {
     use crate::cache::UtteranceCache;
     use crate::db::JobDB;
     use crate::options::{CommandOptions, CommonOptions, CompareOptions};
+    use crate::runner::DispatchHostContext;
     use crate::scheduling::{AttemptOutcome, WorkUnitKind};
     use crate::store::{
         FileStatus, Job, JobDispatchConfig, JobExecutionState, JobFilesystemConfig, JobIdentity,
-        JobLeaseState, JobRuntimeControl, JobScheduleState, JobSourceContext,
+        JobLeaseState, JobRuntimeControl, JobScheduleState, JobSourceContext, JobStore,
     };
     use crate::worker::pool::WorkerPool;
     use crate::ws::BROADCAST_CAPACITY;
@@ -325,10 +327,11 @@ mod tests {
             .expect("open cache");
         let engine_version = EngineVersion::from("compare-test");
         let services = PipelineServices::new(&pool, &cache, &engine_version);
+        let host = DispatchHostContext::from_store(store.clone());
 
         dispatch_compare(
             &snapshot,
-            &store,
+            &host,
             services,
             &[TextBatchFileInput::new(
                 filename.to_string(),

@@ -4,121 +4,106 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api::{
-    ContentType, DisplayPath, FileProgressStage, JobId, ReleasedCommand, UnixTimestamp,
+    ContentType, DisplayPath, FileProgressStage, JobId, JobStatus, ReleasedCommand, UnixTimestamp,
 };
 use crate::scheduling::{AttemptOutcome, FailureCategory, RetryDisposition, WorkUnitKind};
 use crate::store::{
     AttemptFinishRecord, CompletedFileOutput, FileFailureRecord, FileProgressRecord,
     FileRetryRecord, JobStore, unix_now,
 };
+use async_trait::async_trait;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Mark a file as actively processing and persist the start timestamp.
 pub(in crate::runner) async fn mark_file_processing(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     started_at: UnixTimestamp,
 ) {
-    store
-        .mark_file_processing(job_id, filename, started_at)
+    sink.mark_file_processing(job_id, filename, started_at)
         .await;
 }
 
 /// Mark a file as successfully completed and attach one result entry.
 pub(in crate::runner) async fn mark_file_done(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     result_filename: DisplayPath,
     content_type: ContentType,
     finished_at: UnixTimestamp,
 ) {
-    store
-        .mark_file_done(
-            job_id,
-            filename,
-            finished_at,
-            Some(CompletedFileOutput {
-                filename: result_filename,
-                content_type,
-            }),
-        )
-        .await;
+    sink.mark_file_done(
+        job_id,
+        filename,
+        finished_at,
+        Some(CompletedFileOutput {
+            filename: result_filename,
+            content_type,
+        }),
+    )
+    .await;
 }
 
 /// Mark a file as done without recording a downloadable result artifact.
 pub(in crate::runner) async fn mark_file_done_without_result(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     finished_at: UnixTimestamp,
 ) {
-    store
-        .mark_file_done(job_id, filename, finished_at, None)
+    sink.mark_file_done(job_id, filename, finished_at, None)
         .await;
 }
 
 /// Set a file to error status.
 pub(in crate::runner) async fn set_file_error(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     error: &str,
     category: FailureCategory,
     finished_at: UnixTimestamp,
 ) {
-    store
-        .mark_file_error(
-            job_id,
-            filename,
-            &FileFailureRecord {
-                message: error.to_string(),
-                category,
-                finished_at,
-            },
-        )
+    sink.mark_file_error(job_id, filename, error, category, finished_at)
         .await;
 }
 
 /// Increment the control-plane counter for started work-unit attempts.
 pub(in crate::runner) async fn start_file_attempt(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     work_unit_kind: WorkUnitKind,
     started_at: UnixTimestamp,
 ) {
-    store
-        .start_file_attempt(job_id, filename, work_unit_kind, started_at)
+    sink.start_file_attempt(job_id, filename, work_unit_kind, started_at)
         .await;
 }
 
 /// Finalize a successful file attempt after the output has been persisted.
 pub(in crate::runner) async fn finish_file_attempt_success(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     finished_at: UnixTimestamp,
 ) {
-    store
-        .db_finish_attempt_for_file(
-            job_id,
-            AttemptFinishRecord {
-                filename,
-                outcome: AttemptOutcome::Succeeded,
-                failure_category: None,
-                disposition: RetryDisposition::Succeed,
-                finished_at,
-            },
-        )
-        .await;
+    sink.finish_file_attempt(
+        job_id,
+        filename,
+        AttemptOutcome::Succeeded,
+        None,
+        RetryDisposition::Succeed,
+        finished_at,
+    )
+    .await;
 }
 
 /// Mark a file as waiting for a retry after a transient attempt failure.
 pub(in crate::runner) async fn set_file_retry_pending(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     retry_at: UnixTimestamp,
@@ -126,23 +111,17 @@ pub(in crate::runner) async fn set_file_retry_pending(
     message: &str,
     finished_at: UnixTimestamp,
 ) {
-    store
-        .mark_file_retry_pending(
-            job_id,
-            filename,
-            &FileRetryRecord {
-                message: message.to_string(),
-                category,
-                finished_at,
-                retry_at,
-            },
-        )
+    sink.mark_file_retry_pending(job_id, filename, retry_at, category, message, finished_at)
         .await;
 }
 
 /// Clear transient retry state before a new attempt starts or succeeds.
-pub(in crate::runner) async fn clear_retry_state(store: &JobStore, job_id: &JobId, filename: &str) {
-    store.clear_file_retry_state(job_id, filename).await;
+pub(in crate::runner) async fn clear_retry_state(
+    sink: &dyn RunnerEventSink,
+    job_id: &JobId,
+    filename: &str,
+) {
+    sink.clear_file_retry_state(job_id, filename).await;
 }
 
 /// Update ephemeral progress fields on a file and broadcast the update.
@@ -150,23 +129,14 @@ pub(in crate::runner) async fn clear_retry_state(store: &JobStore, job_id: &JobI
 /// Progress fields are never persisted to SQLite — they are purely for
 /// live display in the CLI/TUI/React dashboard.
 pub(in crate::runner) async fn set_file_progress(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     stage: FileStage,
     current: Option<i64>,
     total: Option<i64>,
 ) {
-    store
-        .set_file_progress(
-            job_id,
-            filename,
-            &FileProgressRecord {
-                stage: stage.api_stage(),
-                current,
-                total,
-            },
-        )
+    sink.set_file_progress(job_id, filename, stage, current, total)
         .await;
 }
 
@@ -180,7 +150,7 @@ pub(in crate::runner) async fn set_file_progress(
 /// - restart the attempt after retryable failures
 /// - finish as success, retry, or terminal error
 pub(crate) struct FileRunTracker<'a> {
-    store: &'a JobStore,
+    sink: &'a dyn RunnerEventSink,
     job_id: &'a JobId,
     filename: &'a str,
 }
@@ -292,11 +262,282 @@ impl FileStage {
     }
 }
 
+/// Runner-owned boundary for publishing file/job lifecycle events.
+///
+/// The execution engine should report what happened through this sink instead
+/// of reaching into the concrete store implementation directly.
+#[async_trait]
+pub(crate) trait RunnerEventSink: Send + Sync {
+    async fn mark_file_processing(&self, job_id: &JobId, filename: &str, started_at: UnixTimestamp);
+    async fn mark_file_done(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        finished_at: UnixTimestamp,
+        result: Option<CompletedFileOutput>,
+    );
+    async fn mark_file_error(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        error: &str,
+        category: FailureCategory,
+        finished_at: UnixTimestamp,
+    );
+    async fn start_file_attempt(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        work_unit_kind: WorkUnitKind,
+        started_at: UnixTimestamp,
+    );
+    async fn finish_file_attempt(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        outcome: AttemptOutcome,
+        failure_category: Option<FailureCategory>,
+        disposition: RetryDisposition,
+        finished_at: UnixTimestamp,
+    );
+    async fn mark_file_retry_pending(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        retry_at: UnixTimestamp,
+        category: FailureCategory,
+        message: &str,
+        finished_at: UnixTimestamp,
+    );
+    async fn clear_file_retry_state(&self, job_id: &JobId, filename: &str);
+    async fn set_file_progress(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        stage: FileStage,
+        current: Option<i64>,
+        total: Option<i64>,
+    );
+    async fn unfinished_files(&self, job_id: &JobId) -> Vec<DisplayPath>;
+    async fn file_status_label(&self, job_id: &JobId, filename: &str) -> Option<String>;
+    async fn bump_forced_terminal_errors(&self, count: usize);
+    async fn fail_job(&self, job_id: &JobId, error: &str, failed_at: UnixTimestamp);
+    async fn mark_job_running(&self, job_id: &JobId);
+    async fn record_job_worker_count(&self, job_id: &JobId, worker_count: usize);
+    async fn requeue_job_after_memory_gate(&self, job_id: &JobId, retry_at: UnixTimestamp);
+    async fn bump_deferred_work_units(&self);
+    async fn bump_memory_gate_aborts(&self);
+    async fn finalize_job(
+        &self,
+        job_id: &JobId,
+        final_status: JobStatus,
+        completed_at: UnixTimestamp,
+    );
+}
+
+/// Store-backed implementation of the runner event sink.
+#[derive(Clone)]
+pub(crate) struct StoreRunnerEventSink {
+    store: Arc<JobStore>,
+}
+
+impl StoreRunnerEventSink {
+    /// Wrap one concrete store as the current runner event sink.
+    pub(crate) fn new(store: Arc<JobStore>) -> Arc<dyn RunnerEventSink> {
+        Arc::new(Self { store })
+    }
+}
+
+#[async_trait]
+impl RunnerEventSink for StoreRunnerEventSink {
+    async fn mark_file_processing(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        started_at: UnixTimestamp,
+    ) {
+        self.store
+            .mark_file_processing(job_id, filename, started_at)
+            .await;
+    }
+
+    async fn mark_file_done(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        finished_at: UnixTimestamp,
+        result: Option<CompletedFileOutput>,
+    ) {
+        self.store
+            .mark_file_done(job_id, filename, finished_at, result)
+            .await;
+    }
+
+    async fn mark_file_error(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        error: &str,
+        category: FailureCategory,
+        finished_at: UnixTimestamp,
+    ) {
+        self.store
+            .mark_file_error(
+                job_id,
+                filename,
+                &FileFailureRecord {
+                    message: error.to_string(),
+                    category,
+                    finished_at,
+                },
+            )
+            .await;
+    }
+
+    async fn start_file_attempt(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        work_unit_kind: WorkUnitKind,
+        started_at: UnixTimestamp,
+    ) {
+        self.store
+            .start_file_attempt(job_id, filename, work_unit_kind, started_at)
+            .await;
+    }
+
+    async fn finish_file_attempt(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        outcome: AttemptOutcome,
+        failure_category: Option<FailureCategory>,
+        disposition: RetryDisposition,
+        finished_at: UnixTimestamp,
+    ) {
+        self.store
+            .db_finish_attempt_for_file(
+                job_id,
+                AttemptFinishRecord {
+                    filename,
+                    outcome,
+                    failure_category,
+                    disposition,
+                    finished_at,
+                },
+            )
+            .await;
+    }
+
+    async fn mark_file_retry_pending(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        retry_at: UnixTimestamp,
+        category: FailureCategory,
+        message: &str,
+        finished_at: UnixTimestamp,
+    ) {
+        self.store
+            .mark_file_retry_pending(
+                job_id,
+                filename,
+                &FileRetryRecord {
+                    message: message.to_string(),
+                    category,
+                    finished_at,
+                    retry_at,
+                },
+            )
+            .await;
+    }
+
+    async fn clear_file_retry_state(&self, job_id: &JobId, filename: &str) {
+        self.store.clear_file_retry_state(job_id, filename).await;
+    }
+
+    async fn set_file_progress(
+        &self,
+        job_id: &JobId,
+        filename: &str,
+        stage: FileStage,
+        current: Option<i64>,
+        total: Option<i64>,
+    ) {
+        self.store
+            .set_file_progress(
+                job_id,
+                filename,
+                &FileProgressRecord {
+                    stage: stage.api_stage(),
+                    current,
+                    total,
+                },
+            )
+            .await;
+    }
+
+    async fn unfinished_files(&self, job_id: &JobId) -> Vec<DisplayPath> {
+        self.store.unfinished_files(job_id).await
+    }
+
+    async fn file_status_label(&self, job_id: &JobId, filename: &str) -> Option<String> {
+        self.store.file_status_label(job_id, filename).await
+    }
+
+    async fn bump_forced_terminal_errors(&self, count: usize) {
+        self.store
+            .bump_counter(|c| c.forced_terminal_errors += count as i64)
+            .await;
+    }
+
+    async fn fail_job(&self, job_id: &JobId, error: &str, failed_at: UnixTimestamp) {
+        self.store.fail_job(job_id, error, failed_at).await;
+    }
+
+    async fn mark_job_running(&self, job_id: &JobId) {
+        self.store.mark_job_running(job_id).await;
+    }
+
+    async fn record_job_worker_count(&self, job_id: &JobId, worker_count: usize) {
+        self.store
+            .record_job_worker_count(job_id, worker_count)
+            .await;
+    }
+
+    async fn requeue_job_after_memory_gate(&self, job_id: &JobId, retry_at: UnixTimestamp) {
+        self.store
+            .requeue_job_after_memory_gate(job_id, retry_at)
+            .await;
+    }
+
+    async fn bump_deferred_work_units(&self) {
+        self.store
+            .bump_counter(|c| c.deferred_work_units += 1)
+            .await;
+    }
+
+    async fn bump_memory_gate_aborts(&self) {
+        self.store.bump_counter(|c| c.memory_gate_aborts += 1).await;
+    }
+
+    async fn finalize_job(
+        &self,
+        job_id: &JobId,
+        final_status: JobStatus,
+        completed_at: UnixTimestamp,
+    ) {
+        self.store
+            .finalize_job(job_id, final_status, completed_at)
+            .await;
+    }
+}
+
 impl<'a> FileRunTracker<'a> {
     /// Bind the helper to one `(job_id, filename)` pair.
-    pub(crate) fn new(store: &'a JobStore, job_id: &'a JobId, filename: &'a str) -> Self {
+    pub(crate) fn new(sink: &'a dyn RunnerEventSink, job_id: &'a JobId, filename: &'a str) -> Self {
         Self {
-            store,
+            sink,
             job_id,
             filename,
         }
@@ -310,10 +551,10 @@ impl<'a> FileRunTracker<'a> {
         started_at: UnixTimestamp,
         stage: FileStage,
     ) {
-        mark_file_processing(self.store, self.job_id, self.filename, started_at).await;
-        clear_retry_state(self.store, self.job_id, self.filename).await;
+        mark_file_processing(self.sink, self.job_id, self.filename, started_at).await;
+        clear_retry_state(self.sink, self.job_id, self.filename).await;
         start_file_attempt(
-            self.store,
+            self.sink,
             self.job_id,
             self.filename,
             work_unit_kind,
@@ -336,9 +577,9 @@ impl<'a> FileRunTracker<'a> {
         category: FailureCategory,
         finished_at: UnixTimestamp,
     ) {
-        clear_retry_state(self.store, self.job_id, self.filename).await;
+        clear_retry_state(self.sink, self.job_id, self.filename).await;
         start_file_attempt(
-            self.store,
+            self.sink,
             self.job_id,
             self.filename,
             WorkUnitKind::FileSetup,
@@ -356,9 +597,9 @@ impl<'a> FileRunTracker<'a> {
         started_at: UnixTimestamp,
         stage: FileStage,
     ) {
-        clear_retry_state(self.store, self.job_id, self.filename).await;
+        clear_retry_state(self.sink, self.job_id, self.filename).await;
         start_file_attempt(
-            self.store,
+            self.sink,
             self.job_id,
             self.filename,
             work_unit_kind,
@@ -370,7 +611,7 @@ impl<'a> FileRunTracker<'a> {
 
     /// Update the current human-readable progress stage.
     pub(crate) async fn stage(&self, stage: FileStage) {
-        set_file_progress(self.store, self.job_id, self.filename, stage, None, None).await;
+        set_file_progress(self.sink, self.job_id, self.filename, stage, None, None).await;
     }
 
     /// Record a retryable failure and publish the retry deadline.
@@ -382,7 +623,7 @@ impl<'a> FileRunTracker<'a> {
         finished_at: UnixTimestamp,
     ) {
         set_file_retry_pending(
-            self.store,
+            self.sink,
             self.job_id,
             self.filename,
             retry_at,
@@ -401,7 +642,7 @@ impl<'a> FileRunTracker<'a> {
         finished_at: UnixTimestamp,
     ) {
         set_file_error(
-            self.store,
+            self.sink,
             self.job_id,
             self.filename,
             error,
@@ -420,7 +661,7 @@ impl<'a> FileRunTracker<'a> {
         finished_at: UnixTimestamp,
     ) {
         mark_file_done(
-            self.store,
+            self.sink,
             self.job_id,
             self.filename,
             result_filename,
@@ -428,14 +669,14 @@ impl<'a> FileRunTracker<'a> {
             finished_at,
         )
         .await;
-        finish_file_attempt_success(self.store, self.job_id, self.filename, finished_at).await;
+        finish_file_attempt_success(self.sink, self.job_id, self.filename, finished_at).await;
     }
 
     /// Mark the file as done without a downloadable artifact and close the
     /// active attempt as successful.
     pub(crate) async fn complete_without_result(&self, finished_at: UnixTimestamp) {
-        mark_file_done_without_result(self.store, self.job_id, self.filename, finished_at).await;
-        finish_file_attempt_success(self.store, self.job_id, self.filename, finished_at).await;
+        mark_file_done_without_result(self.sink, self.job_id, self.filename, finished_at).await;
+        finish_file_attempt_success(self.sink, self.job_id, self.filename, finished_at).await;
     }
 }
 
@@ -502,7 +743,7 @@ where
 /// This keeps panics and early returns from being discovered only by the
 /// runner's coarse "force unfinished files to terminal state" fallback.
 pub(in crate::runner) async fn drain_supervised_file_tasks(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     cancel_token: &CancellationToken,
     tasks: Vec<SpawnedFileTask>,
@@ -515,7 +756,7 @@ pub(in crate::runner) async fn drain_supervised_file_tasks(
             Ok(FileTaskOutcome::MissingTerminalState) => {
                 abnormal_exits += 1;
                 record_abnormal_file_task_exit(
-                    store,
+                    sink,
                     job_id,
                     task.filename.as_ref(),
                     task.role,
@@ -527,7 +768,7 @@ pub(in crate::runner) async fn drain_supervised_file_tasks(
             Err(join_error) => {
                 abnormal_exits += 1;
                 record_abnormal_file_task_exit(
-                    store,
+                    sink,
                     job_id,
                     task.filename.as_ref(),
                     task.role,
@@ -547,7 +788,7 @@ pub(in crate::runner) async fn drain_supervised_file_tasks(
 ///
 /// Returns the sender half. The forwarder runs until the sender is dropped.
 pub(in crate::runner) fn spawn_progress_forwarder(
-    store: Arc<JobStore>,
+    sink: Arc<dyn RunnerEventSink>,
     job_id: JobId,
     filename: String,
 ) -> ProgressSender {
@@ -555,7 +796,7 @@ pub(in crate::runner) fn spawn_progress_forwarder(
     tokio::spawn(async move {
         while let Some(update) = rx.recv().await {
             set_file_progress(
-                &store,
+                sink.as_ref(),
                 &job_id,
                 &filename,
                 update.label,
@@ -573,7 +814,7 @@ pub(in crate::runner) fn spawn_progress_forwarder(
 /// This path is only for supervision failures: task panic, task cancellation,
 /// or a task returning without ever marking its file done/error.
 async fn record_abnormal_file_task_exit(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
     filename: &str,
     role: &str,
@@ -601,20 +842,17 @@ async fn record_abnormal_file_task_exit(
         )
     };
 
-    store
-        .db_finish_attempt_for_file(
-            job_id,
-            AttemptFinishRecord {
-                filename,
-                outcome,
-                failure_category: Some(category),
-                disposition: RetryDisposition::TerminalFailure,
-                finished_at,
-            },
-        )
-        .await;
+    sink.finish_file_attempt(
+        job_id,
+        filename,
+        outcome,
+        Some(category),
+        RetryDisposition::TerminalFailure,
+        finished_at,
+    )
+    .await;
 
-    set_file_error(store, job_id, filename, &message, category, finished_at).await;
+    set_file_error(sink, job_id, filename, &message, category, finished_at).await;
 }
 
 /// Fallback cleanup for any files that still failed to reach a terminal state.
@@ -623,10 +861,10 @@ async fn record_abnormal_file_task_exit(
 /// It remains as a last-resort guard against leaked tasks or other control-
 /// plane bugs.
 pub(in crate::runner) async fn force_terminal_file_states(
-    store: &JobStore,
+    sink: &dyn RunnerEventSink,
     job_id: &JobId,
 ) -> usize {
-    let unfinished: Vec<DisplayPath> = store.unfinished_files(job_id).await;
+    let unfinished: Vec<DisplayPath> = sink.unfinished_files(job_id).await;
 
     if unfinished.is_empty() {
         return 0;
@@ -634,24 +872,23 @@ pub(in crate::runner) async fn force_terminal_file_states(
 
     let now = unix_now();
     for filename in &unfinished {
-        let last_status = store
+        let last_status = sink
             .file_status_label(job_id, filename)
             .await
             .unwrap_or_default();
         let msg = format!("File did not reach terminal status (last status: {last_status})");
-        set_file_error(store, job_id, filename, &msg, FailureCategory::System, now).await;
+        set_file_error(sink, job_id, filename, &msg, FailureCategory::System, now).await;
     }
 
-    store
-        .bump_counter(|c| c.forced_terminal_errors += unfinished.len() as i64)
-        .await;
+    sink.bump_forced_terminal_errors(unfinished.len()).await;
     unfinished.len()
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
@@ -669,6 +906,133 @@ mod tests {
 
     use super::*;
     use crate::api::{LanguageCode3, LanguageSpec};
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct RecordedProgress {
+        job_id: JobId,
+        filename: String,
+        stage: FileStage,
+        current: Option<i64>,
+        total: Option<i64>,
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        progress: Mutex<Vec<RecordedProgress>>,
+    }
+
+    #[async_trait]
+    impl RunnerEventSink for RecordingSink {
+        async fn mark_file_processing(
+            &self,
+            _job_id: &JobId,
+            _filename: &str,
+            _started_at: UnixTimestamp,
+        ) {
+        }
+
+        async fn mark_file_done(
+            &self,
+            _job_id: &JobId,
+            _filename: &str,
+            _finished_at: UnixTimestamp,
+            _result: Option<CompletedFileOutput>,
+        ) {
+        }
+
+        async fn mark_file_error(
+            &self,
+            _job_id: &JobId,
+            _filename: &str,
+            _error: &str,
+            _category: FailureCategory,
+            _finished_at: UnixTimestamp,
+        ) {
+        }
+
+        async fn start_file_attempt(
+            &self,
+            _job_id: &JobId,
+            _filename: &str,
+            _work_unit_kind: WorkUnitKind,
+            _started_at: UnixTimestamp,
+        ) {
+        }
+
+        async fn finish_file_attempt(
+            &self,
+            _job_id: &JobId,
+            _filename: &str,
+            _outcome: AttemptOutcome,
+            _failure_category: Option<FailureCategory>,
+            _disposition: RetryDisposition,
+            _finished_at: UnixTimestamp,
+        ) {
+        }
+
+        async fn mark_file_retry_pending(
+            &self,
+            _job_id: &JobId,
+            _filename: &str,
+            _retry_at: UnixTimestamp,
+            _category: FailureCategory,
+            _message: &str,
+            _finished_at: UnixTimestamp,
+        ) {
+        }
+
+        async fn clear_file_retry_state(&self, _job_id: &JobId, _filename: &str) {}
+
+        async fn set_file_progress(
+            &self,
+            job_id: &JobId,
+            filename: &str,
+            stage: FileStage,
+            current: Option<i64>,
+            total: Option<i64>,
+        ) {
+            self.progress
+                .lock()
+                .expect("progress lock")
+                .push(RecordedProgress {
+                    job_id: job_id.clone(),
+                    filename: filename.to_string(),
+                    stage,
+                    current,
+                    total,
+                });
+        }
+
+        async fn unfinished_files(&self, _job_id: &JobId) -> Vec<DisplayPath> {
+            Vec::new()
+        }
+
+        async fn file_status_label(&self, _job_id: &JobId, _filename: &str) -> Option<String> {
+            None
+        }
+
+        async fn bump_forced_terminal_errors(&self, _count: usize) {}
+
+        async fn fail_job(&self, _job_id: &JobId, _error: &str, _failed_at: UnixTimestamp) {}
+
+        async fn mark_job_running(&self, _job_id: &JobId) {}
+
+        async fn record_job_worker_count(&self, _job_id: &JobId, _worker_count: usize) {}
+
+        async fn requeue_job_after_memory_gate(&self, _job_id: &JobId, _retry_at: UnixTimestamp) {}
+
+        async fn bump_deferred_work_units(&self) {}
+
+        async fn bump_memory_gate_aborts(&self) {}
+
+        async fn finalize_job(
+            &self,
+            _job_id: &JobId,
+            _final_status: JobStatus,
+            _completed_at: UnixTimestamp,
+        ) {
+        }
+    }
 
     fn test_config() -> crate::config::ServerConfig {
         crate::config::ServerConfig {
@@ -744,13 +1108,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn progress_forwarder_routes_updates_through_sink_boundary() {
+        let sink = Arc::new(RecordingSink::default());
+        let job_id = JobId::from("job-progress");
+        let tx = spawn_progress_forwarder(sink.clone(), job_id.clone(), "a.cha".to_string());
+
+        tx.send(ProgressUpdate::new(FileStage::Writing, Some(1), Some(3)))
+            .expect("send progress update");
+        drop(tx);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !sink.progress.lock().expect("progress lock").is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("progress forwarder should flush");
+
+        let progress = sink.progress.lock().expect("progress lock");
+        assert_eq!(
+            progress.as_slice(),
+            &[RecordedProgress {
+                job_id,
+                filename: "a.cha".to_string(),
+                stage: FileStage::Writing,
+                current: Some(1),
+                total: Some(3),
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn supervised_task_marks_non_terminal_exit_as_error() {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = Arc::new(JobStore::new(test_config(), None, tx));
+        let sink = StoreRunnerEventSink::new(store.clone());
         let job_id = JobId::from("job-1");
         store.submit(make_job("job-1")).await.unwrap();
 
-        mark_file_processing(&store, &job_id, "a.cha", unix_now()).await;
+        mark_file_processing(sink.as_ref(), &job_id, "a.cha", unix_now()).await;
 
         let tasks = vec![spawn_supervised_file_task(
             DisplayPath::from("a.cha"),
@@ -759,7 +1158,8 @@ mod tests {
         )];
 
         let abnormal =
-            drain_supervised_file_tasks(&store, &job_id, &CancellationToken::new(), tasks).await;
+            drain_supervised_file_tasks(sink.as_ref(), &job_id, &CancellationToken::new(), tasks)
+                .await;
         assert_eq!(abnormal, 1);
 
         let detail = store.get_job_detail(&job_id).await.unwrap();
@@ -780,10 +1180,11 @@ mod tests {
     async fn supervised_task_marks_panic_as_error() {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = Arc::new(JobStore::new(test_config(), None, tx));
+        let sink = StoreRunnerEventSink::new(store.clone());
         let job_id = JobId::from("job-2");
         store.submit(make_job("job-2")).await.unwrap();
 
-        mark_file_processing(&store, &job_id, "a.cha", unix_now()).await;
+        mark_file_processing(sink.as_ref(), &job_id, "a.cha", unix_now()).await;
 
         let tasks = vec![spawn_supervised_file_task(
             DisplayPath::from("a.cha"),
@@ -794,7 +1195,8 @@ mod tests {
         )];
 
         let abnormal =
-            drain_supervised_file_tasks(&store, &job_id, &CancellationToken::new(), tasks).await;
+            drain_supervised_file_tasks(sink.as_ref(), &job_id, &CancellationToken::new(), tasks)
+                .await;
         assert_eq!(abnormal, 1);
 
         let detail = store.get_job_detail(&job_id).await.unwrap();
@@ -817,10 +1219,11 @@ mod tests {
         let db = Arc::new(JobDB::open(Some(tempdir.path())).await.expect("open db"));
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = Arc::new(JobStore::new(test_config(), Some(db.clone()), tx));
+        let sink = StoreRunnerEventSink::new(store.clone());
         let job_id = JobId::from("job-tracker");
         store.submit(make_job("job-tracker")).await.unwrap();
 
-        let lifecycle = FileRunTracker::new(&store, &job_id, "a.cha");
+        let lifecycle = FileRunTracker::new(sink.as_ref(), &job_id, "a.cha");
         let started_at = unix_now();
         lifecycle
             .begin_first_attempt(WorkUnitKind::FileProcess, started_at, FileStage::Reading)
@@ -878,10 +1281,11 @@ mod tests {
         let db = Arc::new(JobDB::open(Some(tempdir.path())).await.expect("open db"));
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let store = Arc::new(JobStore::new(test_config(), Some(db.clone()), tx));
+        let sink = StoreRunnerEventSink::new(store.clone());
         let job_id = JobId::from("job-setup-failure");
         store.submit(make_job("job-setup-failure")).await.unwrap();
 
-        let lifecycle = FileRunTracker::new(&store, &job_id, "a.cha");
+        let lifecycle = FileRunTracker::new(sink.as_ref(), &job_id, "a.cha");
         let started_at = unix_now();
         let finished_at = unix_now();
         lifecycle

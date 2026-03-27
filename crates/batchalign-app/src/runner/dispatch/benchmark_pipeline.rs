@@ -16,15 +16,16 @@ use crate::recipe_runner::runtime::{
     output_write_path, plan_work_units_for_job, primary_output_artifact, sidecar_output_artifacts,
 };
 use crate::recipe_runner::work_unit::{BenchmarkWorkUnit, PlannedWorkUnit};
+use crate::runner::DispatchHostContext;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
-use crate::store::{JobStore, RunnerJobSnapshot, unix_now};
+use crate::store::{RunnerJobSnapshot, unix_now};
 use crate::transcribe::TranscribeOptions;
 use crate::worker::pool::WorkerPool;
 
 use super::super::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, classify_server_error, drain_supervised_file_tasks,
-    is_retryable_worker_failure, spawn_progress_forwarder, spawn_supervised_file_task,
-    user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, RunnerEventSink, classify_server_error,
+    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_progress_forwarder,
+    spawn_supervised_file_task, user_facing_error,
 };
 use super::BenchmarkDispatchPlan;
 use super::infer_batched::apply_merge_abbrev;
@@ -54,8 +55,8 @@ pub(crate) struct BenchmarkDispatchRuntime {
 struct BenchmarkFileContext<'a> {
     /// Immutable runner snapshot for the current job.
     job: &'a RunnerJobSnapshot,
-    /// Store handle used for lifecycle updates and artifact writes.
-    store: &'a Arc<JobStore>,
+    /// File/job lifecycle sink for runner-side status updates.
+    sink: Arc<dyn RunnerEventSink>,
     /// Shared cache/worker services for transcribe + compare.
     services: PipelineServices<'a>,
     /// Rev.AI preflight job ids keyed by the original provider audio path.
@@ -73,7 +74,7 @@ struct BenchmarkFileContext<'a> {
 /// Dispatch benchmark through the Rust-owned benchmark pipeline.
 pub(crate) async fn dispatch_benchmark_infer(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     runtime: BenchmarkDispatchRuntime,
     plan: BenchmarkDispatchPlan,
 ) {
@@ -84,7 +85,8 @@ pub(crate) async fn dispatch_benchmark_infer(
         mwt,
         should_merge_abbrev,
     } = plan;
-    let planned_units: Arc<HashMap<String, BenchmarkWorkUnit>> =
+    let planned_units: Arc<HashMap<String, BenchmarkWorkUnit>> = {
+        let sink = host.sink().clone();
         match plan_work_units_for_job(crate::api::ReleasedCommand::Benchmark, job) {
             Ok(units) => Arc::new(
                 units
@@ -99,17 +101,23 @@ pub(crate) async fn dispatch_benchmark_infer(
             ),
             Err(error) => {
                 for file in &job.pending_files {
-                    FileRunTracker::new(store, &job.identity.job_id, file.filename.as_ref())
-                        .fail(
-                            &format!("Benchmark planning failed: {error}"),
-                            FailureCategory::Validation,
-                            unix_now(),
-                        )
-                        .await;
+                    FileRunTracker::new(
+                        sink.as_ref(),
+                        &job.identity.job_id,
+                        file.filename.as_ref(),
+                    )
+                    .fail(
+                        &format!("Benchmark planning failed: {error}"),
+                        FailureCategory::Validation,
+                        unix_now(),
+                    )
+                    .await;
                 }
                 return;
             }
-        };
+        }
+    };
+    let sink = host.sink().clone();
 
     let file_parallelism = runtime
         .num_workers
@@ -128,7 +136,7 @@ pub(crate) async fn dispatch_benchmark_infer(
             tracing::warn!("file semaphore closed during shutdown");
             break;
         };
-        let store = store.clone();
+        let sink = sink.clone();
         let pool = runtime.pool.clone();
         let cache = runtime.cache.clone();
         let job = job.clone();
@@ -148,7 +156,7 @@ pub(crate) async fn dispatch_benchmark_infer(
                 let services = PipelineServices::new(&pool, &cache, &engine_version);
                 let context = BenchmarkFileContext {
                     job: &job,
-                    store: &store,
+                    sink: sink.clone(),
                     services,
                     rev_job_ids: rev_job_ids.as_ref(),
                     cache_policy,
@@ -161,8 +169,13 @@ pub(crate) async fn dispatch_benchmark_infer(
         ));
     }
 
-    let abnormal_exits =
-        drain_supervised_file_tasks(store, &job.identity.job_id, &job.cancel_token, tasks).await;
+    let abnormal_exits = drain_supervised_file_tasks(
+        sink.as_ref(),
+        &job.identity.job_id,
+        &job.cancel_token,
+        tasks,
+    )
+    .await;
     if abnormal_exits > 0 {
         warn!(
             job_id = %job.identity.job_id,
@@ -183,7 +196,7 @@ async fn process_one_benchmark_file(
     // metrics artifacts.
     let BenchmarkFileContext {
         job,
-        store,
+        sink,
         services,
         rev_job_ids,
         cache_policy,
@@ -194,7 +207,7 @@ async fn process_one_benchmark_file(
     let job_id = &job.identity.job_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
-    let lifecycle = FileRunTracker::new(store, job_id, filename);
+    let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename);
     let started_at = unix_now();
 
     lifecycle
@@ -263,7 +276,7 @@ async fn process_one_benchmark_file(
         }
 
         let progress_tx =
-            spawn_progress_forwarder(store.clone(), job_id.clone(), filename.to_string());
+            spawn_progress_forwarder(sink.clone(), job_id.clone(), filename.to_string());
 
         match process_benchmark(BenchmarkRequest {
             audio_path: &audio_path,

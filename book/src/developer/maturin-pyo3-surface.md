@@ -1,7 +1,7 @@
 # Maturin Build and PyO3 Dependency Surface
 
 **Status:** Current
-**Last updated:** 2026-03-21 16:15 EDT
+**Last updated:** 2026-03-27 06:42 EDT
 
 ## Overview
 
@@ -56,6 +56,15 @@ It is **not** compiled into the .so extension. Instead:
 This eliminates the old `cli-entry` feature gate that dragged 741 extra crates
 (the entire server stack) into the extension build.
 
+The wrapper is intentionally thin, but it does carry two load-bearing runtime
+handoffs into the Rust binary:
+
+- `BATCHALIGN_PYTHON` — preserve the interpreter/venv that owns the installed
+  worker package
+- `BATCHALIGN_SELF_EXE` — preserve the actual packaged Rust binary path so
+  server/daemon re-exec paths do not have to infer it from the Python
+  console-script launcher
+
 ## Build Commands
 
 ```bash
@@ -89,6 +98,10 @@ cargo check --manifest-path pyo3/Cargo.toml
 
 - **Do not compile the CLI into the .so.** The binary is shipped as package
   data. If you need to change how the CLI is invoked, modify `_cli.py`.
+
+- **Do not move orchestration into `_cli.py`.** The wrapper may pass runtime
+  hints into Rust, but the actual CLI/server behavior still belongs to the Rust
+  binary.
 
 ## Verification checklist
 

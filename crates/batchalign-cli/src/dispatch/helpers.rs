@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use batchalign_app::ReleasedCommand;
 use batchalign_app::api::{DisplayPath, FilePayload, FileStatusKind, JobInfo, JobStatus};
+use batchalign_app::debug_artifacts::JobDebugArtifacts;
 
 use crate::client::{BatchalignClient, MAX_POLL_FAILURES, POLL_MAX, POLL_MIN, POLL_STEP};
 use crate::error::CliError;
@@ -23,16 +24,81 @@ pub(super) struct FileErrorDetail {
     pub filename: DisplayPath,
     /// Human-readable failure explanation.
     pub message: String,
+    /// Optional persisted bug-report identifier for deeper inspection.
+    pub bug_report_id: Option<String>,
 }
 
 impl FileErrorDetail {
     /// Construct one failure detail from a file identity and message.
-    pub(super) fn new(filename: impl Into<DisplayPath>, message: impl Into<String>) -> Self {
+    pub(super) fn new(
+        filename: impl Into<DisplayPath>,
+        message: impl Into<String>,
+        bug_report_id: Option<String>,
+    ) -> Self {
         Self {
             filename: filename.into(),
             message: message.into(),
+            bug_report_id,
         }
     }
+}
+
+/// Progress/log tracker for direct local jobs observed through repeated snapshots.
+///
+/// Direct mode already writes outputs locally, so the CLI only needs to:
+/// - update the progress renderer from the latest job snapshot
+/// - print each newly terminal file once
+#[derive(Default)]
+pub(super) struct DirectProgressTracker {
+    seen_terminal_files: HashSet<String>,
+}
+
+impl DirectProgressTracker {
+    /// Project one job snapshot into the CLI progress sink.
+    pub(super) fn observe(&mut self, progress: &dyn ProgressSink, info: &JobInfo) {
+        progress.update(info.completed_files.max(0) as u64, &info.file_statuses);
+
+        for entry in &info.file_statuses {
+            let filename = entry.filename.to_string();
+            if self.seen_terminal_files.contains(&filename) {
+                continue;
+            }
+
+            match entry.status {
+                FileStatusKind::Done => {
+                    progress.log_done(entry.filename.as_ref());
+                    self.seen_terminal_files.insert(filename);
+                }
+                FileStatusKind::Error => {
+                    let error_msg = entry
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| "unknown error".into());
+                    progress.log_error(entry.filename.as_ref(), &error_msg);
+                    self.seen_terminal_files.insert(filename);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Collect CLI-visible file errors from a final job snapshot.
+pub(super) fn file_error_details(info: &JobInfo) -> Vec<FileErrorDetail> {
+    info.file_statuses
+        .iter()
+        .filter(|entry| entry.status == FileStatusKind::Error)
+        .map(|entry| {
+            FileErrorDetail::new(
+                entry.filename.clone(),
+                entry
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "unknown error".into()),
+                entry.bug_report_id.clone(),
+            )
+        })
+        .collect()
 }
 
 /// Poll a single-server job, writing results incrementally as files complete.
@@ -79,21 +145,31 @@ pub(super) async fn poll_and_write_incrementally(
                                     Ok(false) => {
                                         let error_msg = result.error.unwrap_or_default();
                                         progress.log_error(fn_, &error_msg);
-                                        error_details
-                                            .push(FileErrorDetail::new(fn_.clone(), error_msg));
+                                        error_details.push(FileErrorDetail::new(
+                                            fn_.clone(),
+                                            error_msg,
+                                            None,
+                                        ));
                                     }
                                     Err(e) => {
                                         let error_msg = format!("{e}");
                                         progress.log_error(fn_, &error_msg);
-                                        error_details
-                                            .push(FileErrorDetail::new(fn_.clone(), error_msg));
+                                        error_details.push(FileErrorDetail::new(
+                                            fn_.clone(),
+                                            error_msg,
+                                            None,
+                                        ));
                                     }
                                 }
                             }
                             Err(e) => {
                                 let error_msg = format!("{e}");
                                 progress.log_error(fn_, &error_msg);
-                                error_details.push(FileErrorDetail::new(fn_.clone(), error_msg));
+                                error_details.push(FileErrorDetail::new(
+                                    fn_.clone(),
+                                    error_msg,
+                                    None,
+                                ));
                             }
                         }
                         written_files.insert(fn_.to_string());
@@ -104,7 +180,7 @@ pub(super) async fn poll_and_write_incrementally(
                             .clone()
                             .unwrap_or_else(|| "unknown error".into());
                         progress.log_error(fn_, &error_msg);
-                        error_details.push(FileErrorDetail::new(fn_.clone(), error_msg));
+                        error_details.push(FileErrorDetail::new(fn_.clone(), error_msg, None));
                     }
                 }
 
@@ -427,16 +503,35 @@ pub(super) fn print_failure_summary(errors: &[FileErrorDetail], total_files: u64
     for error in errors {
         let first_line = error.message.split('\n').next().unwrap_or("unknown error");
         let filename = error.filename.as_ref();
-        eprintln!("  \u{2717} {filename}: {first_line}");
+        if let Some(bug_report_id) = error.bug_report_id.as_deref() {
+            eprintln!("  \u{2717} {filename}: {first_line} (bug report: {bug_report_id})");
+        } else {
+            eprintln!("  \u{2717} {filename}: {first_line}");
+        }
     }
 
     eprintln!("{bar}");
     eprintln!();
 }
 
+/// Print stable debug handles for later human or agent inspection.
+pub(super) fn print_job_debug_artifacts(artifacts: &JobDebugArtifacts) {
+    eprintln!("debug job id: {}", artifacts.job_id);
+    eprintln!("debug artifacts dir: {}", artifacts.staging_dir.display());
+    if let Some(trace_file) = artifacts.trace_file.as_ref() {
+        eprintln!("debug traces: {}", trace_file.display());
+    }
+    for bug_report in &artifacts.bug_report_files {
+        eprintln!("debug bug report: {}", bug_report.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::progress::ProgressSink;
     use batchalign_app::api::{
         FileStatusEntry, JobId, LanguageCode3, LanguageSpec, ReleasedCommand,
     };
@@ -483,6 +578,38 @@ mod tests {
             next_eligible_at: None,
             num_workers: None,
             active_lease: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingProgressSink {
+        updates: Mutex<Vec<u64>>,
+        done: Mutex<Vec<String>>,
+        errors: Mutex<Vec<(String, String)>>,
+        finished: Mutex<u32>,
+    }
+
+    impl ProgressSink for RecordingProgressSink {
+        fn update(&self, done: u64, _file_statuses: &[FileStatusEntry]) {
+            self.updates.lock().expect("updates lock").push(done);
+        }
+
+        fn log_done(&self, filename: &str) {
+            self.done
+                .lock()
+                .expect("done lock")
+                .push(filename.to_string());
+        }
+
+        fn log_error(&self, filename: &str, msg: &str) {
+            self.errors
+                .lock()
+                .expect("errors lock")
+                .push((filename.to_string(), msg.to_string()));
+        }
+
+        fn finish(&self) {
+            *self.finished.lock().expect("finished lock") += 1;
         }
     }
 
@@ -728,7 +855,11 @@ mod tests {
     fn finish_terminal_job_rejects_completed_job_with_file_errors() {
         let info = test_job_info(JobStatus::Completed, None);
         let out_dir = tempfile::tempdir().unwrap();
-        let errors = vec![FileErrorDetail::new("clip.cha", "decoder failed\ntrace")];
+        let errors = vec![FileErrorDetail::new(
+            "clip.cha",
+            "decoder failed\ntrace",
+            None,
+        )];
 
         let result = finish_terminal_job(&info, &errors, 1, out_dir.path());
 
@@ -744,5 +875,77 @@ mod tests {
             }
             other => panic!("expected JobFailed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn direct_progress_tracker_logs_new_terminal_files_once() {
+        let sink = RecordingProgressSink::default();
+        let mut tracker = DirectProgressTracker::default();
+        let mut info = test_job_info(JobStatus::Running, None);
+        info.file_statuses = vec![FileStatusEntry {
+            filename: "a.cha".into(),
+            status: FileStatusKind::Processing,
+            error: None,
+            error_category: None,
+            error_codes: None,
+            error_line: None,
+            bug_report_id: None,
+            started_at: None,
+            finished_at: None,
+            next_eligible_at: None,
+            progress_current: Some(1),
+            progress_total: Some(3),
+            progress_stage: None,
+            progress_label: Some("processing".into()),
+        }];
+        info.completed_files = 0;
+
+        tracker.observe(&sink, &info);
+
+        info.file_statuses = vec![
+            FileStatusEntry {
+                filename: "a.cha".into(),
+                status: FileStatusKind::Done,
+                error: None,
+                error_category: None,
+                error_codes: None,
+                error_line: None,
+                bug_report_id: None,
+                started_at: None,
+                finished_at: None,
+                next_eligible_at: None,
+                progress_current: None,
+                progress_total: None,
+                progress_stage: None,
+                progress_label: None,
+            },
+            FileStatusEntry {
+                filename: "b.cha".into(),
+                status: FileStatusKind::Error,
+                error: Some("decoder failed".into()),
+                error_category: None,
+                error_codes: None,
+                error_line: None,
+                bug_report_id: None,
+                started_at: None,
+                finished_at: None,
+                next_eligible_at: None,
+                progress_current: None,
+                progress_total: None,
+                progress_stage: None,
+                progress_label: None,
+            },
+        ];
+        info.completed_files = 2;
+
+        tracker.observe(&sink, &info);
+        tracker.observe(&sink, &info);
+
+        assert_eq!(*sink.updates.lock().expect("updates lock"), vec![0, 2, 2]);
+        assert_eq!(*sink.done.lock().expect("done lock"), vec!["a.cha"]);
+        assert_eq!(
+            *sink.errors.lock().expect("errors lock"),
+            vec![("b.cha".into(), "decoder failed".into())]
+        );
     }
 }

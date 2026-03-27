@@ -6,7 +6,7 @@ use crate::host_policy::HostExecutionPolicy;
 use crate::types::runtime;
 use crate::worker::WorkerBootstrapMode;
 
-use super::catalog::command_performance_profile;
+use super::catalog::released_command_definition;
 use super::spec::{
     BatchingPolicy, ConstrainedHostPolicy, ModelSharingPolicy, ParallelismPolicy, ResourceLane,
     SchedulingPolicy, WarmupPolicy,
@@ -107,27 +107,30 @@ impl CommandKernelPlan {
         file_count: usize,
         host_policy: &HostExecutionPolicy,
     ) -> Self {
-        let profile = command_performance_profile(command);
-        let execution_lane = execution_lane_for(profile.resource_lane, profile.model_sharing);
+        let definition = released_command_definition(command);
+        let execution_lane = execution_lane_for(
+            definition.resource_lane(),
+            definition.model_sharing_policy(),
+        );
         let file_parallelism_hint = host_policy.resolved_file_parallelism(
-            profile.constrained_host,
-            suggested_parallelism(profile.parallelism, execution_lane, file_count),
+            definition.constrained_host_policy(),
+            suggested_parallelism(definition.parallelism_policy(), execution_lane, file_count),
         );
 
         Self {
             command,
-            scheduling: profile.scheduling,
-            model_sharing: profile.model_sharing,
-            batching: profile.batching,
-            resource_lane: profile.resource_lane,
-            constrained_host: profile.constrained_host,
-            warmup: profile.warmup,
+            scheduling: definition.scheduling_policy(),
+            model_sharing: definition.model_sharing_policy(),
+            batching: definition.batching_policy(),
+            resource_lane: definition.resource_lane(),
+            constrained_host: definition.constrained_host_policy(),
+            warmup: definition.warmup_policy(),
             worker_bootstrap: host_policy.bootstrap_mode,
             execution_lane,
             file_parallelism_hint,
             execution_budget_mb: runtime::command_execution_budget_mb(command.as_ref()),
             per_file_buffer_mb: runtime::mb_per_file_mb(),
-            uses_host_memory_gate: profile.uses_host_memory_gate,
+            uses_host_memory_gate: definition.uses_host_memory_gate(),
         }
     }
 }

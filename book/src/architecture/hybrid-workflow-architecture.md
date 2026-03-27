@@ -1,7 +1,7 @@
 # Hybrid Workflow Architecture
 
 **Status:** Historical
-**Last updated:** 2026-03-26 14:05 EDT
+**Last updated:** 2026-03-26 21:12 EDT
 
 This page records the intermediate workflow-family slice that preceded the
 current command-owned architecture cutover.
@@ -119,11 +119,13 @@ contributor-facing map from command name to workflow family and worker
 capability. In the current tree, that role belongs to `commands/catalog.rs`,
 with `workflow/registry.rs` preserved as a compatibility facade.
 
-- `released_command_workflows()` is the single list of released command
-  descriptors.
+- `released_command_definitions()` is the single list of released command
+  definitions.
 - `CommandWorkflowDescriptor` records the command name, family, primary
   `InferTask`, and whether Rust composes the command from lower-level
   capabilities.
+- `CommandExecutionShape` records the authored runtime shape from which the
+  lower-level kernel policy is derived.
 - `WorkflowFamily` names the runtime shape.
 - `Materializer`, `PerFileWorkflow`, `CrossFileBatchWorkflow`,
   `ReferenceProjectionWorkflow`, and `CompositeWorkflow` describe the narrow

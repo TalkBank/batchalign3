@@ -1,7 +1,7 @@
 # Adding a New Command
 
 **Status:** Current
-**Last updated:** 2026-03-26 14:05 EDT
+**Last updated:** 2026-03-27 08:16 EDT
 
 This guide walks through adding a new batchalign3 command end-to-end.
 
@@ -31,8 +31,8 @@ make test     # verify nothing broke (~6s)
 Every command flows through these layers:
 
 ```
-CLI args → CommandOptions → JobSubmission → Runner → commands::<name>::build_plan()
-        → shared kernel / worker pool → output materialization
+CLI args → CommandOptions → JobSubmission → Runner
+        → shared family dispatch / worker pool → output materialization
 ```
 
 The key files, in the order you'll edit them:
@@ -40,7 +40,7 @@ The key files, in the order you'll edit them:
 | Step | File | What you add |
 |------|------|-------------|
 | 1 | `batchalign-types/src/domain.rs` | `ReleasedCommand::YourCommand` variant |
-| 2 | `batchalign-app/src/commands/your_command.rs` | `CommandModuleSpec` + command-owned wrapper |
+| 2 | `batchalign-app/src/commands/your_command.rs` | `CommandDefinition` |
 | 3 | `batchalign-app/src/commands/catalog.rs` and `commands/mod.rs` | Register/export the module |
 | 4 | `batchalign-app/src/your_command.rs` or shared runner code | Core logic (ML dispatch, post-processing) |
 | 5 | `batchalign-cli/src/args/commands.rs` | CLI arg struct |
@@ -59,53 +59,58 @@ pub enum ReleasedCommand {
 
 Update the `ALL` array, `as_str()`, `TryFrom<&str>`, and `From<ReleasedCommand> for CommandName`.
 
-## Step 2: Add the command-owned spec
+## Step 2: Add the command-owned definition
 
 ```rust
 // crates/batchalign-app/src/commands/your_command.rs
-pub(crate) const YOUR_COMMAND_SPEC: CommandModuleSpec = CommandModuleSpec {
-    descriptor: CommandWorkflowDescriptor {
-        command: ReleasedCommand::YourCommand,
-        family: WorkflowFamily::CrossFileBatchTransform,  // pick one of 4 families
-        infer_task: InferTask::YourTask,                  // or reuse existing
-        capability_kind: CommandCapabilityKind::DirectInfer,
-        uses_local_audio: false,
-        output_path_kind: CommandOutputPathKind::PreserveInputName,
-        runner_dispatch_kind: RunnerDispatchKind::BatchedTextInfer,
-    },
-    performance: CommandPerformanceProfile {
-        // Copy the nearest existing command, then narrow it deliberately.
-        ..MORPHOTAG_SPEC.performance
-    },
-};
+use crate::ReleasedCommand;
+use crate::commands::spec::declare_batched_text_command;
+use crate::worker::InferTask;
+
+declare_batched_text_command!(
+    YourCommandSpec,
+    YOUR_COMMAND_DEFINITION,
+    ReleasedCommand::YourCommand,
+    InferTask::YourTask,
+);
 ```
 
-Then export the module from `commands/mod.rs` and add the spec to
+Then export the module from `commands/mod.rs` and add the definition to
 `commands/catalog.rs`. Do **not** create a second registry layer; the
 command-owned catalog is the source of truth for released command metadata.
 
-### Which workflow family?
+Prefer the family declaration helpers over hand-writing
+`CommandWorkflowDescriptor` or calling the lower-level `CommandDefinition`
+constructors directly. The normal command-authoring contract is now:
 
-| Family | Use when | Example |
-|--------|----------|---------|
-| `PerFileTransform` | One file in → one output | `align`, `transcribe` |
-| `CrossFileBatchTransform` | Pool files, batch-infer, fan out | `morphotag`, `utseg`, `translate`, `coref` |
-| `ReferenceProjection` | Compare against a reference | `compare` |
-| `Composite` | Orchestrate sub-workflows | `benchmark` |
+- choose the nearest family helper once
+- supply the released command name and any family-specific task/input knobs
+- let the helper generate the canonical `CommandDefinition`
 
-### Which runner dispatch kind?
+The lower-level descriptor fields are runtime metadata, not normal
+contributor-facing authoring surface. If you find yourself reaching for
+`RunnerDispatchKind` or `CommandCapabilityKind` in an ordinary new command, stop
+and first ask whether one of the existing family helpers should grow to cover
+your case.
 
-| Kind | Use when |
-|------|----------|
-| `BatchedTextInfer` | Text-only commands (CHAT in → CHAT out, no audio) |
-| `ForcedAlignment` | Per-file audio alignment |
-| `TranscribeAudioInfer` | ASR transcription |
-| `BenchmarkAudioInfer` | Benchmark orchestration |
-| `MediaAnalysisV2` | Audio feature extraction (openSMILE, AVQI) |
+### Which family helper should I use?
 
-Most text-only commands use `BatchedTextInfer`.
+| Family helper | Use when | Example |
+|---------------|----------|---------|
+| `declare_batched_text_command!(...)` | Pool text files, batch-infer, fan out | `morphotag`, `utseg`, `translate`, `coref` |
+| `declare_reference_projection_command!(...)` | Compare against a reference | `compare` |
+| `declare_forced_alignment_command!(...)` | Forced alignment over transcript/media inputs | `align` |
+| `declare_transcription_command!(...)` | ASR transcription to CHAT | `transcribe`, `transcribe_s` |
+| `declare_media_analysis_command!(...)` | Media/audio feature extraction | `opensmile`, `avqi` |
+| `declare_benchmark_command!(...)` | Composite benchmark orchestration | `benchmark` |
 
-## Step 3: Implement the command-owned wrapper
+These helpers are backed by family-specific traits in
+`crates/batchalign-app/src/commands/spec.rs`. They intentionally hide the
+server-only routing details and the lower-level constructor calls. Command
+authors should pick the semantic family that matches local/direct development;
+server execution reuses the same definition and derives the runtime path later.
+
+## Step 3: Implement the command-owned module
 
 Create `crates/batchalign-app/src/commands/your_command.rs`.
 
@@ -113,55 +118,62 @@ Create `crates/batchalign-app/src/commands/your_command.rs`.
 
 ```rust
 // commands/your_command.rs
-use std::sync::Arc;
+use crate::ReleasedCommand;
+use crate::commands::spec::declare_batched_text_command;
+use crate::worker::InferTask;
 
-use crate::config::ServerConfig;
-use crate::pipeline::PipelineServices;
-use crate::runner::{dispatch_batched_infer, BatchedInferDispatchPlan, RunnerJobSnapshot};
-use crate::store::JobStore;
-
-pub(crate) fn build_plan(
-    job: &RunnerJobSnapshot,
-    config: &ServerConfig,
-) -> Option<BatchedInferDispatchPlan> {
-    BatchedInferDispatchPlan::from_job(job, config)
-}
-
-pub(crate) async fn run(
-    job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
-    services: PipelineServices<'_>,
-) {
-    let Some(plan) = build_plan(job, store.config()) else {
-        return;
-    };
-    dispatch_batched_infer(job, store, services, plan).await;
-}
+declare_batched_text_command!(
+    YourCommandSpec,
+    YOUR_COMMAND_DEFINITION,
+    ReleasedCommand::YourCommand,
+    InferTask::YourTask,
+);
 ```
 
-Only touch `runner/dispatch/*` when your command shape is genuinely new. Most
-new commands should reuse an existing dispatch family and keep the obvious
-top-level ownership in `src/commands/your_command.rs`.
+That is now the normal case. For the currently shipped command families, the
+shared runner dispatches directly from the `CommandDefinition`, so ordinary
+command modules are usually just definitions plus any command-local domain code.
+Only touch `runner/dispatch/*` when your command shape is genuinely new.
 
 **If you truly need a new family**, add or extend the shared runner kernel and
 keep the command module as the contributor-facing entrypoint:
 
 ```rust
 use crate::pipeline::PipelineServices;
+use crate::runner::{DispatchHostContext, RunnerJobSnapshot};
 pub(crate) async fn run(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     services: PipelineServices<'_>,
 ) {
-    let Some(plan) = build_plan(job, store.config()) else {
+    let Some(plan) = YourDispatchPlan::from_job(job, host.config()) else {
         return;
     };
-    dispatch_your_family(job, store, services, plan).await;
+    dispatch_your_family(job, host, services, plan).await;
 }
 ```
 
 See `commands/align.rs`, `commands/morphotag.rs`, and `commands/benchmark.rs`
 for the current real examples.
+
+### Direct-first development contract
+
+When adding an ordinary command, assume:
+
+- the command should run in direct mode on a laptop first
+- the command should not need to know whether a server exists
+- the command definition is the single source of truth
+- server mode may derive a different execution host, but not a different command
+  meaning
+
+If your command truly needs server-specific behavior, make that an explicit
+opt-in in shared runtime code rather than teaching every command author about
+server internals.
+
+If none of the current family helpers fit, that is a platform/runtime task: add
+or extend one family trait/helper in `commands/spec.rs`, then wire the shared
+runner family once. Ordinary command authors should not solve that by
+hand-writing one-off runtime metadata.
 
 ## Step 4: Core logic
 

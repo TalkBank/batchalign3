@@ -1,15 +1,15 @@
 //! Differential tests proving CLI options actually change model behavior.
 //!
-//! Each test submits the same input with option A, then option B, and asserts
-//! the outputs differ in the expected dimension. This catches "option is parsed
-//! but never propagated" bugs — the class of bug most frequently found in the
-//! BA2 parity audit.
+//! Each test runs the same input with option A, then option B, through direct
+//! execution and asserts the outputs differ in the expected dimension. This
+//! catches "option is parsed but never propagated" bugs — the class of bug
+//! most frequently found in the BA2 parity audit.
 //!
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
 use crate::common::{
-    assert_completed_without_errors, prepare_audio_fixtures, require_live_server,
-    submit_and_complete, submit_paths_and_complete,
+    assert_completed_without_errors, prepare_audio_fixtures, require_live_direct,
+    submit_and_complete_direct, submit_paths_and_complete_direct,
 };
 use batchalign_app::api::{FilePayload, ReleasedCommand};
 use batchalign_app::options::{
@@ -41,9 +41,9 @@ const ENG_GONNA: &str = "\
 /// With retokenize=true: "gonna" splits into "going to" (2 tokens).
 #[tokio::test]
 async fn option_morphotag_retokenize_changes_tokens() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -51,9 +51,8 @@ async fn option_morphotag_retokenize_changes_tokens() {
     };
 
     // Run with retokenize=false
-    let (info_a, results_a) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info_a, results_a) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -74,9 +73,8 @@ async fn option_morphotag_retokenize_changes_tokens() {
     assert_completed_without_errors("retokenize_false", &info_a, &results_a);
 
     // Run with retokenize=true
-    let (info_b, results_b) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info_b, results_b) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -119,20 +117,20 @@ async fn option_morphotag_retokenize_changes_tokens() {
 /// %wor Include vs Omit should control tier presence in align output.
 #[tokio::test]
 async fn option_align_wor_controls_tier_presence() {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
     // Run with wor=Include
-    let out_include = server.state_dir().join("wor_include_out.cha");
-    let (info_a, outputs_a) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let out_include = session.state_dir().join("wor_include_out.cha");
+    let (info_a, outputs_a) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -151,10 +149,9 @@ async fn option_align_wor_controls_tier_presence() {
     assert_completed_without_errors("wor_include", &info_a, &[]);
 
     // Run with wor=Omit
-    let out_omit = server.state_dir().join("wor_omit_out.cha");
-    let (info_b, outputs_b) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let out_omit = session.state_dir().join("wor_omit_out.cha");
+    let (info_b, outputs_b) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -191,20 +188,20 @@ async fn option_align_wor_controls_tier_presence() {
 /// Wave2Vec vs Whisper FA engines should produce different timing bullets.
 #[tokio::test]
 async fn option_align_fa_engine_produces_different_timing() {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
 
-    let Some(fixtures) = prepare_audio_fixtures(server.state_dir()) else {
+    let Some(fixtures) = prepare_audio_fixtures(session.state_dir()) else {
         return;
     };
 
     // Run with Wave2Vec
-    let out_w2v = server.state_dir().join("fa_w2v_out.cha");
-    let (info_a, outputs_a) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let out_w2v = session.state_dir().join("fa_w2v_out.cha");
+    let (info_a, outputs_a) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -223,10 +220,9 @@ async fn option_align_fa_engine_produces_different_timing() {
     assert_completed_without_errors("fa_wav2vec", &info_a, &[]);
 
     // Run with Whisper
-    let out_wh = server.state_dir().join("fa_whisper_out.cha");
-    let (info_b, outputs_b) = submit_paths_and_complete(
-        server.client(),
-        server.base_url(),
+    let out_wh = session.state_dir().join("fa_whisper_out.cha");
+    let (info_b, outputs_b) = submit_paths_and_complete_direct(
+        &session,
         ReleasedCommand::Align,
         "eng",
         vec![fixtures.stripped_chat.to_string_lossy().into()],
@@ -254,9 +250,9 @@ async fn option_align_fa_engine_produces_different_timing() {
 /// Cache override forces recomputation — both runs should succeed.
 #[tokio::test]
 async fn option_override_cache_forces_recompute() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -274,9 +270,8 @@ async fn option_override_cache_forces_recompute() {
 ";
 
     // First run — normal (populates cache).
-    let (info1, results1) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info1, results1) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -294,9 +289,8 @@ async fn option_override_cache_forces_recompute() {
     assert_completed_without_errors("cache_normal", &info1, &results1);
 
     // Second run — override_cache=true (should recompute).
-    let (info2, results2) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info2, results2) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -330,9 +324,9 @@ async fn option_override_cache_forces_recompute() {
 /// skipmultilang=true on bilingual file should skip processing.
 #[tokio::test]
 async fn option_morphotag_skipmultilang() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -350,9 +344,8 @@ async fn option_morphotag_skipmultilang() {
 ";
 
     // Run with skipmultilang=false — should process
-    let (info_a, results_a) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info_a, results_a) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -373,9 +366,8 @@ async fn option_morphotag_skipmultilang() {
     assert_completed_without_errors("skipmultilang_false", &info_a, &results_a);
 
     // Run with skipmultilang=true — should skip bilingual files
-    let (info_b, results_b) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info_b, results_b) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {

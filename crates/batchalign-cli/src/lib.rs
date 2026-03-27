@@ -1,16 +1,15 @@
 #![warn(missing_docs)]
-//! CLI client for the batchalign3 processing server.
+//! CLI for batchalign3 direct and server-backed execution.
 //!
 //! This crate implements the `batchalign3` command-line interface. The CLI
-//! is **always an HTTP client** -- it never loads ML models or processes
-//! CHAT files directly. All NLP work is delegated to a batchalign server
-//! (see [`batchalign_server`]) which in turn dispatches to Python workers.
+//! does not own the command engine itself, but it can now route work through
+//! either direct local execution or an explicit batchalign server
+//! (see [`batchalign_server`]).
 //!
 //! # Dispatch flow
 //!
 //! When the user runs a processing command (e.g. `batchalign3 morphotag`),
-//! the CLI must find a server to submit the job to. The dispatch router
-//! tries the following in priority order:
+//! the dispatch router chooses a host:
 //!
 //! ```text
 //!   --server URL given?
@@ -18,29 +17,29 @@
 //!   yes  |   no
 //!   |    |    |
 //!   v    |    v
-//! single |  auto_daemon enabled in server.yaml?
-//! server |       |
-//!        |  yes  |   no
-//!        |  |    |    |
-//!        |  v    |    v
-//!        | local |  ERROR:
-//!        | daemon|  no server
-//!        v       v       v
-//!      dispatch to server
+//! command | direct
+//! needs   | local
+//! local   |
+//! media?  |
+//!   |     |
+//! yes|no  |
+//!   |  |  |
+//!   v  v  v
+//! direct remote direct
+//! local  server local
 //! ```
 //!
-//! # Three dispatch modes
+//! # Dispatch modes
 //!
 //! 1. **Single-server** (`--server URL`): The CLI reads local `.cha` files,
 //!    POSTs their content (~2 KB each) to the server, polls for completion,
-//!    and writes results to the output directory. Transcribe is blocked
-//!    (server cannot access client audio).
+//!    and writes results to the output directory. Audio-dependent commands
+//!    that need client-local media fall back to direct local execution.
 //!
-//! 2. **Local daemon / paths mode** (auto-daemon): When no explicit server
-//!    is specified, the CLI starts (or reuses) a local daemon process. In
-//!    paths mode, only filesystem paths are sent to the daemon -- no file
-//!    content crosses the wire. This enables transcribe (shared filesystem)
-//!    and avoids redundant I/O.
+//! 2. **Direct local execution**: When no explicit server is specified, the
+//!    CLI prepares a local submission and runs it inline through the shared
+//!    execution engine. No HTTP server, queue, or registry discovery is
+//!    required for this path.
 //!
 //! # Usage
 //!
@@ -63,6 +62,10 @@
 //! batchalign3 jobs --server http://myserver:8000
 //! batchalign3 jobs <JOB_ID>
 //! ```
+//!
+//! With `--server`, `jobs` queries the remote server. Without `--server`, a
+//! positional `JOB_ID` inspects local debug artifacts under the runtime-owned
+//! jobs directory.
 //!
 //! # Examples
 //!
@@ -137,7 +140,7 @@
 //!
 //! | Module        | Responsibility                                                     |
 //! |---------------|--------------------------------------------------------------------|
-//! | [`jobs_cmd`]  | `batchalign3 jobs` -- query jobs on remote servers                |
+//! | [`jobs_cmd`]  | `batchalign3 jobs` -- inspect remote jobs or local job artifacts  |
 //! | [`cache_cmd`] | `batchalign3 cache` -- cache statistics and clearing               |
 //! | [`logs_cmd`]  | `batchalign3 logs` -- view, export, follow, clear run logs         |
 //! | [`setup_cmd`] | `batchalign3 setup` -- initialize `~/.batchalign.ini`              |

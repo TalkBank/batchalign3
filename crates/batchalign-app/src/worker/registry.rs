@@ -269,7 +269,11 @@ pub fn kill_owned_daemons(registry_path: &Path, current_server_instance_id: &str
     if let Err(e) = write_registry(registry_path, &remaining) {
         warn!(error = %e, "Failed to rewrite worker registry after shutdown");
     } else {
-        info!(killed, remaining = remaining.len(), "Retired owned TCP daemon workers");
+        info!(
+            killed,
+            remaining = remaining.len(),
+            "Retired owned TCP daemon workers"
+        );
     }
 }
 

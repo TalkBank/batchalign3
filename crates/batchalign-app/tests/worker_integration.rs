@@ -628,7 +628,11 @@ async fn shutdown_only_kills_current_server_owned_daemons() {
     );
 
     let entries = read_registry(&registry_path);
-    assert_eq!(entries.len(), 1, "expected only the external daemon to remain");
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected only the external daemon to remain"
+    );
     assert_eq!(entries[0].pid, external_pid);
     assert_eq!(entries[0].ownership, RegistryOwnership::External);
 

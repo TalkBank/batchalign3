@@ -1,24 +1,34 @@
-//! Dispatch router — routes processing commands to servers.
+//! Dispatch router — routes processing commands to direct or server hosts.
 //!
 //! Mirrors `dispatch.py` + `dispatch_server.py`.
 //!
-//! The Rust CLI is always an HTTP client — it never loads ML models.
-//! All processing goes through a server (remote or local daemon).
+//! Explicit `--server` runs against an HTTP server. Without `--server`, local
+//! processing commands execute inline through the shared direct host.
 
 mod helpers;
 mod paths;
 mod single;
 
+use std::time::Duration;
+
 use batchalign_app::config::{RuntimeLayout, load_validated_config_from_layout};
+use batchalign_app::host_memory::HostMemoryRuntimeConfig;
+use batchalign_app::host_policy::HostExecutionPolicy;
 use batchalign_app::options::CommandOptions;
-use batchalign_app::{ReleasedCommand, released_command_uses_local_audio};
-use tracing::debug;
+use batchalign_app::worker::handle::WorkerRuntimeConfig;
+use batchalign_app::worker::pool::PoolConfig;
+use batchalign_app::{
+    DirectHost, ReleasedCommand, prepare_direct_workers, released_command_uses_local_audio,
+};
+use batchalign_app::{api::JobInfo, api::JobStatus, config::ServerConfig};
 
 use crate::client::{self, BatchalignClient, server_label};
-use crate::daemon;
 use crate::error::CliError;
+use crate::progress::BatchProgress;
+use crate::python::resolve_python_executable;
 
-use paths::dispatch_paths_mode;
+use helpers::{DirectProgressTracker, file_error_details, finish_terminal_job};
+use paths::prepare_paths_submission;
 use single::dispatch_single_server;
 
 // ---------------------------------------------------------------------------
@@ -64,7 +74,7 @@ pub struct DispatchRequest<'a> {
     pub timeout: Option<u64>,
 }
 
-/// Route a processing command to the appropriate server(s).
+/// Route a processing command to the appropriate execution host.
 ///
 /// This is the main entry point for all CLI processing commands. It resolves
 /// where to send work using the following priority chain:
@@ -72,11 +82,10 @@ pub struct DispatchRequest<'a> {
 /// 1. **Explicit `--server URL`** -- single-server dispatch
 ///    via HTTP content mode (CHAT text posted to server, results downloaded).
 ///    Audio-dependent commands (`transcribe`, `transcribe_s`, `benchmark`,
-///    `avqi`) fall back to the local daemon even if `--server` is set,
+///    `avqi`) fall back to direct local execution even if `--server` is set,
 ///    because the remote content-mode path cannot access local audio files.
-/// 2. **Auto-daemon** (if `auto_daemon` is enabled in `server.yaml`) --
-///    paths-mode dispatch to a local daemon that reads/writes files directly.
-/// 3. **Error** -- no server available; an error message is printed.
+/// 2. **Direct local execution** -- local filesystem processing goes through
+///    the shared direct host with no daemon/queue layer.
 ///
 /// # Parameters
 ///
@@ -85,8 +94,8 @@ pub struct DispatchRequest<'a> {
 ///
 /// # Errors
 ///
-/// Returns [`CliError`] on I/O failures, HTTP errors, job failures, or if
-/// no server can be resolved.
+/// Returns [`CliError`] on I/O failures, HTTP errors, job failures, or direct
+/// execution failures.
 pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
     let DispatchRequest {
         command,
@@ -107,9 +116,7 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
         workers,
         timeout,
     } = request;
-    let client = BatchalignClient::new();
     let layout = RuntimeLayout::from_env();
-    let daemon_log_path = layout.state_dir().join("daemon.log");
 
     // --bank requires --server
     if bank.is_some() && server_arg.is_none() {
@@ -121,43 +128,34 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
     if let Some(server) = server_arg {
         if released_command_uses_local_audio(command) {
             eprintln!(
-                "warning: {command} uses local audio — ignoring --server and using local daemon."
+                "warning: {command} uses local audio — ignoring --server and running locally."
             );
-            match resolve_local_daemon_for_command(&client, command, force_cpu, workers, timeout)
-                .await
-            {
-                Ok(Some(daemon_url)) => {
-                    return dispatch_paths_mode(
-                        &client,
-                        &daemon_url,
-                        command,
-                        lang,
-                        num_speakers,
-                        extensions,
-                        inputs,
-                        out_dir,
-                        options.as_ref(),
-                        bank,
-                        subdir,
-                        lexicon,
-                        use_tui,
-                        open_dashboard,
-                        before,
-                    )
-                    .await;
-                }
-                Ok(None) => {
-                    eprintln!(
-                        "warning: local daemon unavailable for {command}. \
-                         Check {} or start one with `batchalign3 serve start`.",
-                        daemon_log_path.display()
-                    );
-                    return Err(CliError::DaemonStartFailed);
-                }
-                Err(e) => return Err(e),
+            let (cfg, warnings) = load_validated_config_from_layout(&layout, None)?;
+            for warning in warnings {
+                eprintln!("warning: {warning}");
             }
+            return dispatch_direct_mode(
+                cfg,
+                layout,
+                command,
+                lang,
+                num_speakers,
+                extensions,
+                inputs,
+                out_dir,
+                options.as_ref(),
+                bank,
+                subdir,
+                lexicon,
+                before,
+                force_cpu,
+                workers,
+                timeout,
+            )
+            .await;
         }
 
+        let client = BatchalignClient::new();
         let urls = client::parse_servers(server);
         if urls.is_empty() {
             eprintln!("error: no server URL provided");
@@ -191,100 +189,210 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
         return Ok(());
     }
 
-    // 2. Auto-daemon
+    // 2. Direct local execution
     let (cfg, warnings) = load_validated_config_from_layout(&layout, None)?;
     for warning in warnings {
         eprintln!("warning: {warning}");
     }
-    if cfg.auto_daemon {
-        match resolve_local_daemon_for_command(&client, command, force_cpu, workers, timeout).await
-        {
-            Ok(Some(daemon_url)) => {
-                return dispatch_paths_mode(
-                    &client,
-                    &daemon_url,
-                    command,
-                    lang,
-                    num_speakers,
-                    extensions,
-                    inputs,
-                    out_dir,
-                    options.as_ref(),
-                    bank,
-                    subdir,
-                    lexicon,
-                    use_tui,
-                    open_dashboard,
-                    before,
-                )
-                .await;
-            }
-            Ok(None) => {
-                eprintln!(
-                    "warning: could not start local daemon. Check {} for details.",
-                    daemon_log_path.display()
-                );
-                return Err(CliError::DaemonStartFailed);
-            }
-            Err(e) => {
-                debug!(error = %e, "Daemon startup failed");
-                return Err(e);
-            }
-        }
-    }
-
-    // 3. Only reached when auto_daemon is explicitly false
-    eprintln!("error: no server available. Use --server URL or enable auto_daemon in server.yaml.");
-    Ok(())
+    dispatch_direct_mode(
+        cfg,
+        layout,
+        command,
+        lang,
+        num_speakers,
+        extensions,
+        inputs,
+        out_dir,
+        options.as_ref(),
+        None,
+        None,
+        lexicon,
+        before,
+        force_cpu,
+        workers,
+        timeout,
+    )
+    .await
 }
 
-async fn resolve_local_daemon_for_command(
-    client: &BatchalignClient,
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_direct_mode(
+    mut cfg: ServerConfig,
+    layout: RuntimeLayout,
     command: ReleasedCommand,
+    lang: &str,
+    num_speakers: u32,
+    extensions: &[&str],
+    inputs: &[std::path::PathBuf],
+    out_dir: Option<&std::path::Path>,
+    options: Option<&CommandOptions>,
+    bank: Option<&str>,
+    subdir: Option<&str>,
+    lexicon: Option<&str>,
+    before: Option<&std::path::Path>,
     force_cpu: bool,
     workers: Option<usize>,
     timeout: Option<u64>,
-) -> Result<Option<String>, CliError> {
-    let main = daemon::ensure_daemon(force_cpu, workers, timeout).await?;
-    if let Some(url) = main {
-        if daemon_supports_command(client, &url, command).await {
-            return Ok(Some(url));
-        }
-
-        let can_use_sidecar = released_command_uses_local_audio(command);
-        if can_use_sidecar {
-            eprintln!("warning: main daemon lacks '{command}', trying sidecar daemon.");
-            if let Some(sidecar_url) =
-                daemon::ensure_sidecar_daemon(force_cpu, workers, timeout).await?
-                && daemon_supports_command(client, &sidecar_url, command).await
-            {
-                return Ok(Some(sidecar_url));
-            }
-        } else {
-            eprintln!(
-                "warning: local daemon does not advertise support for '{command}'. \
-                 Check worker dependencies."
-            );
-        }
-    } else if released_command_uses_local_audio(command)
-        && let Some(sidecar_url) =
-            daemon::ensure_sidecar_daemon(force_cpu, workers, timeout).await?
-        && daemon_supports_command(client, &sidecar_url, command).await
-    {
-        return Ok(Some(sidecar_url));
+) -> Result<(), CliError> {
+    if let Some(workers) = workers {
+        cfg.max_workers_per_job = workers as i32;
+    }
+    if let Some(timeout) = timeout {
+        cfg.audio_task_timeout_s = timeout;
     }
 
-    Ok(None)
+    let mapping_keys = cfg.media_mappings.keys().cloned().collect::<Vec<_>>();
+    let Some(prepared) = prepare_paths_submission(
+        command,
+        lang,
+        num_speakers,
+        extensions,
+        inputs,
+        out_dir,
+        options,
+        bank,
+        subdir,
+        lexicon,
+        before,
+        &mapping_keys,
+    )?
+    else {
+        eprintln!("warning: no files found with extensions {extensions:?}");
+        return Ok(());
+    };
+
+    eprintln!("Found {} file(s) to process.\n", prepared.total_files);
+    eprintln!("Running locally (direct mode)...\n");
+
+    let direct_workers = prepare_direct_workers(&cfg, build_direct_pool_config(&cfg, force_cpu))
+        .await
+        .map_err(CliError::from)?;
+    let host = DirectHost::new(cfg, layout, None, None, &direct_workers)
+        .await
+        .map_err(CliError::from)?;
+    let job_id = host
+        .submit_submission(prepared.submission)
+        .await
+        .map_err(CliError::from)?;
+    let submitted_debug = host
+        .job_debug_artifacts(&job_id)
+        .await
+        .map_err(CliError::from)?;
+    eprintln!("Direct job prepared.\n");
+    helpers::print_job_debug_artifacts(&submitted_debug);
+    eprintln!();
+
+    let progress = BatchProgress::new(prepared.total_files as u64, command.as_wire_name());
+    let mut tracker = DirectProgressTracker::default();
+    if let Ok(initial) = host.job_info(&job_id).await {
+        tracker.observe(&progress, &initial);
+    }
+
+    let runner_host = host.clone();
+    let run_job_id = job_id.clone();
+    let run_fut = async move {
+        runner_host
+            .run_job(&run_job_id)
+            .await
+            .map_err(CliError::from)
+    };
+    tokio::pin!(run_fut);
+    let mut poll_interval = tokio::time::interval(Duration::from_millis(120));
+    poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    let final_info: JobInfo = loop {
+        tokio::select! {
+            result = &mut run_fut => {
+                if let Err(error) = result {
+                    progress.finish();
+                    return Err(error);
+                }
+                let info = match host.job_info(&job_id).await {
+                    Ok(info) => info,
+                    Err(error) => {
+                        progress.finish();
+                        return Err(CliError::from(error));
+                    }
+                };
+                tracker.observe(&progress, &info);
+                break info;
+            }
+            _ = poll_interval.tick() => {
+                if let Ok(info) = host.job_info(&job_id).await {
+                    tracker.observe(&progress, &info);
+                }
+            }
+        }
+    };
+    progress.finish();
+
+    let error_details = file_error_details(&final_info);
+    let clean_success = final_info.status == JobStatus::Completed
+        && error_details.is_empty()
+        && final_info
+            .error
+            .as_ref()
+            .is_none_or(|s| s.trim().is_empty());
+    if !clean_success {
+        match host.job_debug_artifacts(&job_id).await {
+            Ok(artifacts) => {
+                eprintln!();
+                helpers::print_job_debug_artifacts(&artifacts);
+                eprintln!();
+            }
+            Err(error) => eprintln!("warning: failed to collect direct debug artifacts: {error}"),
+        }
+    }
+    finish_terminal_job(
+        &final_info,
+        &error_details,
+        prepared.total_files as u64,
+        &prepared.effective_out,
+    )
 }
 
-async fn daemon_supports_command(
-    client: &BatchalignClient,
-    url: &str,
-    command: ReleasedCommand,
-) -> bool {
-    match client.health_check(url).await {
-        Ok(health) => server_supports_command(&health.capabilities, command),
-        Err(_) => false,
+fn build_direct_pool_config(cfg: &ServerConfig, force_cpu: bool) -> PoolConfig {
+    let tier = cfg.resolved_memory_tier();
+    let host_policy = HostExecutionPolicy::from_server_config(cfg);
+    let idle_timeout_s = cfg.resolved_worker_idle_timeout_s();
+    let worker_runtime = WorkerRuntimeConfig {
+        force_cpu,
+        gpu_thread_pool_size: cfg.gpu_thread_pool_size,
+        host_memory: HostMemoryRuntimeConfig::from_server_config(cfg),
+        memory_tier: tier,
+        bootstrap_mode: host_policy.bootstrap_mode,
+        ..WorkerRuntimeConfig::default()
+    };
+    PoolConfig {
+        python_path: resolve_python_executable(),
+        idle_timeout_s,
+        health_check_interval_s: if cfg.worker_health_interval_s > 0 {
+            cfg.worker_health_interval_s
+        } else {
+            PoolConfig::default().health_check_interval_s
+        },
+        verbose: 0,
+        engine_overrides: String::new(),
+        runtime: worker_runtime,
+        max_workers_per_key: if cfg.max_workers_per_key > 0 {
+            cfg.max_workers_per_key as usize
+        } else {
+            PoolConfig::default().max_workers_per_key
+        },
+        ready_timeout_s: if cfg.worker_ready_timeout_s > 0 {
+            cfg.worker_ready_timeout_s
+        } else {
+            PoolConfig::default().ready_timeout_s
+        },
+        max_total_workers: if cfg.max_total_workers > 0 {
+            cfg.max_total_workers as usize
+        } else {
+            0
+        },
+        audio_task_timeout_s: cfg.audio_task_timeout_s,
+        analysis_task_timeout_s: cfg.analysis_task_timeout_s,
+        worker_registry_path: cfg.worker_registry_path.clone(),
+        ..PoolConfig::default()
     }
 }
 
@@ -297,9 +405,7 @@ fn server_supports_command(capabilities: &[String], command: ReleasedCommand) ->
 
 /// Warn (but don't block) if the server's build hash differs from the CLI's.
 ///
-/// For auto-daemon connections, stale detection is handled by
-/// `daemon::ensure_daemon_locked()` (auto-restart).  This warning covers
-/// explicit `--server` connections where auto-restart isn't possible.
+/// This warning only applies to explicit `--server` connections.
 fn warn_stale_server(server_url: &str, health: &batchalign_app::api::HealthResponse) {
     if !health.build_hash.is_empty() && health.build_hash != crate::build_hash() {
         eprintln!(

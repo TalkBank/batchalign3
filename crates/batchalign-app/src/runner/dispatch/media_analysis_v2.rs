@@ -9,12 +9,14 @@ use tracing::{error, warn};
 
 use crate::ensure_wav;
 use crate::recipe_runner::runtime::{output_write_path, result_display_path_for_command};
+use crate::runner::DispatchHostContext;
 use crate::runner::util::{
-    FileRunTracker, FileStage, FileTaskOutcome, classify_worker_error, drain_supervised_file_tasks,
-    is_retryable_worker_failure, spawn_supervised_file_task, user_facing_error,
+    FileRunTracker, FileStage, FileTaskOutcome, RunnerEventSink, classify_worker_error,
+    drain_supervised_file_tasks, is_retryable_worker_failure, spawn_supervised_file_task,
+    user_facing_error,
 };
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
-use crate::store::{JobStore, PendingJobFile, RunnerJobSnapshot, unix_now};
+use crate::store::{PendingJobFile, RunnerJobSnapshot, unix_now};
 use crate::types::worker_v2::{AvqiResultV2, ExecuteOutcomeV2, OpenSmileResultV2, TaskResultV2};
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
 use crate::worker::avqi_request_v2::{
@@ -40,10 +42,11 @@ pub(crate) struct MediaAnalysisDispatchRuntime {
 /// Dispatch per-file media-analysis commands through typed worker protocol V2.
 pub(crate) async fn dispatch_media_analysis_v2(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    host: &DispatchHostContext,
     runtime: MediaAnalysisDispatchRuntime,
     plan: MediaAnalysisDispatchPlan,
 ) {
+    let sink = host.sink().clone();
     let file_parallelism_hint = match &plan {
         MediaAnalysisDispatchPlan::Opensmile { kernel_plan, .. }
         | MediaAnalysisDispatchPlan::Avqi { kernel_plan } => kernel_plan.file_parallelism_hint,
@@ -65,7 +68,7 @@ pub(crate) async fn dispatch_media_analysis_v2(
             tracing::warn!("file semaphore closed during shutdown");
             break;
         };
-        let store = store.clone();
+        let sink = sink.clone();
         let pool = runtime.pool.clone();
         let job = job.clone();
         let file = file.clone();
@@ -77,13 +80,18 @@ pub(crate) async fn dispatch_media_analysis_v2(
             "media-analysis V2 file task",
             async move {
                 let _permit = permit;
-                process_one_media_analysis_file_v2(&job, &store, &pool, &file, &plan).await
+                process_one_media_analysis_file_v2(&job, sink.clone(), &pool, &file, &plan).await
             },
         ));
     }
 
-    let abnormal_exits =
-        drain_supervised_file_tasks(store, &job.identity.job_id, &job.cancel_token, tasks).await;
+    let abnormal_exits = drain_supervised_file_tasks(
+        sink.as_ref(),
+        &job.identity.job_id,
+        &job.cancel_token,
+        tasks,
+    )
+    .await;
     if abnormal_exits > 0 {
         warn!(
             job_id = %job.identity.job_id,
@@ -95,7 +103,7 @@ pub(crate) async fn dispatch_media_analysis_v2(
 
 async fn process_one_media_analysis_file_v2(
     job: &RunnerJobSnapshot,
-    store: &Arc<JobStore>,
+    sink: Arc<dyn RunnerEventSink>,
     pool: &Arc<WorkerPool>,
     file: &PendingJobFile,
     plan: &MediaAnalysisDispatchPlan,
@@ -104,7 +112,7 @@ async fn process_one_media_analysis_file_v2(
     let correlation_id = &*job.identity.correlation_id;
     let file_index = file.file_index;
     let filename = file.filename.as_ref();
-    let lifecycle = FileRunTracker::new(store, job_id, filename);
+    let lifecycle = FileRunTracker::new(sink.as_ref(), job_id, filename);
     let started_at = unix_now();
 
     lifecycle

@@ -1,4 +1,4 @@
-//! Command-owned catalog and performance metadata.
+//! Command-owned catalog and derived runtime metadata.
 
 use crate::ReleasedCommand;
 
@@ -17,8 +17,8 @@ pub(crate) mod translate;
 pub(crate) mod utseg;
 
 pub(crate) use catalog::{
-    command_performance_profile, command_workflow_descriptor, released_command_descriptor,
-    released_command_workflows,
+    command_workflow_descriptor, released_command_definition, released_command_definitions,
+    released_command_descriptor,
 };
 pub(crate) use kernel::CommandKernelPlan;
 pub(crate) use spec::RunnerDispatchKind;

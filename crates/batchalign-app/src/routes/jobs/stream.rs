@@ -40,13 +40,13 @@ pub(crate) async fn stream_job(
     let job_id = crate::api::JobId::from(job_id);
     let initial_info = state
         .control
-        .store
-        .get(&job_id)
+        .backend
+        .get_job(&job_id)
         .await
         .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
 
     // Subscribe to broadcast BEFORE building the snapshot to avoid missing events.
-    let rx = state.control.ws_tx.subscribe();
+    let rx = state.control.backend.subscribe_events();
 
     let stream = async_stream(rx, job_id, initial_info);
 

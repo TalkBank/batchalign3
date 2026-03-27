@@ -1,7 +1,7 @@
 # Rust CLI and Server
 
 **Status:** Current
-**Last updated:** 2026-03-26 16:08 EDT
+**Last updated:** 2026-03-27 08:16 EDT
 
 This page covers the Rust control plane that powers `batchalign3`: the CLI
 client, the HTTP server, and how to extend them.
@@ -14,10 +14,10 @@ for replacing the legacy stdio JSON-lines worker contract.
 
 | Crate | Role |
 |-------|------|
-| `crates/batchalign-cli` | Clap CLI, dispatch router, daemon lifecycle, output writing |
+| `crates/batchalign-cli` | Clap CLI, dispatch router, direct-host bootstrap, explicit server lifecycle, output writing |
 | `crates/batchalign-app` | Axum HTTP server, job store, worker pool, cache, command-owned orchestration |
 | `crates/batchalign-chat-ops` | CHAT extraction, injection, validation, ASR post-processing, DP alignment |
-| `crates/batchalign-app/src/commands/` | released-command wrappers, specs, and command-owned entrypoints |
+| `crates/batchalign-app/src/commands/` | released-command definitions, author-facing constructors, and the command catalog |
 | `pyo3/` | PyO3 bridge (`batchalign_core`) — separate single-crate project, not in the workspace |
 
 ## Common Developer Commands
@@ -63,8 +63,20 @@ The CLI layer now exposes two contributor-facing named seams:
 The dispatcher also consults
 `batchalign_app::released_command_uses_local_audio()` and the shared released
 command catalog to decide whether a requested command can stay on an explicit
-`--server` path or must fall back to a local daemon because it needs
+`--server` path or must fall back to direct local execution because it needs
 client-side audio files.
+
+On the app side, the current execution split is now:
+
+- `ExecutionEngine` — shared command execution core
+- `ServerExecutionHost` — queue/store/server-owned lifecycle behavior
+- `DirectHost` / `DirectExecutionHost` — inline local execution without queueing
+  or registry discovery
+- `ServerBackend` / `EmbeddedServerBackend` — route-facing server control-plane
+  seam over persisted jobs, queue wakeups, event subscription, traces, and
+  runtime shutdown
+- `prepare_workers*()` vs `prepare_direct_workers()` — explicit separation
+  between server worker bootstrap and direct local worker bootstrap
 
 When the CLI is polling or writing file results, `FileErrorDetail` in
 `crates/batchalign-cli/src/dispatch/helpers.rs` keeps file-scoped failures as a
@@ -72,11 +84,32 @@ named record instead of spreading filename/message pairs through the progress
 code.
 
 The command-specific logic now starts in
-`crates/batchalign-app/src/commands/`. That layer owns the command-visible
-entrypoints and specs. `command_family.rs` keeps the small family enum used by
-command metadata, `text_batch.rs` keeps reusable text-family helpers, and
-`runner/dispatch/` keeps shared execution helpers. `crates/batchalign-app/src/runner/`
-should stay focused on job lifecycle, queueing, and policy.
+`crates/batchalign-app/src/commands/`. That layer owns the canonical
+`CommandDefinition` catalog plus the family authoring traits/macros that
+generate those definitions. For the currently shipped command families, an
+ordinary command module now uses a helper such as
+`declare_batched_text_command!(...)` or `declare_transcription_command!(...)`
+instead of spelling out runtime metadata or even calling the lower-level
+constructors directly. The shared runner dispatches by definition/family, so
+ordinary command modules no longer need to import store/queue/host plumbing just
+to forward into an existing family executor.
+
+That is an intentional contributor contract:
+
+- new commands should be authored direct-first and laptop-friendly
+- command authors should not need to understand server internals
+- command authors should usually only pick a family helper, not hand-author
+  scheduling/runtime metadata
+- server mode may opt into a different host/backend, but it should reuse the
+  same generated command definition
+
+`command_family.rs` keeps the small family enum used by command metadata,
+`text_batch.rs` keeps reusable text-family helpers, and `runner/dispatch/`
+keeps shared execution helpers. `crates/batchalign-app/src/runner/` should stay
+focused on job lifecycle, queueing, and policy rather than becoming a second
+authoring surface for commands.
+HTTP routes, SSE, and WebSocket handlers should prefer `ServerBackend` over
+reaching through `AppState` to raw `JobStore`, queue, or runtime internals.
 
 One dependency-graph cleanup already landed here: the standalone binary's OTLP
 telemetry stack and update-check helper are now gated behind the
@@ -86,6 +119,175 @@ dependencies into the extension build.
 The embedded CLI bootstrap path now also lives in `batchalign-cli`
 (`run_embedded_cli_from_argv()`), so `pyo3` no longer owns its own `clap`
 parsing or Tokio runtime setup.
+
+Under `uv tool install`, the Python wrapper now also primes
+`BATCHALIGN_SELF_EXE` before it `exec`s the packaged Rust binary. That gives
+Rust server/daemon re-exec paths one explicit source of truth for "which binary
+am I?" instead of forcing them to guess from `current_exe()` or PATH.
+
+## Server control-plane replacement guidance
+
+The current recommendation is:
+
+- **Do not replace Axum just to say the server is off the shelf.** The HTTP
+  shell is not the main pain source.
+- **Do not move the primary CLI or server into Python.** That would re-center
+  orchestration around the worker/package layer instead of the typed Rust
+  control plane.
+- **If we replace something, replace the control-plane backend** behind
+  `ServerBackend`: queued-job claims, retries, recovery, runtime supervision,
+  persisted progress, and cancellation.
+
+That keeps the architectural split honest:
+
+- `ExecutionEngine` remains the canonical command execution core.
+- `DirectHost` remains the BA2-style local/default execution path.
+- `ServerBackend` becomes the place where embedded-vs-durable server behavior
+  can differ without teaching commands about server internals.
+
+For now the embedded backend should remain the default for local and single-host
+installs. If managed/fleet mode eventually needs a durable external backend,
+Temporal is the most plausible serious candidate. Python task queues such as
+Celery or Dramatiq are a poor primary fit because they would drag the
+orchestration boundary back into Python or create awkward split-brain control
+plane semantics.
+
+Suggested migration order:
+
+1. keep the embedded backend as the only real backend while more queue claims,
+   retries, recovery, and runtime-supervision behavior moves behind
+   `ServerBackend`
+2. keep direct mode and the shared `ExecutionEngine` unchanged during that move
+3. only after the backend boundary is genuinely load-bearing, evaluate one
+   optional durable backend for managed/fleet deployments
+4. keep local `uv tool install` and BA2-style direct/local CLI behavior as the
+   non-negotiable default throughout
+
+That migration is now one step deeper than the first route-facing extraction:
+the server factory no longer hand-assembles the embedded queue backend, runtime
+supervisor, broadcast bus, and queue dispatcher itself. That bootstrap now lives
+behind `bootstrap_embedded_server_backend()`, so `server.rs` asks for one
+embedded control plane instead of learning how the in-process backend is wired.
+
+The embedded backend is also now split into a thinner app-facing
+`EmbeddedServerBackend` wrapper over a named `EmbeddedJobOrchestrator`. That is
+the stronger internal seam where embedded-only queue wakeups, runtime shutdown,
+store projections, and future retry/recovery policy can accumulate without
+re-expanding the route layer or the server factory.
+
+The shared runner also no longer hardcodes embedded queue wakeups or local
+retry-backoff math for host-memory rejection. Queued server execution now asks a
+host-owned orchestrator seam to decide what to do when capacity is rejected,
+which is the minimum contract a durable backend spike needs in order to replace
+embedded requeue behavior cleanly.
+
+### Pre-spike backend contract
+
+Before any Temporal or other durable-backend spike, the architecture contract
+should be treated as:
+
+- `ExecutionEngine` owns canonical command execution only.
+- `DirectHost` remains fully outside durable orchestration.
+- `ServerBackend` owns app-facing job submission, inspection, cancellation,
+  traces, event subscription, and runtime shutdown.
+- `EmbeddedJobOrchestrator` owns embedded server-only queue wakeups, requeue
+  policy, runtime supervision, and other queued-job orchestration details.
+- The shared runner may report failures and progress, but it should not know how
+  an embedded queue is woken or how a durable backend persists retries.
+
+If a candidate backend cannot satisfy that contract without pulling queue/store
+details back into routes, startup glue, or the shared runner, the spike is
+happening too early.
+
+### Packaging before a backend spike
+
+Do **not** split the default installation into `uv tool install batchalign3`
+plus `uv tool install batchalign3-server` yet.
+
+For now the right default is still one install:
+
+- BA2-style local/direct use stays simple.
+- The CLI and server still share too much runtime and orchestration code to
+  justify separate distributions.
+- A packaging split now would confound backend-spike results with a second
+  variable: product/distribution layout.
+
+If a future durable backend creates a real dependency/lifecycle divergence, then
+an optional dedicated `batchalign3-server` package can be reconsidered. It is
+not the right preparatory step before the spike.
+
+### Temporal assessment
+
+Temporal is the strongest-looking future durable backend, but **only** as an
+optional server-mode backend after the embedded backend seam is deeper and more
+load-bearing.
+
+Why it fits:
+
+- Temporal's durable workflow/event-history model matches the parts of the
+  current embedded control plane that are genuinely painful: queued-job
+  ownership, retries, recovery, long-running execution, and cancellation.
+- The Rust client and SDK already expose workflow start/list/cancel/signal/query
+ /update semantics, which map naturally to job submission, cancellation,
+ inspection, and server-side progress APIs.
+- Temporal itself recommends a local dev server (`temporal server start-dev`)
+  for development and testing, so it is plausible to spike without standing up a
+  full production cluster first.
+
+Why it is **not** the default answer:
+
+- The Rust client/SDK are still explicitly **prerelease**, so this is not a
+  strong foundation for making Temporal mandatory for all users.
+- Self-hosting Temporal is still a real operational dependency. That is a poor
+  trade for BA2-style local work or for the default `uv tool install` path.
+- `DirectHost` should remain outside Temporal. BA2-style local/direct execution
+  is valuable precisely because it avoids durable orchestration overhead.
+- Host-memory gating and Python worker subprocess ownership are host-local
+  concerns. Temporal can coordinate durable job state, but it does not remove
+  the need for local machine-level policy around model startup and RAM pressure.
+- Progress broadcasts and algorithm traces should remain host-local server
+  surfaces. Temporal may own durable orchestration, but it should not become the
+  dashboard/event bus for every transient file-progress tick.
+
+So the current recommendation is:
+
+- **keep embedded as the local/default backend**
+- **treat Temporal as an optional managed/fleet backend candidate**
+- **do not evaluate Temporal seriously until more queue/retry/recovery behavior
+  is behind `ServerBackend`**
+- **do not move the shared engine, direct mode, or Python worker packaging
+  boundary just to accommodate Temporal**
+
+### First-class debuggability
+
+Direct mode and server mode should share the **shape of the debugging handles**
+they expose, but they should **not** be forced to share one live control-plane
+implementation just for symmetry.
+
+What should be shared:
+
+- stable `job_id`
+- stable staging/artifact directory
+- bug-report identifiers / files
+- optional persisted trace artifact file
+
+What should remain mode-specific:
+
+- HTTP polling / WebSocket / dashboard transport
+- queue persistence and recovery model
+- live event fan-out
+- server-only operational state
+
+Direct mode now persists a machine-readable `debug-artifacts.json` file inside
+the per-job staging directory and exports `debug-traces.json` when traces were
+captured. The CLI also prints the direct job ID and artifact directory up front,
+so a human or LLM agent can later inspect a failed local run by job ID instead
+of relying on transient terminal output alone.
+
+Opt-in telemetry is still worth considering, but only as an **additive**
+debugging aid for fleet/server deployments. It should not replace inspectable
+local artifacts. The first-class debugging path must remain: "here is the job
+ID and here are the files to inspect."
 
 For day-to-day command work, prefer the command layer first:
 
@@ -126,9 +328,9 @@ wire format between CLI and server.
 ### 4. Server-side task routing and capability gate
 
 **`crates/batchalign-app/src/commands/<name>.rs`** — Add the command's
-`CommandModuleSpec`.
+`CommandDefinition`.
 
-**`crates/batchalign-app/src/commands/catalog.rs`** — Register/export that spec
+**`crates/batchalign-app/src/commands/catalog.rs`** — Register/export that definition
 in the released-command catalog.
 
 Compatibility helpers in `crates/batchalign-app/src/runner/policy.rs` still

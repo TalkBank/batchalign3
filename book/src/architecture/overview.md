@@ -1,16 +1,17 @@
 # Data Flow Overview
 
 **Status:** Current
-**Last updated:** 2026-03-26 14:05 EDT
+**Last updated:** 2026-03-26 21:12 EDT
 
 This document traces the complete data flow for every batchalign command,
-from CLI invocation through the Rust server to Python ML inference and back.
+including both direct local execution and explicit server-backed execution.
 
 ```mermaid
 flowchart LR
     user["User"]
     cli["Rust CLI\n(batchalign-cli)"]
-    server["Rust Server\n(batchalign-app)"]
+    direct["DirectHost\n(batchalign-app)"]
+    server["ServerHost\n(batchalign-app)"]
     pool["Worker Pool"]
     w1["Python Worker\n(Stanza)"]
     w2["Python Worker\n(Whisper)"]
@@ -18,18 +19,24 @@ flowchart LR
     cache["SQLite\n(cache.db)"]
 
     user -->|CLI args| cli
+    cli -->|inline| direct
     cli -->|HTTP| server
+    direct --> pool
     server --> pool
     pool -->|"stdio JSON"| w1 & w2
     server --> db
+    direct --> cache
     server --> cache
 ```
 
 ## Architecture
 
-Batchalign3 is a Rust-primary system. The Rust CLI is always an HTTP client
-that dispatches work to a Rust server (local daemon or remote). The server
-owns CHAT parsing, caching, validation, and serialization. Python workers are
+Batchalign3 is a Rust-primary system. The Rust CLI now has two execution paths:
+
+- **direct local execution** through `DirectHost`
+- **explicit server execution** through `ServerHost`
+
+Both hosts reuse the same command-owned execution engine. Python workers remain
 stateless ML inference endpoints that never see CHAT text.
 
 The production data flow for released commands now begins with the command-owned
@@ -38,12 +45,14 @@ entrypoints under `crates/batchalign-app/src/commands/`, and the small shared
 metadata/helpers in `command_family.rs` and `text_batch.rs`. There is no longer
 a live `crates/batchalign-app/src/workflow/` tree in the app crate.
 
-The production data flow for all commands:
+The production data flow for all commands now starts from the same command-owned
+catalog and shared engine, then diverges by host:
 
 ```
 Rust CLI (dispatch/mod.rs)
-  --> HTTP POST /jobs to Rust server
-  --> Server runner (runner/mod.rs) spawns async job task
+  --> choose host:
+      1. DirectHost (default local path)
+      2. ServerHost (`--server` / `serve`)
   --> Dispatch routing resolves the command-owned catalog entry and then enters one of:
       1. dispatch_batched_infer()        — morphotag / utseg / translate / coref
       2. dispatch_fa_infer()             — forced alignment
@@ -54,7 +63,8 @@ Rust CLI (dispatch/mod.rs)
       7. process_one_file()              — worker-owned media analysis legacy path
   --> Command-owned wrapper + shared dispatch family run the pipeline:
       parse → cache check → typed worker IPC → inject → validate → serialize
-  --> CLI polls /jobs/{id}/results and writes output files
+  --> DirectHost writes outputs inline, or ServerHost persists job state and the
+      CLI polls /jobs/{id}/results
 ```
 
 Python workers receive structured payloads (words, audio paths) over stdio
@@ -77,19 +87,19 @@ The CLI dispatch router (`crates/batchalign-cli/src/dispatch/mod.rs`) resolves
 where to send work:
 
 1. **Explicit `--server URL`** — single-server dispatch. CHAT text is POSTed
-   to the server, results are downloaded. Audio-dependent commands
-   (`transcribe`, `transcribe_s`, `benchmark`, `avqi`) fall back to the local
-   daemon because the remote server cannot access local audio.
-2. **Auto-daemon** (if `auto_daemon` is enabled in `server.yaml`) —
-   paths-mode dispatch to a local daemon that reads/writes files directly.
-3. **Error** — no server available.
+   to the server and results are downloaded.
+2. **Direct local execution** — default local path. The CLI prepares a local
+   submission and runs it inline through `DirectHost`.
+3. **Audio-dependent commands with `--server`** — `transcribe`,
+   `transcribe_s`, `benchmark`, and `avqi` ignore the remote URL and run
+   locally because the remote server cannot access client-local audio.
 
 ### Two transport modes
 
 | Mode | When | How files move |
 |------|------|---------------|
 | **Content mode** | Explicit `--server` (remote) | CLI reads `.cha` files, POSTs text in request body, downloads result text |
-| **Paths mode** | Local daemon | CLI sends filesystem paths, daemon reads/writes directly |
+| **Direct paths mode** | Default local execution | CLI prepares canonical source/output paths and `DirectHost` reads/writes them inline |
 
 ### File discovery
 
@@ -156,9 +166,10 @@ infer only when all inputs are CHAT files (not raw audio).
 | `process_one_file` | legacy compatibility only | Per-file worker IPC retained for non-release compatibility code, not for the current CLI surface |
 
 The command-owned catalog in `commands/catalog.rs` is the source of truth for
-which released command maps to which family and performance profile. The
-dispatch functions above are the runtime entry points those command wrappers
-reuse.
+which released command maps to which family, descriptor, and authored execution
+shape. The dispatch functions above are the runtime entry points those command
+wrappers reuse, while lower-level kernel policy is derived from that execution
+shape rather than authored in a second profile object.
 
 ---
 
@@ -349,7 +360,7 @@ paired audio files: *.cs.wav (continuous speech) + *.sv.wav (sustained vowel)
   → dict result
 ```
 
-No CHAT involvement. Requires local daemon (paired-file discovery).
+No CHAT involvement. Requires direct local execution (paired-file discovery).
 
 ---
 

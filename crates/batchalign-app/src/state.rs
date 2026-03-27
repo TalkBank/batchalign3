@@ -5,21 +5,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::broadcast;
 use tracing::warn;
 
-use crate::commands::released_command_workflows;
+use crate::commands::released_command_definitions;
 use crate::commands::spec::CommandCapabilityKind;
 use crate::config::ServerConfig;
 use crate::error;
 use crate::media::MediaResolver;
-use crate::queue::QueueBackend;
-use crate::runtime_supervisor::{RuntimeSupervisor, ShutdownError, ShutdownSummary};
-use crate::store::JobStore;
-use crate::worker::{InferTask, WorkerCapabilities};
+use crate::runtime_supervisor::{ShutdownError, ShutdownSummary};
+use crate::server_backend::ServerBackend;
 use crate::worker::pool::WorkerPool;
 use crate::worker::target::task_name as infer_task_capability_name;
-use crate::ws::WsEvent;
+use crate::worker::{InferTask, WorkerCapabilities};
 
 // ---------------------------------------------------------------------------
 // Application state
@@ -28,17 +25,11 @@ use crate::ws::WsEvent;
 /// Shared coordination handles for the server control plane.
 ///
 /// These are the mutable runtime boundaries that routes and background tasks
-/// must collaborate through instead of open-coding their own task sets or
-/// broadcast channels.
+/// must collaborate through instead of open-coding separate store, queue,
+/// runtime, and broadcast dependencies.
 pub(crate) struct AppControlPlane {
-    /// In-memory job registry backed by SQLite write-through.
-    pub store: Arc<JobStore>,
-    /// Queue backend used to wake the dispatcher after submissions/restarts.
-    pub queue: Arc<dyn QueueBackend>,
-    /// Owned supervisor for queue-dispatch and per-job background tasks.
-    pub runtime: RuntimeSupervisor,
-    /// Broadcast sender for WebSocket/SSE events.
-    pub ws_tx: broadcast::Sender<WsEvent>,
+    /// Route-facing backend for queued-job orchestration and persisted state.
+    pub backend: Arc<dyn ServerBackend>,
 }
 
 /// Worker-facing runtime dependencies and the capability profile discovered at startup.
@@ -128,8 +119,8 @@ impl AppState {
         &self,
         timeout: Duration,
     ) -> Result<ShutdownSummary, ShutdownError> {
-        let _ = self.control.store.cancel_all().await;
-        self.control.runtime.shutdown(timeout).await
+        let _ = self.control.backend.cancel_all().await;
+        self.control.backend.shutdown_runtime(timeout).await
     }
 }
 
@@ -140,8 +131,9 @@ impl AppState {
 fn derive_command_capabilities(infer_tasks: &[InferTask]) -> Vec<String> {
     let mut derived = Vec::new();
 
-    for descriptor in released_command_workflows()
+    for descriptor in released_command_definitions()
         .iter()
+        .map(|definition| definition.descriptor)
         .filter(|descriptor| descriptor.capability_kind == CommandCapabilityKind::DirectInfer)
     {
         if infer_tasks.contains(&descriptor.infer_task)
@@ -153,8 +145,9 @@ fn derive_command_capabilities(infer_tasks: &[InferTask]) -> Vec<String> {
         }
     }
 
-    for descriptor in released_command_workflows()
+    for descriptor in released_command_definitions()
         .iter()
+        .map(|definition| definition.descriptor)
         .filter(|descriptor| descriptor.capability_kind == CommandCapabilityKind::ServerComposed)
     {
         if infer_tasks.contains(&descriptor.infer_task)
@@ -407,10 +400,8 @@ mod tests {
     fn resolve_worker_capability_snapshot_falls_back_to_startup_when_no_live_data() {
         let startup_capabilities = vec!["morphotag".to_string()];
         let startup_infer_tasks = vec![InferTask::Morphosyntax];
-        let startup_engine_versions = BTreeMap::from([(
-            "morphosyntax".to_string(),
-            "stanza-1.9.2".to_string(),
-        )]);
+        let startup_engine_versions =
+            BTreeMap::from([("morphosyntax".to_string(), "stanza-1.9.2".to_string())]);
 
         let snapshot = resolve_worker_capability_snapshot(
             &startup_capabilities,

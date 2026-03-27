@@ -313,10 +313,9 @@ mod tests {
     use super::*;
     use crate::api::{JobId, LanguageCode3, NumSpeakers, ReleasedCommand};
     use crate::config::ServerConfig;
-    use crate::options::{AsrEngineName, FaEngineName};
     use crate::options::{
-        BenchmarkOptions, CommandOptions, CommonOptions, MorphotagOptions, OpensmileOptions,
-        TranscribeOptions as TranscribeCommand,
+        AsrEngineName, BenchmarkOptions, CommandOptions, CommonOptions, MorphotagOptions,
+        OpensmileOptions, TranscribeOptions as TranscribeCommand,
     };
     use crate::store::{
         RunnerDispatchConfig, RunnerFilesystemConfig, RunnerJobIdentity, RunnerJobSnapshot,

@@ -1,10 +1,10 @@
-//! Shared live-server fixture support for real-model integration tests.
+//! Shared live execution fixture support for real-model integration tests.
 //!
 //! The fixture owns one prepared worker pool on a dedicated background Tokio
-//! runtime and creates a fresh server runtime (HTTP listener, store, SQLite DB,
-//! jobs dir, cache dir, runtime supervisor) for each acquired session. This
-//! keeps expensive model loads warm across tests while preventing control-plane
-//! state from bleeding between sessions.
+//! runtime. Tests can then acquire either a fresh server session or a fresh
+//! direct-execution session over that shared warmed backend. This keeps
+//! expensive model loads warm across tests while preventing control-plane state
+//! from bleeding between sessions.
 
 #![allow(dead_code)]
 
@@ -24,11 +24,11 @@ use batchalign_app::options::CommandOptions;
 use batchalign_app::worker::InferTask;
 use batchalign_app::worker::pool::PoolConfig;
 use batchalign_app::{
-    AppState, PreparedWorkers, create_app_with_prepared_workers, prepare_workers,
+    AppState, DirectHost, PreparedWorkers, create_app_with_prepared_workers, prepare_workers,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// Cached worker backend that survives across isolated server sessions.
+/// Cached worker backend that survives across isolated server and direct sessions.
 struct LiveFixtureBackend {
     _machine_lock: MachineMlTestLock,
     prepared_workers: PreparedWorkers,
@@ -80,12 +80,24 @@ struct SessionSnapshot {
     infer_tasks: Vec<InferTask>,
 }
 
+/// Prepared direct-execution metadata returned to test code.
+#[derive(Clone)]
+struct DirectSnapshot {
+    prepared_workers: PreparedWorkers,
+    infer_tasks: Vec<InferTask>,
+}
+
 /// Commands sent from tests into the dedicated fixture thread.
 enum FixtureCommand {
     /// Start one isolated server session backed by the shared prepared workers.
     Acquire {
         /// Synchronous reply channel for session metadata or skip reasons.
         reply: mpsc::Sender<Result<SessionSnapshot, String>>,
+    },
+    /// Return a clone of the shared warmed worker backend for direct execution.
+    AcquireDirect {
+        /// Synchronous reply channel for prepared workers or skip reasons.
+        reply: mpsc::Sender<Result<DirectSnapshot, String>>,
     },
     /// Tear down the currently active isolated session.
     Release {
@@ -97,6 +109,7 @@ enum FixtureCommand {
 /// Bridge that lets test threads talk to the fixture thread.
 struct FixtureBridge {
     commands: mpsc::Sender<FixtureCommand>,
+    /// Serialize server and direct sessions over one warmed backend.
     session_slots: Arc<Semaphore>,
 }
 
@@ -111,6 +124,15 @@ pub struct LiveServerSession {
     infer_tasks: Vec<InferTask>,
     slot: Option<OwnedSemaphorePermit>,
     bridge: Arc<FixtureBridge>,
+}
+
+/// Handle to one isolated direct-execution session backed by shared warmed workers.
+pub struct LiveDirectSession {
+    host: DirectHost,
+    state_dir: PathBuf,
+    infer_tasks: Vec<InferTask>,
+    _runtime_root: tempfile::TempDir,
+    _slot: OwnedSemaphorePermit,
 }
 
 impl LiveServerSession {
@@ -226,6 +248,74 @@ impl Drop for LiveServerSession {
     }
 }
 
+impl LiveDirectSession {
+    /// Acquire one isolated direct-execution session.
+    pub async fn acquire() -> Option<Self> {
+        let bridge = LIVE_FIXTURE.clone();
+        let slot = bridge
+            .session_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("live fixture semaphore should stay open");
+        let bridge_for_request = bridge.clone();
+        let snapshot =
+            tokio::task::spawn_blocking(move || request_direct_snapshot(&bridge_for_request))
+                .await
+                .expect("live direct fixture acquire task should not panic");
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(message) => {
+                eprintln!("SKIP: {message}");
+                return None;
+            }
+        };
+
+        let runtime_root = tempfile::TempDir::new().expect("tempdir");
+        let state_dir = runtime_root.path().to_path_buf();
+        let host = DirectHost::new(
+            live_fixture_server_config(),
+            RuntimeLayout::from_state_dir(state_dir.clone()),
+            None,
+            Some(state_dir.join("cache")),
+            &snapshot.prepared_workers,
+        )
+        .await
+        .expect("create live direct host");
+
+        Some(Self {
+            host,
+            state_dir,
+            infer_tasks: snapshot.infer_tasks,
+            _runtime_root: runtime_root,
+            _slot: slot,
+        })
+    }
+
+    /// Runtime-owned state directory for this isolated direct session.
+    pub fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
+    /// Return true when the shared warmed worker backend advertises one infer task.
+    pub fn has_infer_task(&self, task: InferTask) -> bool {
+        self.infer_tasks.contains(&task)
+    }
+
+    /// Run one submission inline and return the final job projections.
+    pub async fn run_submission(
+        &self,
+        submission: JobSubmission,
+    ) -> (JobInfo, batchalign_app::store::JobDetail) {
+        let outcome = self
+            .host
+            .run_submission(submission)
+            .await
+            .expect("run direct submission");
+        (outcome.info, outcome.detail)
+    }
+}
+
 /// Poll one submitted job until it reaches a terminal state.
 pub async fn poll_job_done(client: &reqwest::Client, base_url: &str, job_id: &str) -> JobInfo {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(300);
@@ -263,6 +353,53 @@ pub async fn require_live_server(task: InferTask, skip_message: &str) -> Option<
         return None;
     }
     Some(server)
+}
+
+/// Acquire one isolated live direct-execution session and skip cleanly when a task is unavailable.
+pub async fn require_live_direct(task: InferTask, skip_message: &str) -> Option<LiveDirectSession> {
+    let session = LiveDirectSession::acquire().await?;
+    if !session.has_infer_task(task) {
+        eprintln!("SKIP: {skip_message}");
+        return None;
+    }
+    Some(session)
+}
+
+async fn collect_direct_content_results(
+    detail: &batchalign_app::store::JobDetail,
+) -> Vec<FileResult> {
+    if detail.paths_mode {
+        return detail
+            .results
+            .iter()
+            .map(|result| FileResult {
+                filename: result.filename.clone(),
+                content: String::new(),
+                content_type: result.content_type,
+                error: result.error.clone(),
+            })
+            .collect();
+    }
+
+    let output_dir = detail.staging_dir.join("output");
+    let mut files = Vec::new();
+    for result in &detail.results {
+        let content = if result.error.is_none() {
+            let path = output_dir.join(&*result.filename);
+            tokio::fs::read_to_string(&path)
+                .await
+                .unwrap_or_else(|error| panic!("read direct result {}: {error}", path.display()))
+        } else {
+            String::new()
+        };
+        files.push(FileResult {
+            filename: result.filename.clone(),
+            content,
+            content_type: result.content_type,
+            error: result.error.clone(),
+        });
+    }
+    files
 }
 
 /// Submit one content-mode job to a live server and return the completed results.
@@ -314,6 +451,38 @@ pub async fn submit_and_complete(
         .expect("parse results");
 
     (final_info, results.files)
+}
+
+/// Submit one content-mode job to a live direct session and return the completed results.
+pub async fn submit_and_complete_direct(
+    session: &LiveDirectSession,
+    command: ReleasedCommand,
+    lang: &str,
+    files: Vec<FilePayload>,
+    options: CommandOptions,
+) -> (JobInfo, Vec<FileResult>) {
+    let submission = JobSubmission {
+        command,
+        lang: LanguageSpec::try_from(lang)
+            .expect("test lang must be a valid ISO 639-3 code or \"auto\""),
+        num_speakers: NumSpeakers(1),
+        files,
+        media_files: vec![],
+        media_mapping: String::new(),
+        media_subdir: String::new(),
+        source_dir: String::new(),
+        options,
+        paths_mode: false,
+        source_paths: vec![],
+        output_paths: vec![],
+        display_names: vec![],
+        debug_traces: false,
+        before_paths: vec![],
+    };
+
+    let (info, detail) = session.run_submission(submission).await;
+    let results = collect_direct_content_results(&detail).await;
+    (info, results)
 }
 
 /// Assert a live-server job completed cleanly without per-file failures.
@@ -443,6 +612,32 @@ fn run_fixture_thread(receiver: mpsc::Receiver<FixtureCommand>) {
                     }
                 }
             }
+            FixtureCommand::AcquireDirect { reply } => {
+                if active_session.is_some() {
+                    let _ = reply.send(Err(
+                        "live fixture server session already active while acquiring a direct session"
+                            .to_string(),
+                    ));
+                    continue;
+                }
+
+                let backend = match ensure_backend(&runtime, &mut backend) {
+                    Ok(backend) => backend,
+                    Err(message) => {
+                        let _ = reply.send(Err(message));
+                        continue;
+                    }
+                };
+
+                let snapshot = DirectSnapshot {
+                    prepared_workers: backend.prepared_workers.clone(),
+                    infer_tasks: backend
+                        .prepared_workers
+                        .current_infer_tasks()
+                        .unwrap_or_else(|_| backend.prepared_workers.infer_tasks().to_vec()),
+                };
+                let _ = reply.send(Ok(snapshot));
+            }
             FixtureCommand::Release { reply } => {
                 if let Some(session) = active_session.take() {
                     runtime.block_on(cleanup_session(session));
@@ -560,6 +755,18 @@ fn request_session_snapshot(bridge: &Arc<FixtureBridge>) -> Result<SessionSnapsh
     reply_rx
         .recv()
         .map_err(|error| format!("live fixture acquire recv failed: {error}"))?
+}
+
+/// Request one direct-execution snapshot from the fixture thread.
+fn request_direct_snapshot(bridge: &Arc<FixtureBridge>) -> Result<DirectSnapshot, String> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    bridge
+        .commands
+        .send(FixtureCommand::AcquireDirect { reply: reply_tx })
+        .map_err(|error| format!("live direct fixture acquire send failed: {error}"))?;
+    reply_rx
+        .recv()
+        .map_err(|error| format!("live direct fixture acquire recv failed: {error}"))?
 }
 
 /// Release the active session and wait for teardown to finish.
@@ -782,6 +989,90 @@ pub async fn submit_paths_and_complete(
     };
 
     (final_info, outputs)
+}
+
+/// Submit a paths-mode job to a live direct session and return the completed job
+/// info plus the content of the output files.
+pub async fn submit_paths_and_complete_direct(
+    session: &LiveDirectSession,
+    command: ReleasedCommand,
+    lang: &str,
+    source_paths: Vec<String>,
+    output_paths: Vec<String>,
+    options: CommandOptions,
+) -> (JobInfo, Vec<String>) {
+    assert_eq!(
+        source_paths.len(),
+        output_paths.len(),
+        "source_paths and output_paths must have equal length"
+    );
+
+    let submission = JobSubmission {
+        command,
+        lang: LanguageSpec::try_from(lang)
+            .expect("test lang must be a valid ISO 639-3 code or \"auto\""),
+        num_speakers: NumSpeakers(1),
+        files: vec![],
+        media_files: vec![],
+        media_mapping: String::new(),
+        media_subdir: String::new(),
+        source_dir: String::new(),
+        options,
+        paths_mode: true,
+        source_paths: source_paths.clone(),
+        output_paths: output_paths.clone(),
+        display_names: vec![],
+        debug_traces: false,
+        before_paths: vec![],
+    };
+
+    let (info, detail) = session.run_submission(submission).await;
+
+    if info.status != JobStatus::Completed {
+        eprintln!(
+            "DIRECT PATHS JOB FAILED: status={:?}, job_id={}",
+            info.status, info.job_id
+        );
+        eprintln!("  File results: {}", detail.results.len());
+    }
+
+    let outputs: Vec<String> = if info.status == JobStatus::Completed {
+        source_paths
+            .iter()
+            .zip(output_paths.iter())
+            .map(|(source_path, output_path)| {
+                let expected_path = expected_paths_mode_result_path(source_path, output_path);
+
+                if let Ok(content) = std::fs::read_to_string(&expected_path) {
+                    return content;
+                }
+
+                let mut nearby_outputs = Vec::new();
+                if let Some(dir) = expected_path.parent()
+                    && let Ok(entries) = std::fs::read_dir(dir)
+                {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().is_some_and(|e| e == "cha" || e == "csv") {
+                            nearby_outputs.push(path.display().to_string());
+                        }
+                    }
+                }
+
+                panic!(
+                    "Failed to read expected direct output file {} for source {} and requested output {}; nearby outputs: {:?}",
+                    expected_path.display(),
+                    source_path,
+                    output_path,
+                    nearby_outputs
+                )
+            })
+            .collect()
+    } else {
+        vec![String::new(); output_paths.len()]
+    };
+
+    (info, outputs)
 }
 
 fn expected_paths_mode_result_path(source_path: &str, output_path: &str) -> PathBuf {

@@ -1,11 +1,13 @@
 //! Error path tests — verify graceful failures for bad inputs.
 //!
-//! These tests use real ML workers via `require_live_server()` to test the
-//! server's validation layer under live conditions.
+//! Most tests in this module now use direct local execution with real workers so
+//! model-hitting failures are exercised without the server control plane. The
+//! malformed-request coverage stays on the HTTP path because it is explicitly a
+//! request-validation test.
 //!
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 
-use crate::common::{poll_job_done, require_live_server, submit_and_complete};
+use crate::common::{require_live_direct, require_live_server, submit_and_complete_direct};
 use batchalign_app::api::{
     FilePayload, JobStatus, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers,
     ReleasedCommand,
@@ -20,7 +22,8 @@ use batchalign_app::worker::InferTask;
 /// Align with missing audio should fail gracefully (not crash the server).
 #[tokio::test]
 async fn error_align_missing_audio() {
-    let Some(server) = require_live_server(InferTask::Fa, "Server does not support FA infer").await
+    let Some(session) =
+        require_live_direct(InferTask::Fa, "Direct session does not support FA infer").await
     else {
         return;
     };
@@ -37,8 +40,8 @@ async fn error_align_missing_audio() {
 @End
 ";
 
-    let input_path = server.state_dir().join("missing_audio.cha");
-    let output_path = server.state_dir().join("missing_audio_out.cha");
+    let input_path = session.state_dir().join("missing_audio.cha");
+    let output_path = session.state_dir().join("missing_audio_out.cha");
     std::fs::write(&input_path, chat_with_media).expect("write input");
 
     let options = CommandOptions::Align(AlignOptions {
@@ -67,20 +70,7 @@ async fn error_align_missing_audio() {
         before_paths: vec![],
     };
 
-    let resp = server
-        .client()
-        .post(format!("{}/jobs", server.base_url()))
-        .json(&submission)
-        .send()
-        .await
-        .expect("POST /jobs");
-
-    // Job submission itself should succeed (validation happens asynchronously).
-    assert_eq!(resp.status(), 200);
-    let info: batchalign_app::api::JobInfo = resp.json().await.expect("parse");
-
-    // Wait for completion — should fail, not crash.
-    let final_info = poll_job_done(server.client(), server.base_url(), &info.job_id).await;
+    let (final_info, _detail) = session.run_submission(submission).await;
     assert_eq!(
         final_info.status,
         JobStatus::Failed,
@@ -91,9 +81,9 @@ async fn error_align_missing_audio() {
 /// Morphotag on an empty CHAT file should complete or fail gracefully.
 #[tokio::test]
 async fn error_morphotag_empty_file() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -125,15 +115,9 @@ async fn error_morphotag_empty_file() {
         content: empty_chat.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Morphotag,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Morphotag, "eng", files, options)
+            .await;
 
     // Should complete (passthrough with no utterances to process) or fail gracefully.
     assert!(
@@ -155,6 +139,9 @@ async fn error_morphotag_empty_file() {
 }
 
 /// Submitting a job with an invalid command name should be rejected.
+///
+/// This remains an HTTP-server test because the behavior under test is request
+/// deserialization and validation at the `/jobs` boundary, not command execution.
 #[tokio::test]
 async fn error_invalid_command_name() {
     let Some(server) = require_live_server(
@@ -215,9 +202,9 @@ async fn error_invalid_command_name() {
 /// Morphotag on `xxx` (unintelligible) should pass through without crash.
 #[tokio::test]
 async fn edge_morphotag_xxx_utterance() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -235,9 +222,8 @@ async fn edge_morphotag_xxx_utterance() {
 @End
 ";
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, results) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -272,9 +258,9 @@ async fn edge_morphotag_xxx_utterance() {
 /// Morphotag on `www` (untranscribed speech) should pass through without crash.
 #[tokio::test]
 async fn edge_morphotag_www_utterance() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -292,9 +278,8 @@ async fn edge_morphotag_www_utterance() {
 @End
 ";
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, results) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -329,9 +314,9 @@ async fn edge_morphotag_www_utterance() {
 /// Malformed CHAT (no @Begin) should fail gracefully.
 #[tokio::test]
 async fn error_morphotag_invalid_chat() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -346,9 +331,8 @@ async fn error_morphotag_invalid_chat() {
 @End
 ";
 
-    let (info, _results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info, _results) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {

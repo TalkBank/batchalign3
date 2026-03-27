@@ -1,6 +1,6 @@
 # Quick Start
 
-**Last modified:** 2026-03-21 08:20 EDT
+**Last modified:** 2026-03-26 18:12 EDT
 
 This chapter covers the most common `batchalign3` workflows from the terminal.
 The examples assume the `batchalign3` binary is installed and that local
@@ -22,9 +22,10 @@ cached models from disk.
 Re-processing the same file with the same command returns cached results
 instantly. See [Caching](caching.md) for details.
 
-**Performance:** Back-to-back runs are 5-20x faster than cold starts because
-the local daemon keeps models in memory. See [Performance](performance.md) for
-tuning tips.
+**Performance:** Back-to-back runs are still much faster than first-run model
+downloads because models and caches stay on disk. If you need hot in-memory
+workers across repeated runs, start an explicit server with `batchalign3 serve`.
+See [Performance](performance.md) for tuning tips.
 
 ## Basic command shape
 
@@ -58,6 +59,7 @@ batchalign3 transcribe ~/recordings/ -o ~/transcripts/ \
 
 Important routing note: explicit remote `--server` is currently ignored for
 `transcribe` because the remote server cannot read client-local audio paths.
+The CLI runs that work locally through the direct host instead.
 
 ## Align transcripts against audio
 
@@ -86,8 +88,9 @@ batchalign3 morphotag ~/corpus/ -o ~/tagged/ --retokenize
 batchalign3 morphotag ~/corpus/ -o ~/tagged/ --skipmultilang
 ```
 
-Repeated runs are usually faster because Batchalign reuses its cache and, when
-available, a warm local daemon.
+Repeated runs are usually faster because Batchalign reuses its cache. For
+interactive sessions where you want workers to stay warm in memory across
+commands, use explicit server mode (`batchalign3 serve start` plus `--server`).
 
 ## Verbosity
 
@@ -116,8 +119,8 @@ batchalign3 --server http://yourserver:8000 morphotag ~/corpus/ -o ~/tagged/
 batchalign3 --server http://yourserver:8000 align ~/corpus/ -o ~/aligned/
 ```
 
-`transcribe` and `avqi` stay on the local-daemon path even when `--server` is
-provided.
+`transcribe` and `avqi` stay on the local execution path even when `--server`
+is provided.
 
 ## Next steps
 

@@ -301,11 +301,6 @@ impl JobStore {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-fn auto_max_concurrent(config: &ServerConfig) -> usize {
-    HostExecutionPolicy::from_server_config(config).auto_max_concurrent_jobs()
-}
-
-#[cfg(test)]
 fn auto_max_concurrent_from(by_cpu: usize, by_memory: usize) -> usize {
     host_auto_max_concurrent_from(by_cpu, by_memory)
 }

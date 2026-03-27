@@ -1,10 +1,11 @@
 # Batchalign Command I/O Parity: Local CLI vs Server
 
 **Status:** Current
-**Last updated:** 2026-03-26 14:05 EDT
+**Last updated:** 2026-03-26 18:12 EDT
 
 This document describes the input/output flow for every batchalign command,
-comparing local CLI dispatch with the server-based (`--server`) dispatch.
+comparing direct local CLI execution with the server-based (`--server`)
+dispatch.
 For implementation details, treat the command-owned entrypoints under
 `crates/batchalign-app/src/commands/` plus the owning orchestrator modules
 (`compare.rs`, `benchmark.rs`, `transcribe/`, `fa/`, and `morphosyntax/`) as
@@ -81,8 +82,8 @@ Existing `%mor`, `%gra` tiers preserved. Media file is read but never modified.
 
 **Non-matching files:** For directory inputs, the current Rust CLI copies
 non-`.cha` files and dummy CHAT files from `IN_DIR` to `OUT_DIR` before
-submitting matching files, in both single-server content mode and local-daemon
-paths mode.
+submitting matching files, in both single-server content mode and direct local
+paths preparation.
 
 ---
 
@@ -90,19 +91,17 @@ paths mode.
 
 **Purpose:** Create a new CHAT transcript from audio files via ASR.
 
-| Aspect | Local CLI / local daemon | Explicit remote `--server` |
-|--------|----------------------------|-----------------------------|
-| **Input files** | `.mp3`, `.mp4`, `.wav` files in `IN_DIR` | Not used in current CLI path |
+| Aspect | Local CLI / direct host | Explicit remote `--server` |
+|--------|--------------------------|-----------------------------|
+| **Input files** | `.mp3`, `.mp4`, `.wav` files in `IN_DIR` | Not used in current remote CLI path |
 | **Extensions filter** | `["mp3", "mp4", "wav"]` | Not used |
-| **Output** | New `.cha` files (audio extension replaced: `foo.wav` → `foo.cha`) | Explicit `--server` is ignored; local daemon path still writes the output |
-| **Mutation** | **Never mutates input.** Creates new `.cha` files in `OUT_DIR`. Original audio untouched. If `OUT_DIR = IN_DIR`, the new `.cha` appears alongside the audio. | Same effective result, because dispatch falls back to the local daemon |
+| **Output** | New `.cha` files (audio extension replaced: `foo.wav` → `foo.cha`) | Explicit `--server` is ignored; the direct local path still writes the output |
+| **Mutation** | **Never mutates input.** Creates new `.cha` files in `OUT_DIR`. Original audio untouched. If `OUT_DIR = IN_DIR`, the new `.cha` appears alongside the audio. | Same effective result, because dispatch falls back to direct local execution |
 | **Key options** | `--asr-engine`, `--asr-engine-custom`, `--diarization`, `--wor/--nowor`, `--lang`, `-n`, `--batch-size` | Same effective options after local fallback |
 
 **Current routing note (Rust CLI):** explicit `--server` is ignored for
-`transcribe`/`transcribe_s`; these commands run via local daemon paths-mode.
-If the local daemon is already running from an older build, the CLI warns about
-the build mismatch; restart the daemon before validating transcribe changes or
-you may unknowingly exercise stale code.
+`transcribe`/`transcribe_s`; these commands run through direct local execution
+because the remote server cannot access client-local audio paths.
 
 **What gets created:** A new `.cha` file per audio file. Contains `@Comment`
 line with Batchalign version and ASR engine name, `@Languages`, `@Participants`,
@@ -315,11 +314,11 @@ audio files.
 
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
-| **Input files** | Paired `.cs.*` and `.sv.*` audio files in input paths | `--server` is ignored; command runs on local daemon |
-| **Output** | `.avqi.txt` with metrics per file pair | Same (written locally by daemon paths-mode) |
+| **Input files** | Paired `.cs.*` and `.sv.*` audio files in input paths | `--server` is ignored; command runs locally through the direct host |
+| **Output** | `.avqi.txt` with metrics per file pair | Same (written locally by direct execution) |
 | **Mutation** | **Never mutates input.** Creates new `.avqi.txt` files. | Same |
 
-**Current routing note:** `dispatch.rs` forces `avqi` to local daemon mode even
+**Current routing note:** `dispatch.rs` forces `avqi` to local execution even
 when `--server` is provided, because AVQI depends on local paired-file discovery.
 
 **Current syntax note:** `opensmile` and `avqi` do not use the shared `PATHS` /
@@ -377,27 +376,29 @@ NFS/SMB mounts).
 
 ---
 
-## Local Daemon Dispatch: Paths Mode
+## Direct Local Execution: Paths Submission
 
-When the CLI uses a local daemon (no explicit `--server`), it uses **paths
-mode** — only filesystem paths cross HTTP, not file content.
+When the CLI runs locally (no explicit `--server`, or when audio commands fall
+back from `--server`), it still uses **paths-mode submission** — canonical
+filesystem paths are prepared once and handed to `DirectHost` for inline
+execution.
 
-| Direction | What crosses HTTP |
-|-----------|-------------------|
-| **Client → Server** | `source_paths` (absolute paths to input files) and `output_paths` (absolute paths for output) |
-| **Server → Client** | Nothing — daemon writes directly to `output_paths` |
+| Direction | What crosses the boundary |
+|-----------|--------------------------|
+| **CLI → DirectHost** | `source_paths` (absolute paths to input files) and `output_paths` (absolute paths for output) inside one process |
+| **DirectHost → CLI** | Nothing over the network — direct execution writes directly to `output_paths` |
 
-The daemon reads input files and writes output files directly via the
+The direct host reads input files and writes output files directly via the
 filesystem. No staging directory is created. No content transfer. No result
-download. The CLI polls `GET /jobs/{id}` for status only.
+download.
 
 **Advantages over content mode:**
 - No 100MB body limit or 1000-file cap
 - No staging I/O (4 data copies eliminated)
-- Transcribe works (daemon shares the filesystem)
+- Transcribe works (the direct host shares the local filesystem)
 - All commands behave identically to local CLI from the user's perspective
 
-**Media resolution:** Same as local CLI — the daemon resolves `@Media:`
+**Media resolution:** Same as local CLI — the direct host resolves `@Media:`
 headers against its filesystem (same machine, same paths).
 
 ---
@@ -412,7 +413,7 @@ headers against its filesystem (same machine, same paths).
 - Matching files are sorted by size descending before submission to reduce
   straggler effects on long runs.
 
-This means current single-server content mode and local-daemon paths mode are
+This means current single-server content mode and direct local paths mode are
 closer than the older Python split: both preserve non-matching files and both
 filter dummy CHAT locally.
 
@@ -420,10 +421,10 @@ filter dummy CHAT locally.
 
 ## Parity Status
 
-| Command | I/O parity | Options parity | Daemon paths mode | Notes |
+| Command | I/O parity | Options parity | Direct local path | Notes |
 |---------|------------|----------------|-------------------|-------|
 | align | Full | Full | Full | Media resolution differs (local path vs server lookup) but equivalent |
-| transcribe | Full | Full | Full | Explicit `--server` is currently ignored; routed to local daemon |
+| transcribe | Full | Full | Full | Explicit `--server` is currently ignored; routed to direct local execution |
 | transcribe_s | Full | Full | Full | Triggered by `--diarize`; explicit `--server` ignored |
 | morphotag | Full | Full | Full | Lexicon CSV read on client, sent as parsed dict |
 | utseg | Full | Full | Full | |
@@ -432,4 +433,4 @@ filter dummy CHAT locally.
 | benchmark | Full | Full | Full | |
 | opensmile | Full | Full | Full | Special CSV output handling on both sides |
 | compare | Full | Full | Full | Gold file resolved locally or server-side |
-| avqi | Full (local) | Full (local) | Full | Routed to local daemon even when `--server` is set |
+| avqi | Full (local) | Full (local) | Full | Routed to direct local execution even when `--server` is set |

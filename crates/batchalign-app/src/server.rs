@@ -5,27 +5,23 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::cache::UtteranceCache;
-use crate::commands::{command_performance_profile, released_command_workflows};
+use crate::commands::{released_command_definition, released_command_definitions};
 use crate::config::{RuntimeLayout, ServerConfig};
 use crate::db::JobDB;
 use crate::error;
 use crate::host_policy::HostExecutionPolicy;
 use crate::media::MediaResolver;
-use crate::queue::{LocalQueueBackend, QueueBackend, QueueDispatcher};
-use crate::runner::RunnerContext;
-use crate::runtime_supervisor::RuntimeSupervisor;
+use crate::runner::{ExecutionEngine, RunnerExecutionContext};
+use crate::server_backend::bootstrap_embedded_server_backend;
 use crate::state::{
-    AppBuildInfo, AppControlPlane, AppEnvironment, AppPaths, AppState, WorkerSubsystem,
-    resolve_worker_capability_snapshot, validate_infer_capability_gate,
+    AppBuildInfo, AppControlPlane, AppEnvironment, AppPaths, AppState, WorkerCapabilitySnapshot,
+    WorkerSubsystem, resolve_worker_capability_snapshot, validate_infer_capability_gate,
 };
-use crate::store::JobStore;
 use crate::worker::InferTask;
 use crate::worker::pool::{PoolConfig, WorkerPool};
-use crate::ws::BROADCAST_CAPACITY;
 
 // ---------------------------------------------------------------------------
 // App factory
@@ -45,6 +41,12 @@ pub struct PreparedWorkers {
     test_echo_mode: bool,
 }
 
+/// One host-neutral execution runtime resolved from prepared workers.
+pub(crate) struct ResolvedExecutionRuntime {
+    pub capability_snapshot: WorkerCapabilitySnapshot,
+    pub engine: ExecutionEngine,
+}
+
 /// A command + language pair to pre-warm at server startup.
 ///
 /// Replaces the anonymous `(String, String)` tuples that previously flowed
@@ -61,6 +63,20 @@ pub struct WarmupTarget {
 }
 
 impl PreparedWorkers {
+    /// Resolve the latest capability snapshot, preferring live detected worker
+    /// data over the startup placeholder snapshot when available.
+    pub(crate) fn capability_snapshot(
+        &self,
+    ) -> Result<crate::state::WorkerCapabilitySnapshot, error::ServerError> {
+        resolve_worker_capability_snapshot(
+            &self.capabilities,
+            &self.infer_tasks,
+            &self.engine_versions,
+            self.test_echo_mode,
+            self.pool.detected_capabilities(),
+        )
+    }
+
     /// Return the released command surface discovered during worker probing.
     pub fn capabilities(&self) -> &[String] {
         &self.capabilities
@@ -74,14 +90,26 @@ impl PreparedWorkers {
     /// Return the latest infer-task view, preferring live worker detection
     /// over the startup placeholder snapshot when available.
     pub fn current_infer_tasks(&self) -> Result<Vec<InferTask>, error::ServerError> {
-        Ok(resolve_worker_capability_snapshot(
-            &self.capabilities,
-            &self.infer_tasks,
-            &self.engine_versions,
+        Ok(self.capability_snapshot()?.infer_tasks)
+    }
+
+    /// Build one host-neutral execution runtime over this prepared worker set.
+    pub(crate) fn resolve_execution_runtime(
+        &self,
+        cache: Arc<UtteranceCache>,
+    ) -> Result<ResolvedExecutionRuntime, error::ServerError> {
+        let capability_snapshot = self.capability_snapshot()?;
+        let engine = ExecutionEngine::new(RunnerExecutionContext::new(
+            self.pool.clone(),
+            cache,
+            capability_snapshot.infer_tasks.clone(),
+            capability_snapshot.engine_versions.clone(),
             self.test_echo_mode,
-            self.pool.detected_capabilities(),
-        )?
-        .infer_tasks)
+        ));
+        Ok(ResolvedExecutionRuntime {
+            capability_snapshot,
+            engine,
+        })
     }
 }
 
@@ -135,7 +163,7 @@ pub async fn prepare_workers(
     config: &ServerConfig,
     pool_config: PoolConfig,
 ) -> Result<PreparedWorkers, error::ServerError> {
-    let (prepared, targets) = probe_workers(config, pool_config).await?;
+    let (prepared, targets) = probe_workers(config, pool_config, true).await?;
 
     if !targets.is_empty() {
         prepared.pool.warmup(&targets).await;
@@ -155,7 +183,7 @@ pub async fn prepare_workers_background(
     config: &ServerConfig,
     pool_config: PoolConfig,
 ) -> Result<PreparedWorkers, error::ServerError> {
-    let (prepared, targets) = probe_workers(config, pool_config).await?;
+    let (prepared, targets) = probe_workers(config, pool_config, true).await?;
 
     if !targets.is_empty() {
         prepared.pool.mark_warmup_started();
@@ -172,6 +200,19 @@ pub async fn prepare_workers_background(
     Ok(prepared)
 }
 
+/// Probe and validate one worker pool for direct inline execution.
+///
+/// Unlike server preparation, this path intentionally skips registry discovery
+/// and host-wide warmup so direct mode does not adopt detached daemon behavior.
+pub async fn prepare_direct_workers(
+    config: &ServerConfig,
+    pool_config: PoolConfig,
+) -> Result<PreparedWorkers, error::ServerError> {
+    let (prepared, _targets) = probe_workers(config, pool_config, false).await?;
+    prepared.pool.mark_warmup_complete();
+    Ok(prepared)
+}
+
 /// Build the worker pool with optimistic capabilities (no Python probe).
 ///
 /// Capabilities are detected lazily on the first real worker spawn, not at
@@ -182,24 +223,27 @@ pub async fn prepare_workers_background(
 async fn probe_workers(
     config: &ServerConfig,
     pool_config: PoolConfig,
+    discover_registry_workers: bool,
 ) -> Result<(PreparedWorkers, Vec<WarmupTarget>), error::ServerError> {
     let test_echo_mode = pool_config.test_echo;
     let host_policy = HostExecutionPolicy::from_server_config(config);
     let pool = Arc::new(WorkerPool::new(pool_config));
     pool.start_background_tasks();
 
-    // Discover pre-started TCP workers from the registry file.
-    let discovered = pool.discover_from_registry().await;
-    if discovered > 0 {
-        info!(discovered, "Pre-started TCP workers integrated into pool");
+    if discover_registry_workers {
+        // Discover pre-started TCP workers from the registry file.
+        let discovered = pool.discover_from_registry().await;
+        if discovered > 0 {
+            info!(discovered, "Pre-started TCP workers integrated into pool");
+        }
     }
 
     // Optimistic capabilities: accept all released commands.
     // Real capabilities are detected lazily on first worker spawn.
     let (capabilities, infer_tasks, engine_versions) = if test_echo_mode {
-        let all_tasks: Vec<InferTask> = released_command_workflows()
+        let all_tasks: Vec<InferTask> = released_command_definitions()
             .iter()
-            .map(|d| d.infer_task)
+            .map(|definition| definition.descriptor.infer_task)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -217,7 +261,11 @@ async fn probe_workers(
             infer_tasks = ?detected.infer_tasks,
             "Using capabilities detected from TCP registry workers"
         );
-        (caps, detected.infer_tasks.clone(), detected.engine_versions.clone())
+        (
+            caps,
+            detected.infer_tasks.clone(),
+            detected.engine_versions.clone(),
+        )
     } else {
         let caps = optimistic_capabilities();
         info!(
@@ -242,9 +290,9 @@ async fn probe_workers(
                 crate::api::ReleasedCommand::try_from(cmd.as_str())
                     .ok()
                     .and_then(|command| {
-                        let performance = command_performance_profile(command);
+                        let definition = released_command_definition(command);
                         host_policy
-                            .allows_command_warmup(performance.warmup, test_echo_mode)
+                            .allows_command_warmup(definition.warmup_policy(), test_echo_mode)
                             .then(|| WarmupTarget {
                                 command,
                                 lang: default_lang.clone(),
@@ -275,9 +323,9 @@ async fn probe_workers(
 /// All released commands — used as the optimistic capability set before
 /// the first real worker spawn confirms what's actually installed.
 fn optimistic_capabilities() -> Vec<String> {
-    released_command_workflows()
+    released_command_definitions()
         .iter()
-        .map(|d| d.command.to_string())
+        .map(|definition| definition.descriptor.command.to_string())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -315,31 +363,6 @@ pub async fn create_app_with_prepared_workers(
         let _ = tokio::fs::remove_dir_all(d).await;
     }
 
-    // Create broadcast channel for WS
-    let (ws_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-
-    // Create job store and load from DB
-    let db = Arc::new(db);
-    let store = Arc::new(JobStore::new(config.clone(), Some(db), ws_tx.clone()));
-    let loaded = store.load_from_db().await?;
-
-    if loaded > 0 {
-        info!(loaded = loaded, "Jobs loaded from DB");
-    }
-
-    let capability_snapshot = resolve_worker_capability_snapshot(
-        &workers.capabilities,
-        &workers.infer_tasks,
-        &workers.engine_versions,
-        workers.test_echo_mode,
-        workers.pool.detected_capabilities(),
-    )?;
-    let capabilities = capability_snapshot.capabilities;
-    let infer_tasks = capability_snapshot.infer_tasks;
-    let engine_versions = capability_snapshot.engine_versions;
-    let test_echo_mode = workers.test_echo_mode;
-    let pool = workers.pool.clone();
-
     // Initialize utterance cache (SQLite, shared with Python workers)
     // Must be before auto-resume so spawn_job can access it.
     let cache = Arc::new(
@@ -347,11 +370,21 @@ pub async fn create_app_with_prepared_workers(
             .await
             .map_err(|e| error::ServerError::Validation(format!("cache init failed: {e}")))?,
     );
+    let db = Arc::new(db);
+    let execution_runtime = workers.resolve_execution_runtime(cache.clone())?;
+    let embedded_backend =
+        bootstrap_embedded_server_backend(config.clone(), db, execution_runtime.engine).await?;
+    if embedded_backend.loaded_jobs > 0 {
+        info!(loaded = embedded_backend.loaded_jobs, "Jobs loaded from DB");
+    }
+    let capability_snapshot = execution_runtime.capability_snapshot;
+    let capabilities = capability_snapshot.capabilities;
+    let infer_tasks = capability_snapshot.infer_tasks;
+    let pool = workers.pool.clone();
 
-    let queued = store.queued_job_ids().await;
-    if !queued.is_empty() {
+    if embedded_backend.queued_jobs > 0 {
         info!(
-            count = queued.len(),
+            count = embedded_backend.queued_jobs,
             "Queued jobs will be resumed by local dispatcher"
         );
     }
@@ -362,27 +395,9 @@ pub async fn create_app_with_prepared_workers(
         std::env::var("BATCHALIGN_DASHBOARD_DIR").ok().as_deref(),
     );
 
-    let queue_notify = Arc::new(tokio::sync::Notify::new());
-    let queue: Arc<dyn QueueBackend> =
-        Arc::new(LocalQueueBackend::new(store.clone(), queue_notify));
-    let runtime = RuntimeSupervisor::new();
-    let runner_context = RunnerContext::new(
-        store.clone(),
-        pool.clone(),
-        cache.clone(),
-        infer_tasks.clone(),
-        engine_versions.clone(),
-        test_echo_mode,
-        queue.clone(),
-    );
-    let dispatcher = QueueDispatcher::new(queue.clone(), runtime.clone(), runner_context);
-
     let state = Arc::new(AppState {
         control: AppControlPlane {
-            store,
-            queue: queue.clone(),
-            runtime,
-            ws_tx,
+            backend: embedded_backend.backend,
         },
         workers: WorkerSubsystem {
             pool,
@@ -403,9 +418,6 @@ pub async fn create_app_with_prepared_workers(
             build_hash: build_hash.unwrap_or_default(),
         },
     });
-
-    state.control.runtime.start_queue_task(dispatcher.run());
-    state.control.queue.notify();
 
     let router = crate::routes::router(state.clone());
     Ok((router, state))
@@ -474,7 +486,7 @@ pub async fn serve_with_runtime(
     info!("Server stopped, shutting down gracefully");
 
     // 1. Cancel all active jobs
-    let cancelled = state.control.store.cancel_all().await;
+    let cancelled = state.control.backend.cancel_all().await;
     if cancelled > 0 {
         info!(cancelled, "Cancelled active jobs");
     }
@@ -482,8 +494,8 @@ pub async fn serve_with_runtime(
     // 1b. Stop the queue dispatcher and await tracked job tasks.
     let shutdown_summary = state
         .control
-        .runtime
-        .shutdown(tokio::time::Duration::from_secs(15))
+        .backend
+        .shutdown_runtime(tokio::time::Duration::from_secs(15))
         .await;
     match shutdown_summary {
         Ok(shutdown_summary) => {

@@ -24,7 +24,7 @@ async fn ws_handler(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) ->
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     // Send initial snapshot
-    let jobs = state.control.store.list_all().await;
+    let jobs = state.control.backend.list_jobs().await;
     let mut jobs_json = Vec::with_capacity(jobs.len());
     for job in &jobs {
         match serde_json::to_value(job) {
@@ -39,16 +39,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    let (
-        worker_crashes,
-        attempts_started,
-        attempts_retried,
-        deferred_work_units,
-        forced_terminal_errors,
-        memory_gate_aborts,
-    ) = state.control.store.operational_counters().await;
-    let workers_available = state.control.store.workers_available().await;
-    let active_jobs = state.control.store.active_jobs().await;
+    let control_plane = state.control.backend.control_plane_snapshot().await;
     let live_workers = state.workers.pool.worker_count() as i64;
     let live_worker_keys = state.workers.pool.worker_keys();
     let worker_summary = state.workers.pool.worker_summary();
@@ -61,20 +52,20 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
         "loaded_pipelines": worker_summary,
         "media_roots": state.environment.config.media_roots.clone(),
         "media_mapping_keys": state.environment.config.media_mappings.keys().collect::<Vec<_>>(),
-        "workers_available": workers_available,
-        "job_slots_available": workers_available,
+        "workers_available": control_plane.workers_available,
+        "job_slots_available": control_plane.workers_available,
         "live_workers": live_workers,
         "live_worker_keys": live_worker_keys,
-        "active_jobs": active_jobs,
+        "active_jobs": control_plane.active_jobs,
         "cache_backend": "sqlite",
         "redis_cache_enabled": false,
         "redis_cache_connected": false,
-        "worker_crashes": worker_crashes,
-        "attempts_started": attempts_started,
-        "attempts_retried": attempts_retried,
-        "deferred_work_units": deferred_work_units,
-        "forced_terminal_errors": forced_terminal_errors,
-        "memory_gate_aborts": memory_gate_aborts,
+        "worker_crashes": control_plane.worker_crashes,
+        "attempts_started": control_plane.attempts_started,
+        "attempts_retried": control_plane.attempts_retried,
+        "deferred_work_units": control_plane.deferred_work_units,
+        "forced_terminal_errors": control_plane.forced_terminal_errors,
+        "memory_gate_aborts": control_plane.memory_gate_aborts,
         "build_hash": state.build.build_hash.clone(),
     });
 
@@ -96,7 +87,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
 
     // Subscribe to broadcast channel
-    let mut rx = state.control.ws_tx.subscribe();
+    let mut rx = state.control.backend.subscribe_events();
 
     // Main loop: forward broadcast events and handle pings
     loop {

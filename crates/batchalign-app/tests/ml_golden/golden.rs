@@ -1,9 +1,9 @@
-//! Golden model tests — snapshot NLP engine output via real server round-trip.
+//! Golden model tests — snapshot NLP engine output via real direct execution.
 //!
-//! These tests acquire isolated real-model server sessions backed by a shared
+//! These tests acquire isolated real-model direct sessions backed by a shared
 //! warmed worker pool, submit CHAT files, and compare the output against insta
 //! snapshots. They verify that model output hasn't regressed after
-//! Stanza/engine upgrades.
+//! Stanza/engine upgrades without depending on the server control plane.
 //!
 //! Requirements:
 //! - Python 3 with batchalign installed
@@ -14,7 +14,9 @@
 //! Run: `cargo nextest run -p batchalign-app --test ml_golden --profile ml`
 //! Update snapshots: `cargo insta review`
 
-use crate::common::{assert_completed_without_errors, require_live_server, submit_and_complete};
+use crate::common::{
+    assert_completed_without_errors, require_live_direct, submit_and_complete_direct,
+};
 use batchalign_app::api::{FilePayload, JobStatus, ReleasedCommand};
 use batchalign_app::options::{
     CommandOptions, CommonOptions, CompareOptions, CorefOptions, MorphotagOptions,
@@ -119,9 +121,9 @@ const SPA_SIMPLE: &str = "\
 /// Morphotag: English single utterance → snapshot %mor/%gra.
 #[tokio::test]
 async fn golden_morphotag_eng_simple() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -143,15 +145,9 @@ async fn golden_morphotag_eng_simple() {
         content: ENG_SIMPLE.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Morphotag,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Morphotag, "eng", files, options)
+            .await;
 
     assert_completed_without_errors("morphotag_eng_simple", &info, &results);
     assert_eq!(results.len(), 1);
@@ -167,9 +163,9 @@ async fn golden_morphotag_eng_simple() {
 /// Morphotag: English multi-utterance → snapshot all %mor/%gra.
 #[tokio::test]
 async fn golden_morphotag_eng_multi_utt() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -191,15 +187,9 @@ async fn golden_morphotag_eng_multi_utt() {
         content: ENG_MULTI_UTT.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Morphotag,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Morphotag, "eng", files, options)
+            .await;
 
     assert_completed_without_errors("morphotag_eng_multi_utt", &info, &results);
     assert_eq!(results.len(), 1);
@@ -211,8 +201,11 @@ async fn golden_morphotag_eng_multi_utt() {
 /// Utseg: English multi-utterance → snapshot segmentation.
 #[tokio::test]
 async fn golden_utseg_eng_multi_utt() {
-    let Some(server) =
-        require_live_server(InferTask::Utseg, "Server does not support utseg infer").await
+    let Some(session) = require_live_direct(
+        InferTask::Utseg,
+        "Direct session does not support utseg infer",
+    )
+    .await
     else {
         return;
     };
@@ -230,15 +223,8 @@ async fn golden_utseg_eng_multi_utt() {
         content: ENG_MULTI_UTT.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Utseg,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Utseg, "eng", files, options).await;
 
     assert_completed_without_errors("utseg_eng_multi_utt", &info, &results);
     assert_eq!(results.len(), 1);
@@ -250,9 +236,9 @@ async fn golden_utseg_eng_multi_utt() {
 /// Translate: English simple → snapshot %xtra tier.
 #[tokio::test]
 async fn golden_translate_eng_simple() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Translate,
-        "Server does not support translate infer",
+        "Direct session does not support translate infer",
     )
     .await
     else {
@@ -272,15 +258,9 @@ async fn golden_translate_eng_simple() {
         content: ENG_SIMPLE.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Translate,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Translate, "eng", files, options)
+            .await;
 
     assert_completed_without_errors("translate_eng_simple", &info, &results);
     assert_eq!(results.len(), 1);
@@ -293,9 +273,9 @@ async fn golden_translate_eng_simple() {
 /// Verifies the cache pipeline works correctly via round-trip.
 #[tokio::test]
 async fn golden_morphotag_with_cache() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -307,9 +287,8 @@ async fn golden_morphotag_with_cache() {
         filename: "cache_test.cha".into(),
         content: ENG_SIMPLE.into(),
     }];
-    let (info1, results1) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info1, results1) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         files1,
@@ -329,9 +308,8 @@ async fn golden_morphotag_with_cache() {
         filename: "cache_test.cha".into(),
         content: ENG_SIMPLE.into(),
     }];
-    let (info2, results2) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info2, results2) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         files2,
@@ -384,9 +362,9 @@ const COMPARE_GOLD: &str = "\
 /// Compare: main vs gold → snapshot %xsrep tiers.
 #[tokio::test]
 async fn golden_compare_eng() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer (required for compare)",
+        "Direct session does not support morphosyntax infer (required for compare)",
     )
     .await
     else {
@@ -412,15 +390,8 @@ async fn golden_compare_eng() {
         },
     ];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Compare,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Compare, "eng", files, options).await;
 
     assert_eq!(info.status, JobStatus::Completed, "Job should complete");
     // Only 1 result — gold file is skipped as input
@@ -460,8 +431,11 @@ const ENG_COREF: &str = "\
 /// Coref: English multi-sentence → snapshot %xcoref tier.
 #[tokio::test]
 async fn golden_coref_eng() {
-    let Some(server) =
-        require_live_server(InferTask::Coref, "Server does not support coref infer").await
+    let Some(session) = require_live_direct(
+        InferTask::Coref,
+        "Direct session does not support coref infer",
+    )
+    .await
     else {
         return;
     };
@@ -479,15 +453,8 @@ async fn golden_coref_eng() {
         content: ENG_COREF.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Coref,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Coref, "eng", files, options).await;
 
     assert_eq!(info.status, JobStatus::Completed, "Job should complete");
     assert_eq!(results.len(), 1);
@@ -516,9 +483,9 @@ async fn golden_coref_eng() {
 /// Skips if Spanish Stanza model is not downloaded.
 #[tokio::test]
 async fn golden_morphotag_spa_simple() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -540,15 +507,9 @@ async fn golden_morphotag_spa_simple() {
         content: SPA_SIMPLE.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Morphotag,
-        "spa",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Morphotag, "spa", files, options)
+            .await;
 
     // If Spanish model is not available, the job will fail — treat as skip
     if info.status == JobStatus::Failed {
@@ -579,9 +540,9 @@ async fn golden_morphotag_spa_simple() {
 /// Morphotag with retokenize: MWT "gonna" should split into "going to".
 #[tokio::test]
 async fn golden_morphotag_retokenize_eng() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -613,15 +574,9 @@ async fn golden_morphotag_retokenize_eng() {
         content: ENG_RETOKENIZE.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Morphotag,
-        "eng",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Morphotag, "eng", files, options)
+            .await;
 
     assert_completed_without_errors("morphotag_retokenize_eng", &info, &results);
     assert_eq!(results.len(), 1);
@@ -640,8 +595,11 @@ async fn golden_morphotag_retokenize_eng() {
 /// Utseg: Spanish multi-utterance.
 #[tokio::test]
 async fn golden_utseg_spa() {
-    let Some(server) =
-        require_live_server(InferTask::Utseg, "Server does not support utseg infer").await
+    let Some(session) = require_live_direct(
+        InferTask::Utseg,
+        "Direct session does not support utseg infer",
+    )
+    .await
     else {
         return;
     };
@@ -670,15 +628,8 @@ async fn golden_utseg_spa() {
         content: SPA_MULTI_UTT.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Utseg,
-        "spa",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Utseg, "spa", files, options).await;
 
     if info.status == JobStatus::Failed {
         eprintln!("SKIP: Spanish utseg failed (model likely not downloaded)");
@@ -694,9 +645,9 @@ async fn golden_utseg_spa() {
 /// Translate: Spanish to English.
 #[tokio::test]
 async fn golden_translate_spa_to_eng() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Translate,
-        "Server does not support translate infer",
+        "Direct session does not support translate infer",
     )
     .await
     else {
@@ -716,15 +667,9 @@ async fn golden_translate_spa_to_eng() {
         content: SPA_SIMPLE.into(),
     }];
 
-    let (info, results) = submit_and_complete(
-        server.client(),
-        server.base_url(),
-        ReleasedCommand::Translate,
-        "spa",
-        files,
-        options,
-    )
-    .await;
+    let (info, results) =
+        submit_and_complete_direct(&session, ReleasedCommand::Translate, "spa", files, options)
+            .await;
 
     if info.status == JobStatus::Failed {
         eprintln!("SKIP: Spanish translate failed (model likely not downloaded)");
@@ -751,9 +696,9 @@ async fn golden_translate_spa_to_eng() {
 /// Verify that the second run (cache hit) produces identical output and is faster.
 #[tokio::test]
 async fn golden_morphotag_cache_is_faster() {
-    let Some(server) = require_live_server(
+    let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
-        "Server does not support morphosyntax infer",
+        "Direct session does not support morphosyntax infer",
     )
     .await
     else {
@@ -770,9 +715,8 @@ async fn golden_morphotag_cache_is_faster() {
 
     // First run — cold (populates cache)
     let start1 = std::time::Instant::now();
-    let (info1, results1) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info1, results1) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
@@ -787,9 +731,8 @@ async fn golden_morphotag_cache_is_faster() {
 
     // Second run — should hit cache
     let start2 = std::time::Instant::now();
-    let (info2, results2) = submit_and_complete(
-        server.client(),
-        server.base_url(),
+    let (info2, results2) = submit_and_complete_direct(
+        &session,
         ReleasedCommand::Morphotag,
         "eng",
         vec![FilePayload {
