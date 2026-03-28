@@ -18,6 +18,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use batchalign_app::api::JobId;
 use batchalign_app::config::RuntimeLayout;
 use batchalign_app::debug_artifacts::JobDebugArtifacts;
 use serde::Serialize;
@@ -47,7 +48,7 @@ pub async fn run(args: &JobsArgs) -> Result<(), CliError> {
         let server = server.trim_end_matches('/');
 
         if let Some(ref id) = args.job_id {
-            show_job(&client, server, id, args.json).await
+            show_job(&client, server, &JobId::from(id.as_str()), args.json).await
         } else {
             list_jobs(&client, server, args.json).await
         }
@@ -91,7 +92,7 @@ async fn list_jobs(client: &BatchalignClient, server: &str, json: bool) -> Resul
 async fn show_job(
     client: &BatchalignClient,
     server: &str,
-    job_id: &str,
+    job_id: &JobId,
     json: bool,
 ) -> Result<(), CliError> {
     let info = client.get_job(server, job_id).await?;

@@ -1,7 +1,7 @@
 # User Workflow Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-24 16:17 EDT
+**Last updated:** 2026-03-27 23:16 EDT
 
 This page describes durable differences between:
 
@@ -52,7 +52,7 @@ that were not yet first-class there:
 | `align` | `align` | same top-level purpose; newer runtime contracts and deterministic remap behavior |
 | `transcribe` | `transcribe` | same top-level purpose; expanded engine/runtime routing |
 | `translate` | `translate` | same |
-| `morphotag` | `morphotag` | same command name, stronger token/validation contracts |
+| `morphotag` | `morphotag` | same command name, stronger token/validation contracts, multilingual parallel dispatch |
 | `coref` | `coref` | same purpose; public in BA3, still English-only, and still local-oriented |
 | `utseg` | `utseg` | same |
 | `benchmark` | `benchmark` | same high-level goal |
@@ -216,7 +216,9 @@ results are:
 
 - `morphotag` correctness is stronger: `%mor`/`%gra` generation now runs against
   a structured CHAT representation and preserves token provenance more
-  consistently.
+  consistently. Multilingual files process all languages in parallel, and
+  large single-language batches are split across multiple workers — a
+  500-file multilingual corpus runs an order of magnitude faster than BA2.
 - retokenization is more predictable: Batchalign3 no longer relies on runtime
   global DP remapping to reconcile Stanza output back to CHAT.
 - alignment and timing writeback now preserve stable identity and explicit order
@@ -312,7 +314,7 @@ Important comparison nuance:
 | Area | Jan 9 BA2 -> Feb 9 BA2 | Feb 9 BA2 -> current BA3 |
 |---|---|---|
 | `align` | released BA2 already improved cache use, failure handling, and runtime robustness | FA grouping, timing injection, `%wor`, monotonicity handling, and much of the parse/cache/infer/inject flow move into Rust orchestration |
-| `morphotag` | released BA2 already improved caching, DP/robustness edges, and internal cleanup | `%mor`/`%gra` mapping and injection gain explicit root/head/chunk validation and a clearer Rust-owned CHAT boundary |
+| `morphotag` | released BA2 already improved caching, DP/robustness edges, and internal cleanup | `%mor`/`%gra` mapping and injection gain explicit root/head/chunk validation, a clearer Rust-owned CHAT boundary, and two-level parallel dispatch (cross-language + intra-language chunking) |
 
 For users, the practical current-state rule is:
 

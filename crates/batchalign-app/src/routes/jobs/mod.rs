@@ -44,17 +44,29 @@ use crate::submission::{SubmissionContext, materialize_submission_job};
 ///
 /// Registers routes for submission, listing, detail, results retrieval,
 /// per-file results, cancellation, deletion, restart, and SSE streaming.
+///
+/// The POST `/jobs` route disables axum's built-in 2 MB `Json` extractor
+/// limit so that large batch submissions (hundreds of CHAT files) are
+/// governed solely by the outer `RequestBodyLimitLayer` configured via
+/// `max_body_bytes_mb` in `server.yaml` (default 100 MB).
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/jobs", post(submit_job))
         .route("/jobs", get(list_jobs))
         .route("/jobs/{job_id}", get(get_job))
         .route("/jobs/{job_id}/results", get(get_results))
-        .route("/jobs/{job_id}/results/{filename}", get(get_single_result))
+        .route("/jobs/{job_id}/results/{*filename}", get(get_single_result))
         .route("/jobs/{job_id}/cancel", post(cancel_job))
         .route("/jobs/{job_id}", delete(delete_job))
         .route("/jobs/{job_id}/restart", post(restart_job))
         .route("/jobs/{job_id}/stream", get(stream_job))
+        // Disable axum's built-in 2 MB `Json` extractor limit on all job
+        // routes.  The outer `RequestBodyLimitLayer` (configured via
+        // `max_body_bytes_mb`, default 100 MB) remains the sole body-size
+        // guard.  Without this, large batch submissions (hundreds of CHAT
+        // files in one POST /jobs) hit the 2 MB default before reaching
+        // our configurable limit.
+        .layer(axum::extract::DefaultBodyLimit::disable())
 }
 
 /// Maximum length for a sanitized correlation ID.

@@ -137,6 +137,7 @@
 - [Per-Speaker UTR Design](developer/per-speaker-utr.md)
 - [Worker Protocol V2](developer/worker-protocol-v2.md)
 - [Rust CLI and Server](developer/rust-cli-and-server.md)
+- [HTTP Request Body Limits](developer/http-body-limits.md)
 - [Plugin Removal Notes](developer/plugins.md)
 - [Non-English Workarounds](developer/non-english-workarounds.md)
 - [%gra Correctness Guarantee](developer/gra-correctness-guarantee.md)

@@ -1,7 +1,7 @@
 # batchalign-app — HTTP Server, Job Store, and NLP Orchestration
 
 **Status:** Current
-**Last modified:** 2026-03-24 18:22 EDT
+**Last modified:** 2026-03-27 23:16 EDT
 
 ## Overview
 
@@ -75,7 +75,7 @@ cargo clippy -p batchalign-app -- -D warnings
 ## Dispatch Routing (runner/)
 
 Dispatch shapes (driven by `workflow/registry.rs`):
-1. **Batched text infer** (`runner/dispatch/infer_batched.rs`) — morphotag, utseg, translate, coref: pool all utterances from all files into one `batch_infer` call for GPU batch efficiency.
+1. **Batched text infer** (`runner/dispatch/infer_batched.rs`) — morphotag, utseg, translate, coref: pool all utterances from all files, group by language, dispatch language groups with **semaphore-bounded concurrency** (`morphosyntax/batch.rs`, `max_total_workers / max_workers_per_key` concurrent groups), and within each group split into chunks across multiple workers (`morphosyntax/worker.rs`, up to `max_workers_per_key`). Unsupported languages filtered at preflight (`stanza_languages.rs`).
 2. **Per-file FA** (`runner/dispatch/fa_pipeline.rs`) — align: files processed concurrently via `JoinSet` + `Semaphore(num_workers)`. UTR pre-pass runs before FA grouping with ASR result caching. Fallback UTR retries timing recovery after FA failures. For mostly-timed files (>50% timed, audio >60s), partial-window ASR runs only on untimed regions.
 3. **Per-file transcribe** (`runner/dispatch/transcribe_pipeline.rs`) — transcribe, transcribe_s: per-file audio processing with optional diarization, utseg, and morphosyntax.
 4. **Per-file benchmark** (`runner/dispatch/benchmark_pipeline.rs`) — composite transcribe + compare.
@@ -104,4 +104,8 @@ Polls `sysinfo::available_memory()` with configurable threshold (default 2048 MB
 
 ## Middleware Stack
 
-CORS → body limit (100 MB) → panic catching → timeout (5 min) → tracing → compression.
+CORS → body limit (`max_body_bytes_mb`, default 100 MB) → panic catching → timeout (5 min) → tracing → compression.
+
+Axum's built-in 2 MB `Json` extractor limit is disabled on job routes so the
+outer `RequestBodyLimitLayer` is the sole body-size guard.  See
+`book/src/developer/http-body-limits.md` for the full story.

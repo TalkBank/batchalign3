@@ -45,7 +45,7 @@
 //! # Example: morphosyntax round-trip
 //!
 //! ```rust,no_run
-//! use batchalign_chat_ops::parse::parse_lenient;
+//! use batchalign_chat_ops::parse::{TreeSitterParser, parse_lenient};
 //! use batchalign_chat_ops::morphosyntax::{
 //!     collect_payloads, clear_morphosyntax,
 //! };
@@ -54,8 +54,9 @@
 //! use batchalign_chat_ops::morphosyntax::MultilingualPolicy;
 //!
 //! // 1. Parse CHAT text into an AST
+//! let parser = TreeSitterParser::new().unwrap();
 //! let chat_text = std::fs::read_to_string("example.cha").unwrap();
-//! let (mut chat_file, _errors) = parse_lenient(&chat_text);
+//! let (mut chat_file, _errors) = parse_lenient(&parser, &chat_text);
 //!
 //! // 2. Clear any existing %mor/%gra tiers
 //! clear_morphosyntax(&mut chat_file);

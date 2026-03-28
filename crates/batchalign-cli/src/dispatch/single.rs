@@ -226,7 +226,7 @@ pub(super) async fn dispatch_single_server(
             // Cancel task — awaits signal from TUI, sends DELETE cancel
             let cc = client.clone();
             let cu = server_url.to_string();
-            let cj = job_id.to_string();
+            let cj = job_id.clone();
             tokio::spawn(async move {
                 if cancel_rx.await.is_ok() {
                     let _ = cc.cancel_job(&cu, &cj).await;

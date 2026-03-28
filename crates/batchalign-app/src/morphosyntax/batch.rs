@@ -194,12 +194,16 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         }
     }
 
-    // 3. Batch infer grouped by per-item language.
+    // 3. Batch infer grouped by per-item language — all languages in parallel.
     //
     // Multilingual CHAT files (e.g., @Languages: fra, eng) produce batch
     // items with different per-item languages. Each language group must be
     // dispatched to a worker loaded with the correct Stanza model — sending
     // French text to an English MWT pipeline produces corrupt Range tokens.
+    //
+    // Language groups are dispatched **concurrently** since each language uses
+    // a separate worker process. This is the primary throughput lever for
+    // multilingual batches: a 5-language batch runs ~5x faster than serial.
     //
     // BA2 parity: BA2 used stanza.MultilingualPipeline for this. BA3 groups
     // by language and dispatches each group to a separate single-language
@@ -222,43 +226,116 @@ pub(crate) async fn run_morphosyntax_batch_impl(
                 .push((global_idx, item));
         }
 
-        // Allocate result slots for all items.
+        // Prepare per-language dispatch inputs (owned data for the async tasks).
+        struct LangDispatch {
+            lang3: crate::api::LanguageCode3,
+            items: Vec<BatchItemWithPosition>,
+            /// Original global indices so results can be placed back.
+            global_indices: Vec<usize>,
+        }
+
+        // Partition language groups into supported (dispatch to workers)
+        // and unsupported (skip with warning).  This prevents spawning
+        // workers for languages Stanza cannot process, which would either
+        // crash the worker or deadlock the pool.
+        let mut dispatches: Vec<LangDispatch> = Vec::new();
+        let mut skipped_indices: Vec<(usize, String)> = Vec::new();
+
+        for (lang, lang_items) in &by_lang {
+            let lang3 = crate::api::LanguageCode3::try_new(lang.as_ref())
+                .unwrap_or_else(|_| params.lang.clone());
+
+            if !batchalign_chat_ops::morphosyntax::stanza_languages::is_stanza_supported(lang)
+            {
+                tracing::warn!(
+                    lang = %lang3,
+                    items = lang_items.len(),
+                    "Skipping unsupported language — utterances will have empty morphosyntax"
+                );
+                for (global_idx, _) in lang_items {
+                    skipped_indices.push((*global_idx, lang3.to_string()));
+                }
+                continue;
+            }
+
+            let items: Vec<BatchItemWithPosition> =
+                lang_items.iter().map(|(_, item)| (*item).clone()).collect();
+            let global_indices: Vec<usize> =
+                lang_items.iter().map(|(idx, _)| *idx).collect();
+            dispatches.push(LangDispatch { lang3, items, global_indices });
+        }
+
+        if !skipped_indices.is_empty() {
+            tracing::info!(
+                skipped = skipped_indices.len(),
+                "Skipped utterances with unsupported languages"
+            );
+        }
+
+        // Dispatch language groups with bounded concurrency.
+        //
+        // Each language group needs up to `max_workers_per_key` workers.
+        // Unbounded `join_all` would try to spawn workers for all languages
+        // simultaneously, exceeding `max_total_workers` and deadlocking.
+        //
+        // Instead, we use a semaphore to limit the number of concurrent
+        // language groups to `max_total_workers / max_workers_per_key`.
+        // When a group finishes and releases its workers, the next group
+        // starts — no deadlock, full utilization, all groups eventually
+        // process.  This is the same pattern FA pipeline uses for per-file
+        // concurrency (JoinSet + Semaphore).
+        let max_per_key = services.pool.max_workers_per_key().max(1);
+        let max_total = services.pool.effective_max_total_workers().max(1);
+        let max_concurrent_groups = (max_total / max_per_key).max(1);
+
+        tracing::info!(
+            language_groups = dispatches.len(),
+            max_concurrent_groups,
+            max_total_workers = max_total,
+            max_workers_per_key = max_per_key,
+            "Dispatching morphosyntax language groups with bounded concurrency"
+        );
+
+        let lang_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent_groups));
+
         let mut all_responses: Vec<Option<UdResponse>> = vec![None; all_misses.len()];
         let mut batch_error: Option<ServerError> = None;
 
-        for (lang, lang_items) in &by_lang {
-            // LanguageCode3::try_new validates the 3-letter code; fall back to
-            // the batch-level primary language if the per-item code is invalid.
-            let lang3 = crate::api::LanguageCode3::try_new(lang.as_ref())
-                .unwrap_or_else(|_| params.lang.clone());
-            let items_slice: Vec<BatchItemWithPosition> =
-                lang_items.iter().map(|(_, item)| (*item).clone()).collect();
+        // Build futures that each acquire a semaphore permit before dispatching.
+        let futures: Vec<_> = dispatches
+            .iter()
+            .map(|d| {
+                let sem = lang_sem.clone();
+                async move {
+                    let _permit = sem.acquire().await.map_err(|_| {
+                        ServerError::Validation("language group semaphore closed".into())
+                    })?;
+                    tracing::info!(
+                        lang = %d.lang3,
+                        items = d.items.len(),
+                        "Dispatching morphosyntax batch for language group"
+                    );
+                    infer_batch(services.pool, &d.items, &d.lang3, params.mwt, retokenize).await
+                }
+            })
+            .collect();
 
-            tracing::info!(
-                lang = %lang3,
-                items = items_slice.len(),
-                "Dispatching morphosyntax batch for language group"
-            );
+        let outcomes = futures::future::join_all(futures).await;
 
-            match infer_batch(
-                services.pool,
-                &items_slice,
-                &lang3,
-                params.mwt,
-                retokenize,
-            )
-            .await
-            {
+        for (dispatch, outcome) in dispatches.iter().zip(outcomes) {
+            match outcome {
                 Ok(responses) => {
-                    // Place responses back in their original positions.
-                    for ((global_idx, _), ud) in lang_items.iter().zip(responses) {
+                    for (global_idx, ud) in dispatch.global_indices.iter().zip(responses) {
                         all_responses[*global_idx] = Some(ud);
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(lang = %lang3, error = %e, "Batch infer failed for language group");
-                    // Dump the failed batch for post-mortem analysis.
-                    let dump_items: Vec<_> = items_slice.iter().map(|(li, uo, item, _)| {
+                    tracing::warn!(
+                        lang = %dispatch.lang3,
+                        error = %e,
+                        "Batch infer failed for language group"
+                    );
+                    let dump_items: Vec<_> = dispatch.items.iter().map(|(li, uo, item, _)| {
                         serde_json::json!({
                             "line_idx": li,
                             "utt_ordinal": uo,
@@ -267,39 +344,28 @@ pub(crate) async fn run_morphosyntax_batch_impl(
                         })
                     }).collect();
                     services.debug_dumper.dump_morphosyntax_failed_batch(
-                        &format!("batch_failure_{lang3}"),
+                        &format!("batch_failure_{}", dispatch.lang3),
                         &dump_items,
                         &e,
                     );
                     batch_error = Some(e);
-                    break;
                 }
             }
         }
 
-        if let Some(e) = batch_error {
-            tracing::warn!(error = %e, "Batch infer failed");
-            for (file_idx, file) in files.iter().enumerate() {
-                if per_file_info
-                    .get(file_idx)
-                    .and_then(|f| f.as_ref())
-                    .is_some()
-                {
-                    results.push(TextBatchFileResult::err(
-                        file.filename.clone(),
-                        format!("Batch infer failed: {e}"),
-                    ));
-                } else {
-                    results.push(TextBatchFileResult::ok(
-                        file.filename.clone(),
-                        to_chat_string(&parsed_files[file_idx]),
-                    ));
-                }
-            }
-            return results;
+        if let Some(ref e) = batch_error {
+            tracing::warn!(
+                error = %e,
+                "One or more language groups failed — continuing with \
+                 successful groups. Utterances needing failed languages \
+                 will get empty morphosyntax results."
+            );
         }
 
-        // Debug: dump UD responses
+        // Fill missing responses with empty UdResponse for items whose
+        // language group failed.  This allows files that span multiple
+        // languages to still get results for the successful languages,
+        // rather than poisoning the entire batch.
         let collected: Vec<UdResponse> = all_responses
             .into_iter()
             .map(|r| r.unwrap_or_else(|| UdResponse { sentences: Vec::new() }))

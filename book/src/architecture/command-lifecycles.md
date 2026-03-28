@@ -1,7 +1,7 @@
 # Command Lifecycles
 
 **Status:** Current
-**Last modified:** 2026-03-26 14:05 EDT
+**Last modified:** 2026-03-27 23:16 EDT
 
 End-to-end sequence diagrams showing how jobs flow through the system,
 from CLI invocation to output files. Every batchalign command now fits one
@@ -20,7 +20,7 @@ Contributor rule of thumb: if you are adding new command semantics, start in
 | Workflow Family | Commands | Parallelism | Key shape |
 |------------------|----------|-------------|-----------|
 | **Per-file transform** | `align`, `transcribe`, `transcribe_s` | Concurrent files (semaphore-bounded by `num_workers`) | One file in, one primary output out |
-| **Cross-file batch transform** | `morphotag`, `utseg`, `translate`, `coref` | Cross-file batching (all utterances pooled into one GPU batch) | One prepared-text batch per task; maximizes model batch efficiency |
+| **Cross-file batch transform** | `morphotag`, `utseg`, `translate`, `coref` | Cross-file batching: pool utterances, group by language, dispatch languages concurrently, chunk large language groups across multiple workers | Two-level parallelism: cross-language × intra-language chunking (up to `max_workers_per_key` per language) |
 | **Reference projection** | `compare` | Concurrent files, but with two primary CHAT inputs per file | Main+gold comparison bundle plus AST-first materializers |
 | **Composite workflow** | `benchmark` | Concurrent files (semaphore-bounded by `num_workers`) | Transcribe first, then compare via typed command composition |
 | **Media analysis V2** | `opensmile`, `avqi` | Concurrent files (semaphore-bounded by `num_workers`) | Rust prepares audio, sends typed `execute_v2` requests, Python returns raw analysis payloads |
@@ -54,9 +54,15 @@ pipelines. The API now exposes that state in two parallel fields:
 operator-facing display string.
 
 Batched text commands (`morphotag`, `utseg`, `translate`, `coref`) take a
-different approach: they **pool all utterances from all files** into a single
-batched `execute_v2` call backed by one prepared-text artifact. The one worker
-call handles all files at once while keeping the model batch intact. `compare`
+different approach: they **pool all utterances from all files**, group them by
+per-item language, and dispatch with **two levels of bounded parallelism**. At
+the outer level, language groups run concurrently but bounded by a semaphore
+(`max_total_workers / max_workers_per_key` concurrent groups) to prevent
+exceeding the global worker cap (`morphosyntax/batch.rs`). At the inner level,
+each language group's `infer_batch` call (`morphosyntax/worker.rs`) splits
+large batches into chunks across up to `max_workers_per_key` workers of the
+same language. When a language group finishes and its workers return to the
+pool, the next queued group starts. `compare`
 does not use this pooled-text shape any more; it is its own reference
 projection workflow because it needs both a main transcript and a gold
 companion per file. `benchmark` is a composite workflow that composes
@@ -201,17 +207,21 @@ sequenceDiagram
 
 ---
 
-## Scenario 2: morphotag — 2 files, cross-file batching
+## Scenario 2: morphotag — 2 multilingual files, cross-file batching
 
-Text-only commands pool utterances from all files into a single worker
-call, maximizing GPU batch efficiency.
+Text-only commands pool utterances from all files, group by language,
+and dispatch with **two levels of parallelism**: all language groups run
+concurrently, and within each language group, large batches are split
+across multiple workers.
 
 ```mermaid
 sequenceDiagram
     participant CLI
     participant Server
     participant Pool as WorkerPool
-    participant W as Worker
+    participant W_jpn1 as Worker (jpn #1)
+    participant W_jpn2 as Worker (jpn #2)
+    participant W_eng as Worker (eng)
     participant Cache
 
     CLI->>Server: POST /jobs (morphotag, 2 files)
@@ -225,21 +235,38 @@ sequenceDiagram
     end
 
     Server->>Server: clear existing %mor/%gra from both ASTs
-    Server->>Server: collect_payloads() from AST_a (utterances 0..4)
-    Server->>Server: collect_payloads() from AST_b (utterances 5..8)
-    Note over Server: Track provenance: file_a starts at index 0 (count=5),<br/>file_b starts at index 5 (count=4)
+    Server->>Server: collect_payloads() from AST_a and AST_b
+    Note over Server: Track provenance via global start indices
 
-    Server->>Cache: batch lookup all 9 utterances
-    Cache-->>Server: 3 hits, 6 misses
+    Server->>Cache: batch lookup all utterances
+    Cache-->>Server: some hits, some misses
 
     Server->>Server: inject cache hits immediately
+    Server->>Server: group misses by per-item language
 
-    Server->>Pool: checkout worker
-    Pool-->>Server: CheckedOutWorker
-    Server->>W: execute_v2(task="morphosyntax", prepared_text batch=6 misses)
-    Note over W: Read prepared batch artifact,<br/>run one Stanza NLP batch
-    W-->>Server: typed morphosyntax batch result
-    Note over Server: Worker returned to pool
+    par Level 1: dispatch language groups concurrently
+        Note over Server: jpn has 200 items → split into 2 chunks
+        par Level 2: intra-language chunking
+            Server->>Pool: checkout jpn worker
+            Pool-->>Server: CheckedOutWorker
+            Server->>W_jpn1: execute_v2(morphosyntax, jpn chunk 1)
+            W_jpn1-->>Server: jpn UD results (chunk 1)
+        and
+            Server->>Pool: checkout jpn worker
+            Pool-->>Server: CheckedOutWorker
+            Server->>W_jpn2: execute_v2(morphosyntax, jpn chunk 2)
+            W_jpn2-->>Server: jpn UD results (chunk 2)
+        end
+        Server->>Server: concatenate jpn chunks in order
+    and
+        Note over Server: eng has 20 items → single worker
+        Server->>Pool: checkout eng worker
+        Pool-->>Server: CheckedOutWorker
+        Server->>W_eng: execute_v2(morphosyntax, eng misses)
+        W_eng-->>Server: eng UD results
+    end
+
+    Server->>Server: merge results into global response slots
 
     Server->>Server: repartition responses by file (using start indices)
 
@@ -248,7 +275,7 @@ sequenceDiagram
         Server->>Server: inject_results() into AST_b → insert %mor/%gra tiers
     end
 
-    Server->>Cache: store 6 new entries
+    Server->>Cache: store new entries
     Server->>Server: validate alignment → serialize both files
     Server-->>CLI: 2 output files
 ```
@@ -263,12 +290,19 @@ sequenceDiagram
 3. **Cache lookup** checks all utterances at once. BLAKE3 keys include
    (words + language + terminator + special forms + engine version). Cache hits
    are injected immediately — no worker call needed for those utterances.
-4. All **cache misses across both files** are pooled into a single
-   `execute_v2(task="morphosyntax")` call. Rust freezes the miss batch into one
-   prepared-text artifact; the Python worker reads that artifact, runs one
-   Stanza batch, and returns typed raw UD annotations.
-5. Responses are **repartitioned** back to their source files using the tracked
-   start indices, then injected into each file's AST.
+4. Cache misses are **grouped by per-item language** (multilingual CHAT files
+   produce items tagged with different languages). All language groups are
+   dispatched **concurrently** via `futures::future::join_all`
+   (`morphosyntax/batch.rs`). Within each language group, `infer_batch`
+   (`morphosyntax/worker.rs`) splits large batches into chunks across multiple
+   workers (up to `max_workers_per_key`, default 4). A batch spanning 5
+   languages with 200+ items per language can use 20 workers simultaneously.
+   Chunk size floor: `MIN_CHUNK_SIZE = 30` items (below this, Stanza's
+   per-batch overhead dominates and splitting is not worthwhile).
+5. Responses are **merged** — intra-language chunks are concatenated in order,
+   then cross-language results are placed into a global response vector using
+   tracked indices, then **repartitioned** back to their source files and
+   injected into each file's AST.
 6. This same cross-file batch shape handles `utseg`, `translate`, and `coref`.
    The only differences are: which tiers are injected, what the cache key
    includes, and which Stanza/translation pipeline runs. `compare` is separate

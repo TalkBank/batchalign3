@@ -17,8 +17,59 @@ use tracing::{info, warn};
 
 use super::CACHE_TASK;
 
-/// Send batch items to a worker for NLP inference via batched `execute_v2`.
+/// Send batch items to workers for NLP inference via batched `execute_v2`.
+///
+/// When the batch is large enough and the pool allows multiple workers per
+/// language key, the items are split into chunks and dispatched concurrently
+/// to separate workers.  This is transparent to callers — the returned
+/// `Vec<UdResponse>` is always parallel to the input `items` slice.
 pub(crate) async fn infer_batch(
+    pool: &WorkerPool,
+    items: &[BatchItemWithPosition],
+    lang: &LanguageCode3,
+    mwt: &MwtDict,
+    retokenize: bool,
+) -> Result<Vec<UdResponse>, ServerError> {
+    let num_chunks = compute_chunk_count(items.len(), pool.max_workers_per_key());
+
+    if num_chunks <= 1 {
+        // Fast path: single dispatch (no allocation overhead, no join_all).
+        return infer_batch_single(pool, items, lang, mwt, retokenize).await;
+    }
+
+    let chunk_size = (items.len() + num_chunks - 1) / num_chunks;
+    let chunks: Vec<&[BatchItemWithPosition]> = items.chunks(chunk_size).collect();
+
+    info!(
+        items = items.len(),
+        chunks = chunks.len(),
+        chunk_size,
+        lang = %lang,
+        "Splitting morphosyntax batch across workers"
+    );
+
+    let futures: Vec<_> = chunks
+        .iter()
+        .map(|chunk| infer_batch_single(pool, chunk, lang, mwt, retokenize))
+        .collect();
+
+    let outcomes = futures::future::join_all(futures).await;
+
+    // Merge results in order.  Fail on the first chunk error — other chunks
+    // have already completed (join_all awaits all), so their workers return
+    // to the pool cleanly via CheckedOutWorker drop.
+    let mut all = Vec::with_capacity(items.len());
+    for outcome in outcomes {
+        all.extend(outcome?);
+    }
+    Ok(all)
+}
+
+/// Dispatch a single chunk of batch items to one worker.
+///
+/// This is the original `infer_batch` body, extracted so it can be called
+/// once (fast path) or N times concurrently (chunked path).
+async fn infer_batch_single(
     pool: &WorkerPool,
     items: &[BatchItemWithPosition],
     lang: &LanguageCode3,
@@ -115,6 +166,74 @@ pub(crate) async fn infer_batch(
     }
 
     Ok(ud_responses)
+}
+
+/// Minimum items per chunk.  Below this threshold, Stanza's per-batch
+/// overhead (model forward-pass setup, tokenizer warmup) dominates and
+/// splitting provides no throughput benefit.
+const MIN_CHUNK_SIZE: usize = 30;
+
+/// Compute how many worker chunks to split a language batch into.
+///
+/// Returns 1 (no split) when:
+/// - Fewer than `MIN_CHUNK_SIZE` items (splitting not worthwhile).
+/// - `max_workers` is 1 (only one worker slot available).
+///
+/// Otherwise returns `min(item_count / MIN_CHUNK_SIZE, max_workers)`.
+fn compute_chunk_count(item_count: usize, max_workers: usize) -> usize {
+    if item_count < MIN_CHUNK_SIZE || max_workers <= 1 {
+        return 1;
+    }
+    (item_count / MIN_CHUNK_SIZE).clamp(1, max_workers)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_chunk_count_below_minimum_returns_one() {
+        assert_eq!(compute_chunk_count(0, 4), 1);
+        assert_eq!(compute_chunk_count(1, 4), 1);
+        assert_eq!(compute_chunk_count(29, 4), 1);
+    }
+
+    #[test]
+    fn compute_chunk_count_at_minimum_returns_one() {
+        // 30 / 30 = 1
+        assert_eq!(compute_chunk_count(30, 4), 1);
+    }
+
+    #[test]
+    fn compute_chunk_count_scales_with_items() {
+        assert_eq!(compute_chunk_count(60, 4), 2);
+        assert_eq!(compute_chunk_count(90, 4), 3);
+        assert_eq!(compute_chunk_count(120, 4), 4);
+    }
+
+    #[test]
+    fn compute_chunk_count_clamped_by_max_workers() {
+        // 2000 / 30 = 66, but max_workers = 4
+        assert_eq!(compute_chunk_count(2000, 4), 4);
+        assert_eq!(compute_chunk_count(500, 2), 2);
+        assert_eq!(compute_chunk_count(500, 8), 8);
+    }
+
+    #[test]
+    fn compute_chunk_count_single_worker_always_one() {
+        assert_eq!(compute_chunk_count(2000, 1), 1);
+        assert_eq!(compute_chunk_count(60, 1), 1);
+    }
+
+    #[test]
+    fn compute_chunk_count_zero_workers_returns_one() {
+        // Defensive: max_workers=0 should not panic
+        assert_eq!(compute_chunk_count(100, 0), 1);
+    }
 }
 
 /// Store morphosyntax results in cache.

@@ -65,14 +65,17 @@ macro_rules! string_id {
     };
 }
 
-/// Declare a validated `String`-wrapping newtype that rejects empty strings.
+/// Declare a validated `String`-wrapping newtype that rejects empty strings
+/// on deserialization.
 ///
-/// Unlike [`string_id!`], this macro does NOT generate `From<&str>` or
-/// `From<String>` — construction can fail. Use `TryFrom` at boundaries
-/// or the generated `new_unchecked()` in test code.
+/// **Known compromise:** `From<String>` and `From<&str>` are still infallible
+/// and skip validation. They exist for trusted boundaries (HTTP path params
+/// extracted by axum, DB rows, test code). Untrusted input goes through the
+/// validating `Deserialize` impl. A full `TryFrom` migration is tracked but
+/// would touch hundreds of call sites — see CLAUDE.md rule 6a.
 ///
-/// Generates: `TryFrom<&str>`, `TryFrom<String>`, custom `Deserialize`
-/// (rejects empty), `Display`, `Deref<Target=str>`, `AsRef<str>`.
+/// Generates: `From<String>`, `From<&str>`, custom `Deserialize` (rejects
+/// empty), `Display`, `Deref<Target=str>`, `AsRef<str>`.
 /// Does NOT generate `Default` (empty value is never valid).
 ///
 /// For additional validation beyond non-empty, pass a closure:
@@ -112,9 +115,11 @@ macro_rules! validated_string_id {
             }
         }
 
-        // From<String> and From<&str> are deliberately kept for trusted
-        // boundaries (HTTP path params, DB rows, test code). The validating
-        // Deserialize impl catches empty values from untrusted JSON input.
+        // From<String> / From<&str> are infallible and skip validation.
+        // They exist because validated_string_id types are used at trusted
+        // boundaries (HTTP path params from axum, DB rows, test code) where
+        // the value is known-good.  Untrusted input goes through the
+        // validating `Deserialize` impl or `TryFrom`.
         impl From<String> for $name {
             fn from(s: String) -> Self { Self(s) }
         }

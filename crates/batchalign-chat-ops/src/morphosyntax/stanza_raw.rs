@@ -69,23 +69,40 @@ fn normalize_word_dict(mut value: serde_json::Value) -> serde_json::Value {
             obj.insert("id".to_string(), serde_json::json!(n));
         }
 
-        // Default lemma to text if empty, missing, or null.
-        // Stanza can emit any of: no key, "", or null when the lemmatizer
-        // fails silently for a token.
-        let lemma_empty = obj.get("lemma").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.is_empty()));
+        // Detect MWT range tokens: id is a 2-element array like [4, 5].
+        // Stanza deliberately omits annotation fields (lemma, upos, head,
+        // deprel, feats) on range tokens — only the expanded sub-words
+        // carry those.  We must supply defaults so serde can deserialize
+        // the UdWord struct.
         let is_range = obj
             .get("id")
             .is_some_and(|v| v.as_array().is_some_and(|a| a.len() > 1));
 
-        if lemma_empty
-            && !is_range
-            && let Some(text) = obj.get("text").and_then(|v| v.as_str())
-        {
-            obj.insert("lemma".to_string(), serde_json::json!(text));
+        if is_range {
+            // Range tokens carry no linguistic annotation.  Insert
+            // defaults for every field that UdWord requires.
+            obj.entry("lemma").or_insert(serde_json::json!(""));
+            obj.entry("upos").or_insert(serde_json::json!("X"));
+            obj.entry("head").or_insert(serde_json::json!(0));
+            obj.entry("deprel").or_insert(serde_json::json!("dep"));
+            obj.entry("feats").or_insert(serde_json::json!(""));
+        } else {
+            // Default lemma to text if empty, missing, or null.
+            // Stanza can emit any of: no key, "", or null when the lemmatizer
+            // fails silently for a token.
+            let lemma_empty = obj.get("lemma").is_none_or(|v| {
+                v.is_null() || v.as_str().is_some_and(|s| s.is_empty())
+            });
+            if lemma_empty
+                && let Some(text) = obj.get("text").and_then(|v| v.as_str())
+            {
+                obj.insert("lemma".to_string(), serde_json::json!(text));
+            }
         }
 
         // Normalize null string fields to sensible defaults.
         // Stanza can emit null for any field when a processor fails silently.
+        // (This covers non-range tokens where a field is present but null.)
         for (field, default) in [("upos", "X"), ("deprel", "dep"), ("feats", "")] {
             if obj.get(field).is_some_and(|v| v.is_null()) {
                 obj.insert(field.to_string(), serde_json::json!(default));
@@ -211,8 +228,9 @@ pub fn diagnose_parse_failure(raw_sentences: &[serde_json::Value]) -> Vec<Stanza
 
             // Check required string fields
             for field in &required_string_fields {
-                // Range (MWT) tokens are expected to have empty lemma
-                if *field == "lemma" && is_range {
+                // Range (MWT) tokens deliberately lack annotation fields
+                // (lemma, upos, deprel) — only the expanded sub-words have them.
+                if is_range {
                     continue;
                 }
 
@@ -409,6 +427,46 @@ mod tests {
         assert_eq!(resp.sentences[0].words.len(), 3);
         assert_eq!(resp.sentences[0].words[0].id, UdId::Range(1, 2));
         // MWT range token should keep empty lemma (not default to text)
+        assert!(resp.sentences[0].words[0].lemma.is_empty());
+    }
+
+    /// Real Stanza output for French "au" (= "à" + "le"): the MWT range token
+    /// has only `[id, text, start_char, end_char]` — no lemma, upos, head,
+    /// deprel.  The parser must supply defaults for these absent fields.
+    #[test]
+    fn test_parse_raw_stanza_mwt_absent_fields() {
+        let raw = vec![json!([
+            {
+                "id": [4, 5],
+                "text": "au",
+                "start_char": 20,
+                "end_char": 22
+            },
+            {
+                "id": [4],
+                "text": "à",
+                "lemma": "à",
+                "upos": "ADP",
+                "head": 6,
+                "deprel": "case"
+            },
+            {
+                "id": [5],
+                "text": "le",
+                "lemma": "le",
+                "upos": "DET",
+                "head": 6,
+                "deprel": "det"
+            }
+        ])];
+
+        let resp = parse_raw_stanza_output(&raw).expect(
+            "MWT range token with absent annotation fields should parse successfully"
+        );
+        assert_eq!(resp.sentences[0].words.len(), 3);
+        assert_eq!(resp.sentences[0].words[0].id, UdId::Range(4, 5));
+        assert_eq!(resp.sentences[0].words[0].text, "au");
+        // Range tokens carry no linguistic annotation — defaults are fine
         assert!(resp.sentences[0].words[0].lemma.is_empty());
     }
 

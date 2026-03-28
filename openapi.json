@@ -1436,7 +1436,7 @@
     },
     "/jobs/{job_id}/results": {
       "get": {
-        "description": "Blocks until the job has completed, failed, or been interrupted -- returns\n409 for jobs that are still running or queued. In content mode the response\nincludes the full CHAT text of each output file; in paths mode only filenames\nare returned (the files were written directly to disk by the runner).\nCancelled jobs are intentionally excluded because they may have incomplete\nresults.",
+        "description": "Blocks until the job has completed, failed, or been interrupted -- returns\n409 for jobs that are still running or queued. The response includes the\nfull staged content of each successful output file. Paths-mode jobs keep\nthe execution-host write, but also preserve a staged copy for download.\nCancelled jobs are intentionally excluded because they may have incomplete\nresults.",
         "operationId": "get_results",
         "parameters": [
           {
@@ -1477,7 +1477,7 @@
         ]
       }
     },
-    "/jobs/{job_id}/results/{filename}": {
+    "/jobs/{job_id}/results/{*filename}": {
       "get": {
         "description": "Waits for the individual file to reach a terminal status, not the whole job,\nso clients can fetch results incrementally as files finish. Supports\nstem-based matching (e.g., requesting `sample.wav` will find `sample.cha`)\nto handle the common case where the output extension differs from the input.",
         "operationId": "get_single_result",

@@ -1,7 +1,7 @@
 # Algorithms, Language, and Alignment Migration
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last updated:** 2026-03-28 06:02 EDT
 
 Comparison anchors:
 
@@ -495,19 +495,28 @@ BA3 implements full per-utterance language routing for morphosyntax:
 utterances with `[- fra]` precodes are routed to the French Stanza
 pipeline, `[- spa]` to Spanish, etc. The full chain:
 
-1. **Rust** (`morphosyntax/payloads.rs`): extracts `language_code` from each
-   utterance's `[- lang]` precode, falls back to `@Languages` header, then
-   to primary `--lang`
-2. **Python worker** (`_infer_hosts.py`): discovers all languages from batch
-   items, loads Stanza pipelines on-demand for each new language
-3. **Python inference** (`morphosyntax.py`): groups batch items by language,
-   routes each group to its language-specific Stanza pipeline
+1. **Rust** (`morphosyntax/batch.rs`): extracts per-utterance `language_code`
+   from `[- lang]` precodes (falls back to `@Languages` header, then to
+   primary `--lang`), groups all cache-miss items by language
+2. **Rust** (`morphosyntax/batch.rs`): dispatches all language groups
+   **concurrently** via `futures::future::join_all` — each language group
+   goes to a separate worker process
+3. **Rust** (`morphosyntax/worker.rs`): within each language group, splits
+   large batches into chunks across up to `max_workers_per_key` (default 4)
+   workers of the same language, also via `join_all`
+4. **Python worker**: receives one chunk, runs Stanza on it, returns raw UD
+   annotations — Python has zero language-routing logic
 
-| Behavior | BA2 | batchalign-next | BA3 |
-|---|---|---|---|
-| `[- lang]` precode parsed | Yes | Yes | Yes |
-| Per-utterance Stanza routing | **No** (always primary lang) | Yes (eager load) | **Yes** (on-demand load) |
-| `@s:lang` per-word routing | No | No | No |
+Language grouping and dispatch are entirely Rust-owned. Python workers are
+stateless single-language inference endpoints.
+
+| Behavior | BA2 | BA3 |
+|---|---|---|
+| `[- lang]` precode parsed | Yes | Yes |
+| Per-utterance Stanza routing | **No** (always primary lang) | **Yes** (Rust groups by language) |
+| Cross-language parallelism | No | **Yes** (concurrent language groups) |
+| Intra-language parallelism | No | **Yes** (chunked across multiple workers) |
+| `@s:lang` per-word routing | No | No |
 
 BA2 parsed the `[- lang]` precode into `override_lang` but **never used it
 for routing** — it always called `nlp(line_cut)` with the single primary
@@ -516,10 +525,36 @@ declared language. When `skipmultilang=True`, BA2 skipped non-primary
 utterances entirely; when `False` (default), it processed them with the
 wrong language model.
 
-batchalign-next introduced true per-utterance routing via eager pipeline
-loading. BA3 achieves the same result with on-demand loading — more
-memory-efficient for files that happen to use only one language, with
-identical behavior for multilingual files.
+BA3's two-level parallelism means a multilingual batch with N languages
+and K workers per language can use N×K workers simultaneously. On fleet
+machines (256 GB RAM, 28 cores), a 5-language batch with
+`max_workers_per_key=4` uses up to 20 concurrent Stanza workers.
+
+### Unsupported languages
+
+Not all ISO 639-3 codes have Stanza models. The TalkBank corpus includes
+files with secondary languages like Quechua (`que`), Jamaican Creole
+(`jam`), Min Nan Chinese (`nan`), Tamasheq (`taq`), and `und`
+(undetermined). BA2 and BA3 handle these differently:
+
+| Behavior | BA2 | BA3 |
+|---|---|---|
+| Unsupported secondary language | **Silently processed with wrong model** (MultilingualPipeline falls back to primary language) | **Detected at preflight, skipped with warning** — utterances get empty `%mor`/`%gra` |
+| Worker crash on unsupported code | Never (MultilingualPipeline absorbs it) | Never (Rust filters before dispatch) |
+| POS accuracy for unsupported langs | **Wrong** (primary-language model applied to foreign text) | **Honest** (empty rather than wrong) |
+
+BA2's `stanza.MultilingualPipeline` was convenient but dishonest: it
+silently applied the wrong language model to unsupported languages,
+producing POS tags and dependency parses that looked plausible but were
+linguistically invalid. BA3's approach is to fail honestly — an empty
+`%mor` tier is better than a wrong one, because it signals to the user
+that the language needs attention rather than hiding the problem behind
+plausible-looking garbage.
+
+The supported language set is maintained in
+`batchalign-chat-ops/src/morphosyntax/stanza_languages.rs` (Rust-side
+preflight) and `batchalign/worker/_stanza_loading.py` (Python-side
+mapping). Both must stay in sync.
 
 See [Language Architecture](../architecture/language-architecture.md) for
 the remaining gaps (per-word `@s:` routing, per-utterance ASR engine

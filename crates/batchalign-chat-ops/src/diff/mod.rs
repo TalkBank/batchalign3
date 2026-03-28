@@ -9,14 +9,15 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use batchalign_chat_ops::parse::parse_lenient;
+//! use batchalign_chat_ops::parse::{TreeSitterParser, parse_lenient};
 //! use batchalign_chat_ops::diff::{diff_chat, DiffSummary};
 //!
+//! let parser = TreeSitterParser::new().unwrap();
 //! let before_text = std::fs::read_to_string("before.cha").unwrap();
 //! let after_text = std::fs::read_to_string("after.cha").unwrap();
 //!
-//! let (before, _) = parse_lenient(&before_text);
-//! let (after, _) = parse_lenient(&after_text);
+//! let (before, _) = parse_lenient(&parser, &before_text);
+//! let (after, _) = parse_lenient(&parser, &after_text);
 //!
 //! let deltas = diff_chat(&before, &after);
 //! let summary = DiffSummary::from_deltas(&deltas);

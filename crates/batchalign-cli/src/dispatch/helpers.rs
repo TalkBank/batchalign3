@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use batchalign_app::ReleasedCommand;
-use batchalign_app::api::{DisplayPath, FilePayload, FileStatusKind, JobInfo, JobStatus};
+use batchalign_app::api::{DisplayPath, FilePayload, FileStatusKind, JobId, JobInfo, JobStatus};
 use batchalign_app::debug_artifacts::JobDebugArtifacts;
 
 use crate::client::{BatchalignClient, MAX_POLL_FAILURES, POLL_MAX, POLL_MIN, POLL_STEP};
@@ -106,7 +106,7 @@ pub(super) fn file_error_details(info: &JobInfo) -> Vec<FileErrorDetail> {
 pub(super) async fn poll_and_write_incrementally(
     client: &BatchalignClient,
     server_url: &str,
-    job_id: &str,
+    job_id: &JobId,
     total_files: u64,
     result_map: &HashMap<String, PathBuf>,
     out_dir: &Path,

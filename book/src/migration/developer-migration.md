@@ -1,7 +1,7 @@
 # Developer Architecture Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-26 00:52 EDT
+**Last updated:** 2026-03-27 23:16 EDT
 
 Comparison anchors for this page:
 
@@ -174,7 +174,7 @@ Key differences from BA2:
 | **Worker lifetime** | Job-scoped (die after each job) | Persistent (idle timeout 10 min) |
 | **Model loading** | Fresh per worker per job | Load once at startup, reused |
 | **GPU model sharing** | Fork-based (crash-prone) or none | ThreadPoolExecutor inside one process (GIL-release) |
-| **CPU parallelism** | ProcessPoolExecutor (N copies) | Stanza profile: N persistent subprocesses |
+| **CPU parallelism** | ProcessPoolExecutor (N copies) | Stanza profile: N persistent subprocesses, two-level parallelism (cross-language + intra-language chunking) |
 | **Concurrency control** | Adaptive RSS monitoring | Auto-tuned + memory gate + per-profile limits |
 | **Worker health** | None | Health checks every 30s, auto-restart |
 | **Warmup** | None (cold start every job) | Concurrent background warmup at server start |

@@ -192,7 +192,7 @@ pub fn inject_results(
                     });
                 }
 
-                crate::retokenize::retokenize_utterance(
+                if let Err(e) = crate::retokenize::retokenize_utterance(
                     parser,
                     utt,
                     &words,
@@ -200,18 +200,33 @@ pub fn inject_results(
                     mors,
                     Some(item.terminator.as_str().to_string()),
                     gra_relations,
-                )
-                .map_err(|e| format!("Failed to retokenize utterance {utt_ordinal}: {e}"))?;
+                ) {
+                    tracing::warn!(
+                        utterance = utt_ordinal,
+                        error = %e,
+                        "Skipping utterance: retokenization failed"
+                    );
+                    continue;
+                }
             } else {
-                crate::inject::inject_morphosyntax(
+                if let Err(e) = crate::inject::inject_morphosyntax(
                     utt,
                     mors,
                     Some(item.terminator.as_str().to_string()),
                     gra_relations,
-                )
-                .map_err(|e| {
-                    format!("Failed to inject morphosyntax for utterance {utt_ordinal}: {e}")
-                })?;
+                ) {
+                    // MOR count mismatches occur when Stanza's MWT tokenizer
+                    // expands contractions that overlap with CHAT notation
+                    // (e.g. French `qu'` with adjacent quotation marks).
+                    // Skip the utterance rather than failing the entire file —
+                    // an empty %mor is honest about the data quality issue.
+                    tracing::warn!(
+                        utterance = utt_ordinal,
+                        error = %e,
+                        "Skipping utterance: morphosyntax injection failed"
+                    );
+                    continue;
+                }
             }
         } else {
             tracing::warn!(

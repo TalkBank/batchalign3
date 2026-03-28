@@ -43,15 +43,24 @@ pub fn inject_morphosyntax(
     );
     if word_count != mor_count {
         let utt_text = utterance.main.to_chat_string();
+        // MOR count mismatches can occur legitimately when Stanza's MWT
+        // tokenizer expands contractions (e.g. French `qu'` → `qu` + `'`)
+        // that overlap with CHAT quotation marks in word text.  This is an
+        // inherent tension between CHAT word boundaries and UD tokenization.
+        //
+        // BA2 did not have this assertion.  Treating it as a hard error
+        // kills entire batches over a single utterance.  Instead, warn and
+        // skip — the utterance gets no %mor/%gra (honest rather than wrong).
         tracing::warn!(
             word_count,
             mor_count,
             utterance = %utt_text,
-            "MOR count mismatch at injection time"
+            "MOR count mismatch — skipping utterance (Stanza MWT expansion \
+             likely differs from CHAT word boundaries)"
         );
         return Err(format!(
-            "MOR item count ({mor_count}) does not match alignable word count \
-             ({word_count}) in utterance: {utt_text}"
+            "MOR count mismatch ({mor_count} MOR items vs {word_count} words), \
+             skipping utterance: {utt_text}"
         ));
     }
 

@@ -187,9 +187,9 @@ export interface paths {
         /**
          * Retrieve all output files for a terminal job.
          * @description Blocks until the job has completed, failed, or been interrupted -- returns
-         *     409 for jobs that are still running or queued. In content mode the response
-         *     includes the full CHAT text of each output file; in paths mode only filenames
-         *     are returned (the files were written directly to disk by the runner).
+         *     409 for jobs that are still running or queued. The response includes the
+         *     full staged content of each successful output file. Paths-mode jobs keep
+         *     the execution-host write, but also preserve a staged copy for download.
          *     Cancelled jobs are intentionally excluded because they may have incomplete
          *     results.
          */
@@ -202,7 +202,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/jobs/{job_id}/results/{filename}": {
+    "/jobs/{job_id}/results/{*filename}": {
         parameters: {
             query?: never;
             header?: never;

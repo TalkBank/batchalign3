@@ -362,6 +362,23 @@ impl WorkerPool {
         }
     }
 
+    /// Maximum workers allowed per `(target, lang, engine_overrides)` key.
+    ///
+    /// Used by the morphosyntax batch dispatcher to decide how many chunks
+    /// to split a single-language batch into for concurrent inference.
+    pub fn max_workers_per_key(&self) -> usize {
+        self.config.max_workers_per_key
+    }
+
+    /// Resolved global worker cap (computed from RAM if not explicitly set).
+    ///
+    /// Used by the morphosyntax batch dispatcher to bound the number of
+    /// concurrent language groups, preventing deadlock when the number of
+    /// languages × workers_per_key exceeds the global cap.
+    pub fn effective_max_total_workers(&self) -> usize {
+        self.config.effective_max_total_workers()
+    }
+
     /// Discover pre-started TCP workers from the registry file.
     ///
     /// Reads `workers.json`, health-checks each entry, and integrates healthy
@@ -550,7 +567,17 @@ impl WorkerPool {
                             continue;
                         }
                         Ok(false) => {
-                            // At capacity -- fall through to async wait.
+                            // At capacity.  If this group has ZERO workers,
+                            // waiting would be infinite — no worker will ever
+                            // return a permit.  Fail immediately instead.
+                            if group.total.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                                return Err(WorkerError::SpawnFailed(format!(
+                                    "global worker cap reached and no workers exist for \
+                                     {target:?}/{lang} — cannot wait (would deadlock)"
+                                )));
+                            }
+                            // Otherwise, existing workers will eventually
+                            // return permits — fall through to async wait.
                         }
                         Err(e) => return Err(e),
                     }

@@ -57,6 +57,7 @@ async fn jobs_list_empty_server() {
     let args = JobsArgs {
         job_id: None,
         server: Some(base_url),
+        json: false,
     };
     jobs_cmd::run(&args)
         .await
@@ -84,6 +85,7 @@ async fn jobs_list_after_submit() {
     let args = JobsArgs {
         job_id: None,
         server: Some(base_url),
+        json: false,
     };
     jobs_cmd::run(&args)
         .await
@@ -114,6 +116,7 @@ async fn jobs_inspect_single() {
     let args = JobsArgs {
         job_id: Some(job_id.to_string()),
         server: Some(base_url),
+        json: false,
     };
     jobs_cmd::run(&args)
         .await
@@ -163,7 +166,7 @@ async fn client_submit_poll_fetch() {
     assert_eq!(final_info.status, batchalign_app::api::JobStatus::Completed);
 
     let result = client
-        .get_file_result(&base_url, &info.job_id, "e2e.cha")
+        .get_file_result(&base_url, &info.job_id, &"e2e.cha".into())
         .await
         .expect("get_file_result should succeed");
     assert!(result.error.is_none());

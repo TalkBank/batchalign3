@@ -11,6 +11,7 @@ mod cache;
 mod inject;
 mod payloads;
 pub mod preprocess;
+pub mod stanza_languages;
 pub mod stanza_raw;
 #[cfg(test)]
 mod tests;

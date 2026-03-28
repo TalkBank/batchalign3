@@ -386,6 +386,52 @@ async fn get_single_result() {
     assert!(!result.content.is_empty());
 }
 
+/// Filenames with slashes (e.g. `corpus/subdir/file.cha`) must be retrievable
+/// via `GET /jobs/{id}/results/{*filename}`.  Before the `{*filename}` wildcard
+/// fix, axum interpreted the slashes as additional path segments and returned
+/// 404.
+#[tokio::test]
+async fn get_single_result_with_slashes_in_filename() {
+    let python = require_python!();
+    let (base_url, _tmp, _state, _permit) = start_test_server(&python).await;
+
+    let client = reqwest::Client::new();
+
+    let filename = "corpus/subdir/deep/file.cha";
+    let submission = test_submission(vec![FilePayload {
+        filename: filename.into(),
+        content: "@UTF8\n@Begin\n*CHI:\thello .\n@End\n".into(),
+    }]);
+
+    let resp = client
+        .post(format!("{base_url}/jobs"))
+        .json(&submission)
+        .send()
+        .await
+        .expect("POST /jobs");
+    let info: JobInfo = resp.json().await.expect("parse");
+    let job_id = info.job_id;
+
+    poll_job_done(&client, &base_url, &job_id).await;
+
+    // Fetch using the slashed filename — this was returning 404 before the fix.
+    let resp = client
+        .get(format!("{base_url}/jobs/{job_id}/results/{filename}"))
+        .send()
+        .await
+        .expect("GET result with slashes");
+    assert_eq!(
+        resp.status(),
+        200,
+        "slashed filename should be retrievable via wildcard path"
+    );
+
+    let result: FileResult = resp.json().await.expect("parse file result");
+    assert_eq!(&*result.filename, filename);
+    assert!(result.error.is_none());
+    assert!(!result.content.is_empty());
+}
+
 #[tokio::test]
 async fn list_jobs() {
     let python = require_python!();

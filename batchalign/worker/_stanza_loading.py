@@ -54,6 +54,7 @@ def iso3_to_alpha2(iso3: LanguageCode) -> LanguageCode2:
         "mlt": "mt", "est": "et", "lav": "lv", "lit": "lt",
         "isl": "is", "yue": "zh",
         "cmn": "zh",
+        "rus": "ru", "afr": "af", "lat": "la", "ltz": "lb",
     }
     if iso3 in mapping:
         return mapping[iso3]
@@ -82,6 +83,12 @@ def load_stanza_models(lang: LanguageCode) -> None:
     )
 
     alpha2 = iso3_to_alpha2(lang)
+
+    # Unsupported language filtering is handled on the Rust side
+    # (stanza_languages.rs) before any worker is spawned.  The Python
+    # worker trusts that it will only be asked to load languages that
+    # Stanza supports.
+
     has_mwt = alpha2 in MWT_LANGS
     processors = "tokenize,pos,lemma,depparse"
     if has_mwt:

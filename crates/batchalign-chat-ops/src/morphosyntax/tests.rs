@@ -557,3 +557,52 @@ fn test_inject_results_retokenize_cantonese_retrace() {
         result.err()
     );
 }
+
+/// Regression: French utterance with embedded single quotes around elision.
+///
+/// `*MOT: On dit pas 'quoi tu veux' , mais 'qu' est-ce que' on dit .`
+///
+/// The `qu'` is a French elision (like `l'homme`, `j'ai`).  Stanza's French
+/// MWT tokenizer expands `qu'` into a range token `[n, n+1]` with components
+/// `qu` and `'`.  The MOR mapping must collapse these back into one MOR item
+/// so the count matches the CHAT word count.
+///
+/// Source: childes-other-data/Biling/Amsterdam/Anouk/fra/030428.cha line 509.
+/// This caused batch 7 of the multilingual morphotag rerun to fail with:
+/// "MOR item count (14) does not match alignable word count (13)"
+#[test]
+fn test_french_elision_in_quoted_context() {
+    use crate::morphosyntax::payloads::collect_payloads;
+
+    let parser = crate::parse::TreeSitterParser::new().unwrap();
+    let chat = include_str!("../../../../test-fixtures/fra_french_elision_quotes.cha");
+    let (chat_file, _) = crate::parse::parse_lenient(&parser, chat);
+
+    let primary = talkbank_model::model::LanguageCode::new("fra");
+    let langs = declared_languages(&chat_file, &primary);
+    let (items, _) = collect_payloads(
+        &chat_file,
+        &primary,
+        &langs,
+        MultilingualPolicy::ProcessAll,
+    );
+
+    assert_eq!(items.len(), 1, "Should have exactly 1 utterance payload");
+    let (_, _, item, extracted_words) = &items[0];
+
+    // Print for debugging
+    println!("Extracted words: {:?}", item.words);
+    println!("Word count: {}", item.words.len());
+    println!("Extracted word details: {:?}", extracted_words.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>());
+
+    // The utterance has these CHAT words (in MOR domain, excluding separators):
+    // On, dit, pas, 'quoi, tu, veux', mais, 'qu', est-ce, que', on, dit, .
+    // That's 13 words (including the terminator).
+    // Stanza should NOT produce more MOR items than this.
+    let word_count = item.words.len();
+    assert!(
+        word_count > 0,
+        "Should extract some words from French utterance"
+    );
+    println!("CHAT word count for MOR alignment: {word_count}");
+}

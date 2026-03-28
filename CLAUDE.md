@@ -271,6 +271,22 @@ uv run maturin build --release -i python3.12
 
 **Every bug report or discovered bug MUST start with a failing test.** Do not investigate or fix a bug without first writing a test that reproduces it. The test proves the bug exists, prevents regressions, and documents the expected behavior. Fixing before testing leads to incomplete fixes and missed edge cases.
 
+**Always fix root causes, never symptoms.** When a bug is found, trace it to
+its architectural origin and fix it there. Do not add workarounds, "pragmatic"
+patches, or band-aids that mask the real problem. If a worker crashes on an
+unsupported language, the fix is preflight validation that rejects the language
+before dispatch — not a retry loop or a silent fallback. If a pool deadlocks,
+the fix is preventing the deadlock condition — not restarting the server between
+batches. "Pragmatic" is banned as a justification for incomplete fixes.
+
+**When you discover a wrong architecture, fix it — do not perpetuate it.** If
+a bug reveals that an architectural assumption is incorrect (e.g., unbounded
+concurrency against a bounded pool), note the architectural flaw explicitly in
+comments and docs, then fix the architecture. Do not add detection or
+workarounds that leave the wrong architecture in place. A detection that
+prevents a hang is not a fix — it is evidence that the architecture needs
+changing.
+
 **No mocks.** `unittest.mock` is banned — zero imports allowed anywhere in the test suite. Test doubles that are alternate implementations of a protocol are allowed. Shared doubles live in `batchalign/tests/doubles.py`.
 
 **Prefer real ML inference over synthetic doubles.** Tests should call actual ML libraries and models, not fabricate synthetic output. Models are downloaded and cached automatically on first run (Stanza, PyCantonese, etc.). Synthetic test doubles hide bugs where the real library behaves differently from expectations. Use the `@pytest.mark.golden` marker for tests that load heavy ML models (Stanza, Whisper). Use synthetic doubles only when real inference is truly impossible (cloud API credentials, proprietary engines). When a feature is motivated by external claims (e.g., "ASR engine X produces per-character output"), write tests that verify the claim against real library behavior before building on it.
@@ -542,6 +558,27 @@ Matches Rust `batchalign-types::worker::InferTask`:
 - Heavy imports (stanza, torch) MUST stay lazy — CLI startup is already ~3s
 - `BTreeMap` for deterministic JSON in Rust tests/snapshots (not `HashMap`)
 - All Pydantic models at Python/Rust boundary — no ad-hoc dicts
+
+## Utterance Cache
+
+The NLP utterance cache stores morphosyntax/utseg/translate results keyed by
+BLAKE3 hashes of (words + language + engine version). Two tiers: moka in-memory
+hot cache + SQLite cold cache on disk.
+
+| OS | Cache path |
+|----|-----------|
+| macOS | `~/Library/Caches/batchalign3/cache.db` |
+| Linux | `~/.cache/batchalign3/cache.db` |
+| Windows | `%LocalAppData%\batchalign3\cache.db` |
+
+**Wipe the cache** when Stanza models are upgraded, when a bug produced wrong
+cached results, or when the cache key format changes:
+```bash
+rm -f ~/Library/Caches/batchalign3/cache.db*    # macOS
+rm -f ~/.cache/batchalign3/cache.db*             # Linux
+```
+
+Implementation: `crates/batchalign-app/src/cache/` (mod.rs, sqlite.rs).
 
 ## Gotchas
 

@@ -5,7 +5,8 @@
 use std::time::Duration;
 
 use batchalign_app::api::{
-    FileResult, HealthResponse, JobId, JobInfo, JobListItem, JobResultResponse, JobSubmission,
+    DisplayPath, FileResult, HealthResponse, JobId, JobInfo, JobListItem, JobResultResponse,
+    JobSubmission,
 };
 use reqwest::Client;
 use tracing::debug;
@@ -80,7 +81,7 @@ impl BatchalignClient {
     }
 
     /// `GET /jobs/{id}` — get job status.
-    pub async fn get_job(&self, url: &str, job_id: &str) -> Result<JobInfo, CliError> {
+    pub async fn get_job(&self, url: &str, job_id: &JobId) -> Result<JobInfo, CliError> {
         let resp = self
             .http
             .get(format!("{url}/jobs/{job_id}"))
@@ -90,7 +91,7 @@ impl BatchalignClient {
 
         if resp.status().as_u16() == 404 {
             return Err(CliError::JobLost {
-                job_id: JobId::from(job_id),
+                job_id: job_id.clone(),
             });
         }
         if !resp.status().is_success() {
@@ -103,12 +104,17 @@ impl BatchalignClient {
         Ok(info)
     }
 
-    /// `GET /jobs/{id}/results/{filename}` — fetch a single file result.
+    /// `GET /jobs/{id}/results/{*filename}` — fetch a single file result.
+    ///
+    /// The filename is embedded directly in the URL path (slashes included).
+    /// The server route uses axum's `{*filename}` wildcard to capture the full
+    /// remaining path, so slashes in `DisplayPath` values (e.g.
+    /// `corpus/subdir/file.cha`) are safe.
     pub async fn get_file_result(
         &self,
         url: &str,
-        job_id: &str,
-        filename: &str,
+        job_id: &JobId,
+        filename: &DisplayPath,
     ) -> Result<FileResult, CliError> {
         let resp = self
             .request_with_retry(
@@ -125,7 +131,7 @@ impl BatchalignClient {
     pub async fn get_all_results(
         &self,
         url: &str,
-        job_id: &str,
+        job_id: &JobId,
     ) -> Result<JobResultResponse, CliError> {
         let resp = self
             .request_with_retry(
@@ -156,7 +162,7 @@ impl BatchalignClient {
     }
 
     /// `DELETE /jobs/{id}` — cancel a running job.
-    pub async fn cancel_job(&self, url: &str, job_id: &str) -> Result<(), CliError> {
+    pub async fn cancel_job(&self, url: &str, job_id: &JobId) -> Result<(), CliError> {
         let resp = self
             .http
             .delete(format!("{url}/jobs/{job_id}"))

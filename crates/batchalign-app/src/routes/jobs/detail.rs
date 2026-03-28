@@ -116,7 +116,7 @@ pub(crate) async fn get_results(
 /// to handle the common case where the output extension differs from the input.
 #[utoipa::path(
     get,
-    path = "/jobs/{job_id}/results/{filename}",
+    path = "/jobs/{job_id}/results/{*filename}",
     tag = "jobs",
     params(
         ("job_id" = String, Path, description = "Job identifier"),
