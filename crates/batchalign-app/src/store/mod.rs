@@ -213,11 +213,12 @@ pub struct JobDetail {
     /// Current lifecycle state -- the handler uses this to reject downloads for
     /// jobs that are still running.
     pub status: JobStatus,
-    /// Whether the job used filesystem paths instead of staged content.  When
-    /// `true`, results live at `output_paths` and no staging dir exists.
+    /// Whether the job used filesystem paths instead of staged content. When
+    /// `true`, the runner still writes execution-host outputs to `output_paths`,
+    /// but successful results are also mirrored into the staging dir for
+    /// download/writeback.
     pub paths_mode: bool,
-    /// Server-local directory containing staged result files.  Empty in paths
-    /// mode.
+    /// Server-local directory containing staged result files.
     pub staging_dir: PathBuf,
     /// Per-file result entries for files that have reached a terminal state.
     pub results: Vec<FileResultEntry>,

@@ -194,49 +194,120 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         }
     }
 
-    // 3. Single batch_infer across all files
+    // 3. Batch infer grouped by per-item language.
+    //
+    // Multilingual CHAT files (e.g., @Languages: fra, eng) produce batch
+    // items with different per-item languages. Each language group must be
+    // dispatched to a worker loaded with the correct Stanza model — sending
+    // French text to an English MWT pipeline produces corrupt Range tokens.
+    //
+    // BA2 parity: BA2 used stanza.MultilingualPipeline for this. BA3 groups
+    // by language and dispatches each group to a separate single-language
+    // worker, which achieves the same correctness without MultilingualPipeline.
     let all_ud_responses = if all_misses.is_empty() {
         Vec::new()
     } else {
         let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
-        match infer_batch(
-            services.pool,
-            &all_misses,
-            params.lang,
-            params.mwt,
-            retokenize,
-        )
-        .await
-        {
-            Ok(responses) => {
-                // Debug: dump UD responses
-                services
-                    .debug_dumper
-                    .dump_morphosyntax_ud_responses("batch", &responses);
-                responses
-            }
-            Err(e) => {
-                warn!(error = %e, "Batch infer failed for all files");
-                for (file_idx, file) in files.iter().enumerate() {
-                    if per_file_info
-                        .get(file_idx)
-                        .and_then(|f| f.as_ref())
-                        .is_some()
-                    {
-                        results.push(TextBatchFileResult::err(
-                            file.filename.clone(),
-                            format!("Batch infer failed: {e}"),
-                        ));
-                    } else {
-                        results.push(TextBatchFileResult::ok(
-                            file.filename.clone(),
-                            to_chat_string(&parsed_files[file_idx]),
-                        ));
+
+        // Group items by their per-item language, preserving original indices.
+        let mut by_lang: HashMap<
+            LanguageCode,
+            Vec<(usize, &BatchItemWithPosition)>,
+        > = HashMap::new();
+        for (global_idx, item) in all_misses.iter().enumerate() {
+            let item_lang = &item.2.lang;
+            by_lang
+                .entry(item_lang.clone())
+                .or_default()
+                .push((global_idx, item));
+        }
+
+        // Allocate result slots for all items.
+        let mut all_responses: Vec<Option<UdResponse>> = vec![None; all_misses.len()];
+        let mut batch_error: Option<ServerError> = None;
+
+        for (lang, lang_items) in &by_lang {
+            // LanguageCode3::try_new validates the 3-letter code; fall back to
+            // the batch-level primary language if the per-item code is invalid.
+            let lang3 = crate::api::LanguageCode3::try_new(lang.as_ref())
+                .unwrap_or_else(|_| params.lang.clone());
+            let items_slice: Vec<BatchItemWithPosition> =
+                lang_items.iter().map(|(_, item)| (*item).clone()).collect();
+
+            tracing::info!(
+                lang = %lang3,
+                items = items_slice.len(),
+                "Dispatching morphosyntax batch for language group"
+            );
+
+            match infer_batch(
+                services.pool,
+                &items_slice,
+                &lang3,
+                params.mwt,
+                retokenize,
+            )
+            .await
+            {
+                Ok(responses) => {
+                    // Place responses back in their original positions.
+                    for ((global_idx, _), ud) in lang_items.iter().zip(responses) {
+                        all_responses[*global_idx] = Some(ud);
                     }
                 }
-                return results;
+                Err(e) => {
+                    tracing::warn!(lang = %lang3, error = %e, "Batch infer failed for language group");
+                    // Dump the failed batch for post-mortem analysis.
+                    let dump_items: Vec<_> = items_slice.iter().map(|(li, uo, item, _)| {
+                        serde_json::json!({
+                            "line_idx": li,
+                            "utt_ordinal": uo,
+                            "words": &item.words,
+                            "lang": item.lang.as_ref(),
+                        })
+                    }).collect();
+                    services.debug_dumper.dump_morphosyntax_failed_batch(
+                        &format!("batch_failure_{lang3}"),
+                        &dump_items,
+                        &e,
+                    );
+                    batch_error = Some(e);
+                    break;
+                }
             }
         }
+
+        if let Some(e) = batch_error {
+            tracing::warn!(error = %e, "Batch infer failed");
+            for (file_idx, file) in files.iter().enumerate() {
+                if per_file_info
+                    .get(file_idx)
+                    .and_then(|f| f.as_ref())
+                    .is_some()
+                {
+                    results.push(TextBatchFileResult::err(
+                        file.filename.clone(),
+                        format!("Batch infer failed: {e}"),
+                    ));
+                } else {
+                    results.push(TextBatchFileResult::ok(
+                        file.filename.clone(),
+                        to_chat_string(&parsed_files[file_idx]),
+                    ));
+                }
+            }
+            return results;
+        }
+
+        // Debug: dump UD responses
+        let collected: Vec<UdResponse> = all_responses
+            .into_iter()
+            .map(|r| r.unwrap_or_else(|| UdResponse { sentences: Vec::new() }))
+            .collect();
+        services
+            .debug_dumper
+            .dump_morphosyntax_ud_responses("batch", &collected);
+        collected
     };
 
     // 4. Distribute responses back to files and inject

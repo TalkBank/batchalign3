@@ -167,6 +167,7 @@ pub mod bench_cmd;
 pub mod cache_cmd;
 pub mod client;
 pub mod daemon;
+pub mod doctor_cmd;
 pub mod discover;
 pub mod dispatch;
 pub mod error;
@@ -177,6 +178,7 @@ pub mod models_cmd;
 pub mod output;
 pub mod progress;
 pub mod python;
+pub mod replay_cmd;
 pub mod resolve;
 pub(crate) mod self_exe;
 pub mod serve_cmd;
@@ -309,6 +311,8 @@ pub async fn run_command(cli: args::Cli) -> Result<(), error::CliError> {
         }
         Commands::Cache(a) => cache_cmd::run(a).await,
         Commands::Worker(a) => worker_cmd::run(a, cli.global.verbose).await,
+        Commands::Doctor(a) => doctor_cmd::run(a).await,
+        Commands::Replay(a) => replay_cmd::run(a).await,
         Commands::Version => {
             eprintln!(
                 "batchalign3 {} (build {})",

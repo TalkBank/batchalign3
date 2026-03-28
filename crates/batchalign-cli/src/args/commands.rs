@@ -944,3 +944,51 @@ pub struct WorkerStopArgs {
     #[arg(long)]
     pub all: bool,
 }
+
+// ---------------------------------------------------------------------------
+// Doctor command
+// ---------------------------------------------------------------------------
+
+/// Pre-flight diagnostic arguments.
+#[derive(Args, Debug, Clone)]
+pub struct DoctorArgs {
+    /// Language to test (default: eng).
+    #[arg(long, default_value = "eng")]
+    pub lang: String,
+
+    /// Output format.
+    #[arg(long, default_value = "human")]
+    pub format: DoctorFormat,
+
+    /// Custom Python path (overrides BATCHALIGN_PYTHON).
+    #[arg(long)]
+    pub python: Option<String>,
+}
+
+/// Doctor output format.
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum DoctorFormat {
+    /// Human-readable summary.
+    Human,
+    /// JSON output for machine consumption.
+    Json,
+}
+
+// ---------------------------------------------------------------------------
+// Replay command
+// ---------------------------------------------------------------------------
+
+/// Replay a captured failed IPC request.
+#[derive(Args, Debug, Clone)]
+pub struct ReplayArgs {
+    /// Path to a failed_ipc_*.json dump file.
+    pub dump_file: std::path::PathBuf,
+
+    /// Language override (uses dump file's worker label if omitted).
+    #[arg(long)]
+    pub lang: Option<String>,
+
+    /// Custom Python path (overrides BATCHALIGN_PYTHON).
+    #[arg(long)]
+    pub python: Option<String>,
+}

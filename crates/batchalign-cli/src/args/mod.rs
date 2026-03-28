@@ -116,6 +116,20 @@ pub enum Commands {
     /// Manage persistent worker daemons (fleet deployment only).
     #[command(hide = true)]
     Worker(WorkerArgs),
+
+    /// Pre-flight diagnostic: validate the worker pipeline on this machine.
+    ///
+    /// Spawns a test worker, sends known inputs through the morphosyntax
+    /// pipeline, and validates the output structure. Catches machine-specific
+    /// issues (stale models, missing processors, MWT quirks) before they
+    /// become production failures.
+    Doctor(DoctorArgs),
+
+    /// Replay a captured failed IPC request against a fresh worker.
+    ///
+    /// Takes a dump file from ~/.batchalign3/debug/ and sends the exact
+    /// request to a new worker, reporting the response.
+    Replay(ReplayArgs),
 }
 
 /// Stable processing-command metadata derived from parsed CLI args.

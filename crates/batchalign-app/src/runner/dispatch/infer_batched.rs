@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::api::{LanguageCode3, ReleasedCommand};
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
-use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
+use crate::recipe_runner::runtime::{primary_output_artifact, write_text_output_artifact};
 use crate::runner::DispatchHostContext;
 use crate::scheduling::{FailureCategory, WorkUnitKind};
 use crate::text_batch::{TextBatchFileInput, TextBatchFileResult, TextBatchFileResults};
@@ -255,14 +255,15 @@ pub(crate) async fn dispatch_batched_infer(
 
                 // Write output
                 let primary_output = primary_output_artifact(command, &filename);
-                let write_path =
-                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
-                if let Some(parent) = write_path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-
-                if let Err(e) = tokio::fs::write(&write_path, &output_text).await {
+                if let Err(e) = write_text_output_artifact(
+                    &job.filesystem,
+                    file_index,
+                    &primary_output.display_path,
+                    &output_text,
+                )
+                .await
+                {
                     warn!(
                         job_id = %job_id,
                         correlation_id = %correlation_id,

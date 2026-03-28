@@ -45,9 +45,9 @@ pub(crate) async fn get_job(
 /// Retrieve all output files for a terminal job.
 ///
 /// Blocks until the job has completed, failed, or been interrupted -- returns
-/// 409 for jobs that are still running or queued. In content mode the response
-/// includes the full CHAT text of each output file; in paths mode only filenames
-/// are returned (the files were written directly to disk by the runner).
+/// 409 for jobs that are still running or queued. The response includes the
+/// full staged content of each successful output file. Paths-mode jobs keep
+/// the execution-host write, but also preserve a staged copy for download.
 /// Cancelled jobs are intentionally excluded because they may have incomplete
 /// results.
 #[utoipa::path(
@@ -85,30 +85,10 @@ pub(crate) async fn get_results(
         ))));
     }
 
-    if detail.paths_mode {
-        let files: Vec<FileResult> = detail
-            .results
-            .iter()
-            .map(|r| FileResult {
-                filename: r.filename.clone(),
-                content: String::new(),
-                content_type: r.content_type,
-                error: r.error.clone(),
-            })
-            .collect();
-        return Ok(Json(JobResultResponse {
-            job_id: job_id.clone(),
-            status: detail.status,
-            files,
-        }));
-    }
-
-    // Content mode — read from staging dir
-    let output_dir = detail.staging_dir.join("output");
     let mut files = Vec::new();
     for r in &detail.results {
         let content = if r.error.is_none() {
-            let path = output_dir.join(&*r.filename);
+            let path = result_content_path(&detail, &r.filename);
             read_result_content(&path).await?
         } else {
             String::new()
@@ -210,12 +190,7 @@ pub(crate) async fn get_single_result(
     let content_type = result_entry.content_type;
     let out_filename = result_entry.filename.clone();
 
-    let content = if !detail.paths_mode {
-        let path = detail.staging_dir.join("output").join(&*out_filename);
-        read_result_content(&path).await?
-    } else {
-        String::new()
-    };
+    let content = read_result_content(&result_content_path(&detail, &out_filename)).await?;
 
     Ok(Json(FileResult {
         filename: out_filename,
@@ -232,4 +207,62 @@ async fn read_result_content(path: &std::path::Path) -> Result<String, ServerErr
             format!("failed to read result file {}: {error}", path.display()),
         ))
     })
+}
+
+fn result_content_path(
+    detail: &crate::store::JobDetail,
+    out_filename: &DisplayPath,
+) -> std::path::PathBuf {
+    detail
+        .staging_dir
+        .join("output")
+        .join(out_filename.as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::api::{ContentType, DisplayPath, FileStatusEntry, FileStatusKind, JobStatus};
+    use crate::store::{FileResultEntry, JobDetail};
+
+    use super::result_content_path;
+
+    fn job_detail(paths_mode: bool) -> JobDetail {
+        JobDetail {
+            status: JobStatus::Completed,
+            paths_mode,
+            staging_dir: PathBuf::from("/tmp/jobs/job-1"),
+            results: vec![FileResultEntry {
+                filename: DisplayPath::from("nested/sample.cha"),
+                content_type: ContentType::Chat,
+                error: None,
+            }],
+            file_statuses: vec![FileStatusEntry {
+                filename: DisplayPath::from("nested/sample.cha"),
+                status: FileStatusKind::Done,
+                error: None,
+                error_category: None,
+                error_codes: None,
+                error_line: None,
+                bug_report_id: None,
+                started_at: None,
+                finished_at: None,
+                next_eligible_at: None,
+                progress_current: None,
+                progress_total: None,
+                progress_stage: None,
+                progress_label: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn result_content_path_uses_staging_output_for_paths_mode() {
+        let detail = job_detail(true);
+        assert_eq!(
+            result_content_path(&detail, &DisplayPath::from("nested/sample.cha")),
+            PathBuf::from("/tmp/jobs/job-1/output/nested/sample.cha")
+        );
+    }
 }

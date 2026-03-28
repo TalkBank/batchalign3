@@ -11,7 +11,7 @@ use crate::cache::UtteranceCache;
 use crate::options::{CommandOptions, EngineBackend as _};
 use crate::params::{AudioContext, FaParams};
 use crate::pipeline::PipelineServices;
-use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
+use crate::recipe_runner::runtime::{primary_output_artifact, write_text_output_artifact};
 use crate::runner::DispatchHostContext;
 use crate::runner::debug_dumper::DebugDumper;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
@@ -122,10 +122,7 @@ mod tests {
             "French/Newcastle/Discussion/12"
         );
         assert_eq!(
-            media_search_subdir(
-                "Discussion/12/d01oma12a.cha",
-                "French/Newcastle"
-            ),
+            media_search_subdir("Discussion/12/d01oma12a.cha", "French/Newcastle"),
             "French/Newcastle/Discussion/12"
         );
     }
@@ -138,12 +135,8 @@ mod tests {
         let target = nested.join("d01oma12a.mp3");
         std::fs::write(&target, b"mp3").unwrap();
 
-        let found = find_media_in_root(
-            dir.path(),
-            "French/Newcastle/Discussion/12",
-            "d01oma12a",
-        )
-        .await;
+        let found =
+            find_media_in_root(dir.path(), "French/Newcastle/Discussion/12", "d01oma12a").await;
 
         assert_eq!(found.as_deref(), Some(target.as_path()));
     }
@@ -604,14 +597,15 @@ async fn process_one_fa_file(
 
                 let primary_output =
                     primary_output_artifact(job.dispatch.command, &DisplayPath::from(filename));
-                let write_path =
-                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
 
-                if let Some(parent) = write_path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-
-                if let Err(e) = tokio::fs::write(&write_path, &output_text).await {
+                if let Err(e) = write_text_output_artifact(
+                    &job.filesystem,
+                    file_index,
+                    &primary_output.display_path,
+                    &output_text,
+                )
+                .await
+                {
                     warn!(
                         job_id = %job_id,
                         correlation_id = %correlation_id,

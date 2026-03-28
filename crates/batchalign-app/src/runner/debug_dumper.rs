@@ -312,6 +312,58 @@ impl DebugDumper {
         }
     }
 
+    /// Dump a failed morphosyntax batch for post-mortem analysis.
+    ///
+    /// Unlike other dump methods, this writes to the **always-on** debug
+    /// directory (`~/.batchalign3/debug/`) when `--debug-dir` is not set.
+    /// The rationale: batch failures are rare and the dump is small (just
+    /// word lists + error context), but the cost of NOT having the dump
+    /// (hours of ad-hoc probing) is high.
+    pub(crate) fn dump_morphosyntax_failed_batch(
+        &self,
+        label: &str,
+        items: &[impl serde::Serialize],
+        error: &impl std::fmt::Display,
+    ) {
+        let dir = if let Some(d) = self.ensure_dir() {
+            d.to_path_buf()
+        } else {
+            // Always-on fallback: write to ~/.batchalign3/debug/
+            let fallback = dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".batchalign3")
+                .join("debug");
+            if std::fs::create_dir_all(&fallback).is_err() {
+                return;
+            }
+            fallback
+        };
+
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let path = dir.join(format!("{label}_morphosyntax_{timestamp}.json"));
+
+        let dump = serde_json::json!({
+            "timestamp": timestamp.to_string(),
+            "error": error.to_string(),
+            "item_count": items.len(),
+            "items": items,
+        });
+
+        match serde_json::to_string_pretty(&dump) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    debug!(%e, "failed to write morphosyntax failure dump");
+                } else {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "Morphosyntax batch failure dump written for post-mortem analysis"
+                    );
+                }
+            }
+            Err(e) => debug!(%e, "failed to serialize morphosyntax failure dump"),
+        }
+    }
+
     /// Dump UD responses from Python worker (what comes back from Stanza).
     pub(crate) fn dump_morphosyntax_ud_responses(
         &self,

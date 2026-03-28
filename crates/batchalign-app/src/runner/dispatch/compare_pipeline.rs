@@ -7,6 +7,7 @@ use crate::params::CachePolicy;
 use crate::pipeline::PipelineServices;
 use crate::recipe_runner::runtime::{
     output_write_path, plan_work_units_for_job, primary_output_artifact, sidecar_output_artifacts,
+    write_text_output_artifact,
 };
 use crate::recipe_runner::work_unit::{CompareWorkUnit, PlannedWorkUnit};
 use crate::runner::DispatchHostContext;
@@ -152,13 +153,14 @@ pub(in crate::runner) async fn dispatch_compare(
                         .find(|artifact| artifact.display_path.as_ref().ends_with(".compare.csv"))
                         .expect("compare command must emit a compare.csv sidecar");
 
-                let write_path =
-                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
-
-                if let Some(parent) = write_path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-                if let Err(e) = tokio::fs::write(&write_path, &chat_output).await {
+                if let Err(e) = write_text_output_artifact(
+                    &job.filesystem,
+                    file_index,
+                    &primary_output.display_path,
+                    &chat_output,
+                )
+                .await
+                {
                     warn!(error = %e, "Failed to write compare output");
                 }
 

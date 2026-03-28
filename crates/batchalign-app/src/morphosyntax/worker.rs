@@ -77,8 +77,28 @@ pub(crate) async fn infer_batch(
 
         if let Some(raw_sentences) = &item_result.raw_sentences {
             let ud = stanza_raw::parse_raw_stanza_output(raw_sentences).map_err(|error| {
+                // Include the words sent, structured diagnostics, and raw
+                // Stanza output so the failure is diagnosable without replay.
+                let words_sent = &payload_items[i].words;
+                let diagnostics = stanza_raw::diagnose_parse_failure(raw_sentences);
+                let diag_str = if diagnostics.is_empty() {
+                    "no structural issues detected by diagnostics".to_string()
+                } else {
+                    diagnostics.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; ")
+                };
+                let raw_json = serde_json::to_string(raw_sentences)
+                    .unwrap_or_else(|_| "<serialization failed>".into());
+                warn!(
+                    item = i,
+                    words = ?words_sent,
+                    diagnostics = %diag_str,
+                    raw_stanza_output = %raw_json,
+                    %error,
+                    "Stanza output parse failure — full diagnostics logged"
+                );
                 ServerError::Validation(format!(
-                    "Failed to parse raw Stanza output for item {i}: {error}"
+                    "Failed to parse raw Stanza output for item {i} \
+                     (words: {words_sent:?}): {error}. Diagnostics: {diag_str}"
                 ))
             })?;
             ud_responses.push(ud);

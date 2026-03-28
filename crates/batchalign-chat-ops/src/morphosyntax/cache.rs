@@ -32,7 +32,8 @@ pub type MwtDict = BTreeMap<String, Vec<String>>;
 /// |---------|------------|--------|
 /// | 1       | pre-2026   | Original Stanza-only pipeline |
 /// | 2       | 2026-03-23 | Added PyCantonese POS override for Cantonese (yue) |
-const MORPHOSYNTAX_PIPELINE_VERSION: u32 = 2;
+/// | 3       | 2026-03-27 | Per-language dispatch for multilingual files |
+const MORPHOSYNTAX_PIPELINE_VERSION: u32 = 3;
 
 /// Compute the cache key for a morphosyntax payload.
 ///

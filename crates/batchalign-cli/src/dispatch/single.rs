@@ -14,6 +14,49 @@ use crate::error::CliError;
 use crate::progress::BatchProgress;
 use crate::tui::TuiProgress;
 
+/// Check if a server URL points to the local machine.
+///
+/// Returns `true` for localhost and 127.0.0.1 (the auto-daemon addresses).
+/// Used to decide between paths mode (shared filesystem, for local daemons)
+/// and content mode (HTTP upload, for explicit remote `--server`).
+fn is_local_server(url: &str) -> bool {
+    let after_scheme = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+
+    // Handle IPv6 bracket notation: [::1]:8001
+    let host = if after_scheme.starts_with('[') {
+        after_scheme
+            .find(']')
+            .map(|i| &after_scheme[..=i])
+            .unwrap_or(after_scheme)
+    } else {
+        after_scheme.split(':').next().unwrap_or("")
+    };
+
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_local_server;
+
+    #[test]
+    fn localhost_is_local() {
+        assert!(is_local_server("http://localhost:8001"));
+        assert!(is_local_server("http://127.0.0.1:8001"));
+        assert!(is_local_server("http://[::1]:8001"));
+    }
+
+    #[test]
+    fn remote_hosts_are_not_local() {
+        assert!(!is_local_server("http://net:8001"));
+        assert!(!is_local_server("http://bilbo:8001"));
+        assert!(!is_local_server("http://192.168.1.100:8001"));
+        assert!(!is_local_server("http://talkbank.org:8001"));
+    }
+}
+
 use super::helpers::{
     classify_files, filter_files_for_command, inject_lexicon, maybe_open_dashboard,
     poll_and_write_incrementally,
@@ -58,9 +101,15 @@ pub(super) async fn dispatch_single_server(
         return Ok(());
     }
 
-    let (submission, effective_out, result_map, paths_mode) = if released_command_uses_local_audio(
-        command,
-    ) {
+    // Paths mode is only valid when client and server share a filesystem.
+    // For explicit remote --server URLs, always use content mode — the CHAT
+    // file content is sent over HTTP, and the server resolves media via its
+    // own media_mappings. Paths mode is for local daemons only.
+    let server_is_local = is_local_server(server_url);
+    let use_paths_mode =
+        released_command_uses_local_audio(command) && server_is_local;
+
+    let (submission, effective_out, result_map, paths_mode) = if use_paths_mode {
         let Some(prepared) = prepare_paths_submission(
             command,
             lang,
@@ -81,7 +130,7 @@ pub(super) async fn dispatch_single_server(
         eprintln!("Found {} file(s) to submit.\n", prepared.total_files);
         eprintln!("Submitting shared-filesystem job to {server_url}...");
         eprintln!(
-            "note: the server must be able to read these input paths and write the requested output paths.\n"
+            "note: the server must be able to read these input paths. Successful outputs will also be copied back to this machine.\n"
         );
 
         (
@@ -197,7 +246,6 @@ pub(super) async fn dispatch_single_server(
                 total_files as u64,
                 &result_map,
                 &effective_out,
-                paths_mode,
                 command.as_wire_name(),
                 &tui_progress,
             );
@@ -224,7 +272,6 @@ pub(super) async fn dispatch_single_server(
                 total_files as u64,
                 &result_map,
                 &effective_out,
-                paths_mode,
                 command.as_wire_name(),
                 &progress,
             )

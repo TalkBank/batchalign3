@@ -192,7 +192,9 @@ mod tests {
     #[test]
     fn detect_media_mapping_keeps_local_subdir() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("slabank-data/French/Newcastle/Discussion/12");
+        let dir = root
+            .path()
+            .join("slabank-data/French/Newcastle/Discussion/12");
         std::fs::create_dir_all(&dir).unwrap();
 
         let (key, subdir) = detect_media_mapping(&dir, &["slabank-data".to_string()]).unwrap();
@@ -203,7 +205,9 @@ mod tests {
     #[test]
     fn paths_submission_carries_detected_media_mapping() {
         let root = tempfile::tempdir().unwrap();
-        let input_dir = root.path().join("slabank-data/French/Newcastle/Discussion/12");
+        let input_dir = root
+            .path()
+            .join("slabank-data/French/Newcastle/Discussion/12");
         let output_dir = root.path().join("out");
         std::fs::create_dir_all(&input_dir).unwrap();
         std::fs::create_dir_all(&output_dir).unwrap();

@@ -110,7 +110,6 @@ pub(super) async fn poll_and_write_incrementally(
     total_files: u64,
     result_map: &HashMap<String, PathBuf>,
     out_dir: &Path,
-    paths_mode: bool,
     _command: &str,
     progress: &dyn ProgressSink,
 ) -> Result<(), CliError> {
@@ -136,46 +135,41 @@ pub(super) async fn poll_and_write_incrementally(
                     }
 
                     if entry.status == FileStatusKind::Done {
-                        if paths_mode {
-                            written_count += 1;
-                            progress.log_done(fn_);
-                        } else {
-                            match client.get_file_result(server_url, job_id, fn_).await {
-                                Ok(result) => {
-                                    match output::write_result(&result, result_map, out_dir) {
-                                        Ok(true) => {
-                                            written_count += 1;
-                                            progress.log_done(fn_);
-                                        }
-                                        Ok(false) => {
-                                            let error_msg = result.error.unwrap_or_default();
-                                            progress.log_error(fn_, &error_msg);
-                                            error_details.push(FileErrorDetail::new(
-                                                fn_.clone(),
-                                                error_msg,
-                                                entry.bug_report_id.clone(),
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            let error_msg = format!("{e}");
-                                            progress.log_error(fn_, &error_msg);
-                                            error_details.push(FileErrorDetail::new(
-                                                fn_.clone(),
-                                                error_msg,
-                                                entry.bug_report_id.clone(),
-                                            ));
-                                        }
+                        match client.get_file_result(server_url, job_id, fn_).await {
+                            Ok(result) => {
+                                match output::write_result(&result, result_map, out_dir) {
+                                    Ok(true) => {
+                                        written_count += 1;
+                                        progress.log_done(fn_);
+                                    }
+                                    Ok(false) => {
+                                        let error_msg = result.error.unwrap_or_default();
+                                        progress.log_error(fn_, &error_msg);
+                                        error_details.push(FileErrorDetail::new(
+                                            fn_.clone(),
+                                            error_msg,
+                                            entry.bug_report_id.clone(),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        let error_msg = format!("{e}");
+                                        progress.log_error(fn_, &error_msg);
+                                        error_details.push(FileErrorDetail::new(
+                                            fn_.clone(),
+                                            error_msg,
+                                            entry.bug_report_id.clone(),
+                                        ));
                                     }
                                 }
-                                Err(e) => {
-                                    let error_msg = format!("{e}");
-                                    progress.log_error(fn_, &error_msg);
-                                    error_details.push(FileErrorDetail::new(
-                                        fn_.clone(),
-                                        error_msg,
-                                        entry.bug_report_id.clone(),
-                                    ));
-                                }
+                            }
+                            Err(e) => {
+                                let error_msg = format!("{e}");
+                                progress.log_error(fn_, &error_msg);
+                                error_details.push(FileErrorDetail::new(
+                                    fn_.clone(),
+                                    error_msg,
+                                    entry.bug_report_id.clone(),
+                                ));
                             }
                         }
                         written_files.insert(fn_.to_string());

@@ -69,10 +69,10 @@ fn normalize_word_dict(mut value: serde_json::Value) -> serde_json::Value {
             obj.insert("id".to_string(), serde_json::json!(n));
         }
 
-        // Default lemma to text if empty/missing
-        let lemma_empty = obj
-            .get("lemma")
-            .is_none_or(|v| v.as_str().is_some_and(|s| s.is_empty()));
+        // Default lemma to text if empty, missing, or null.
+        // Stanza can emit any of: no key, "", or null when the lemmatizer
+        // fails silently for a token.
+        let lemma_empty = obj.get("lemma").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.is_empty()));
         let is_range = obj
             .get("id")
             .is_some_and(|v| v.as_array().is_some_and(|a| a.len() > 1));
@@ -82,6 +82,14 @@ fn normalize_word_dict(mut value: serde_json::Value) -> serde_json::Value {
             && let Some(text) = obj.get("text").and_then(|v| v.as_str())
         {
             obj.insert("lemma".to_string(), serde_json::json!(text));
+        }
+
+        // Normalize null string fields to sensible defaults.
+        // Stanza can emit null for any field when a processor fails silently.
+        for (field, default) in [("upos", "X"), ("deprel", "dep"), ("feats", "")] {
+            if obj.get(field).is_some_and(|v| v.is_null()) {
+                obj.insert(field.to_string(), serde_json::json!(default));
+            }
         }
     }
     value
@@ -137,6 +145,159 @@ pub fn is_bogus_lemma(text: &str, lemma: &str) -> bool {
         .all(|c| !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control());
 
     text_has_letters && lemma_all_punct
+}
+
+/// Diagnostic for a single problematic word in Stanza output.
+#[derive(Debug, Clone)]
+pub struct StanzaWordDiagnostic {
+    /// Sentence index in the raw output.
+    pub sentence_idx: usize,
+    /// Word index within the sentence.
+    pub word_idx: usize,
+    /// The field that has a problem.
+    pub field: String,
+    /// Human-readable description of the issue.
+    pub issue: String,
+}
+
+impl std::fmt::Display for StanzaWordDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "sentence {} word {}: field '{}' — {}",
+            self.sentence_idx, self.word_idx, self.field, self.issue
+        )
+    }
+}
+
+/// Diagnose problems in raw Stanza output without attempting full deserialization.
+///
+/// Scans each word dict for known issues: missing required fields, null values,
+/// `<pad>` sentinels, type mismatches. Returns a list of diagnostics — one per
+/// problem found. An empty list means the output looks structurally valid.
+///
+/// This is called from the error path in `morphosyntax/worker.rs` to provide
+/// actionable diagnostics instead of opaque serde errors.
+pub fn diagnose_parse_failure(raw_sentences: &[serde_json::Value]) -> Vec<StanzaWordDiagnostic> {
+    let required_string_fields = ["text", "lemma", "upos", "deprel"];
+    let mut diagnostics = Vec::new();
+
+    for (si, sent_value) in raw_sentences.iter().enumerate() {
+        let Some(words) = sent_value.as_array() else {
+            diagnostics.push(StanzaWordDiagnostic {
+                sentence_idx: si,
+                word_idx: 0,
+                field: "sentence".into(),
+                issue: "not a JSON array".into(),
+            });
+            continue;
+        };
+
+        for (wi, word) in words.iter().enumerate() {
+            let Some(obj) = word.as_object() else {
+                diagnostics.push(StanzaWordDiagnostic {
+                    sentence_idx: si,
+                    word_idx: wi,
+                    field: "word".into(),
+                    issue: "not a JSON object".into(),
+                });
+                continue;
+            };
+
+            let id_val = obj.get("id");
+            let is_range = id_val
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| a.len() > 1);
+
+            // Check required string fields
+            for field in &required_string_fields {
+                // Range (MWT) tokens are expected to have empty lemma
+                if *field == "lemma" && is_range {
+                    continue;
+                }
+
+                match obj.get(*field) {
+                    None => {
+                        let keys: Vec<&String> = obj.keys().collect();
+                        diagnostics.push(StanzaWordDiagnostic {
+                            sentence_idx: si,
+                            word_idx: wi,
+                            field: (*field).into(),
+                            issue: format!(
+                                "field absent (keys present: {keys:?}). \
+                                 Stanza's processor likely failed silently for this token."
+                            ),
+                        });
+                    }
+                    Some(v) if v.is_null() => {
+                        let text = obj.get("text").and_then(|t| t.as_str()).unwrap_or("?");
+                        diagnostics.push(StanzaWordDiagnostic {
+                            sentence_idx: si,
+                            word_idx: wi,
+                            field: (*field).into(),
+                            issue: format!(
+                                "value is null for word '{text}'. \
+                                 Stanza's processor likely failed silently."
+                            ),
+                        });
+                    }
+                    Some(v) if !v.is_string() => {
+                        diagnostics.push(StanzaWordDiagnostic {
+                            sentence_idx: si,
+                            word_idx: wi,
+                            field: (*field).into(),
+                            issue: format!(
+                                "expected string, got {}",
+                                match v {
+                                    serde_json::Value::Number(_) => "number",
+                                    serde_json::Value::Bool(_) => "bool",
+                                    serde_json::Value::Array(_) => "array",
+                                    serde_json::Value::Object(_) => "object",
+                                    _ => "unknown",
+                                }
+                            ),
+                        });
+                    }
+                    _ => {} // Field present, not null, is string — OK
+                }
+            }
+
+            // Check for <pad> sentinels
+            if let Some(deprel) = obj.get("deprel").and_then(|v| v.as_str()) {
+                if deprel.starts_with('<') && deprel.ends_with('>') {
+                    diagnostics.push(StanzaWordDiagnostic {
+                        sentence_idx: si,
+                        word_idx: wi,
+                        field: "deprel".into(),
+                        issue: format!("pad sentinel value '{deprel}'"),
+                    });
+                }
+            }
+
+            // Check id field
+            match id_val {
+                None => {
+                    diagnostics.push(StanzaWordDiagnostic {
+                        sentence_idx: si,
+                        word_idx: wi,
+                        field: "id".into(),
+                        issue: "field absent".into(),
+                    });
+                }
+                Some(v) if !(v.is_number() || v.is_array()) => {
+                    diagnostics.push(StanzaWordDiagnostic {
+                        sentence_idx: si,
+                        word_idx: wi,
+                        field: "id".into(),
+                        issue: format!("expected number or array, got {v}"),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    diagnostics
 }
 
 /// Errors from parsing raw Stanza output.
@@ -303,6 +464,51 @@ mod tests {
         assert_eq!(resp.sentences[0].words[0].lemma, "hello");
     }
 
+    /// Regression: Stanza can emit `"lemma": null` (JSON null) instead of
+    /// omitting the field entirely. The normalization must treat null the
+    /// same as absent and default to the surface form.
+    ///
+    /// This was the root cause of the bilbo morphotag failure (2026-03-27):
+    /// `Failed to parse raw Stanza output for item 4: sentence 0 word 3:
+    /// missing field 'lemma'`.
+    #[test]
+    fn test_parse_raw_stanza_null_lemma_defaults_to_text() {
+        let raw = vec![json!([
+            {
+                "id": 1,
+                "text": "au",
+                "lemma": null,
+                "upos": "ADP",
+                "head": 0,
+                "deprel": "root"
+            }
+        ])];
+
+        let resp = parse_raw_stanza_output(&raw).unwrap();
+        // null lemma should default to surface form, not fail
+        assert_eq!(resp.sentences[0].words[0].lemma, "au");
+    }
+
+    /// Regression: Stanza can also emit `"upos": null` in rare cases.
+    /// The normalization must handle null for all string fields.
+    #[test]
+    fn test_parse_raw_stanza_null_upos_does_not_crash() {
+        let raw = vec![json!([
+            {
+                "id": 1,
+                "text": "xyz",
+                "lemma": "xyz",
+                "upos": null,
+                "head": 0,
+                "deprel": "root"
+            }
+        ])];
+
+        // Should not crash — null upos should default to something parseable
+        let result = parse_raw_stanza_output(&raw);
+        assert!(result.is_ok(), "null upos should not crash: {result:?}");
+    }
+
     #[test]
     fn test_parse_raw_stanza_not_array() {
         let raw = vec![json!("not an array")];
@@ -347,6 +553,92 @@ mod tests {
             gras.len(),
             7,
             "GRA should have 6 word relations + 1 terminator PUNCT"
+        );
+    }
+
+    // --- diagnose_parse_failure tests ---
+
+    #[test]
+    fn test_diagnose_detects_missing_lemma() {
+        let raw = vec![json!([
+            {
+                "id": 1,
+                "text": "au",
+                "upos": "ADP",
+                "head": 0,
+                "deprel": "root"
+            }
+        ])];
+        let diags = diagnose_parse_failure(&raw);
+        assert!(!diags.is_empty(), "Should detect missing lemma");
+        assert!(diags.iter().any(|d| d.field == "lemma" && d.issue.contains("absent")));
+    }
+
+    #[test]
+    fn test_diagnose_detects_null_lemma() {
+        let raw = vec![json!([
+            {
+                "id": 1,
+                "text": "au",
+                "lemma": null,
+                "upos": "ADP",
+                "head": 0,
+                "deprel": "root"
+            }
+        ])];
+        let diags = diagnose_parse_failure(&raw);
+        assert!(!diags.is_empty(), "Should detect null lemma");
+        assert!(diags.iter().any(|d| d.field == "lemma" && d.issue.contains("null")));
+    }
+
+    #[test]
+    fn test_diagnose_detects_pad_deprel() {
+        let raw = vec![json!([
+            {
+                "id": 1,
+                "text": "hello",
+                "lemma": "hello",
+                "upos": "INTJ",
+                "head": 0,
+                "deprel": "<pad>"
+            }
+        ])];
+        let diags = diagnose_parse_failure(&raw);
+        assert!(diags.iter().any(|d| d.field == "deprel" && d.issue.contains("pad")));
+    }
+
+    #[test]
+    fn test_diagnose_clean_output_produces_no_diagnostics() {
+        let raw = vec![json!([
+            {
+                "id": 1,
+                "text": "hello",
+                "lemma": "hello",
+                "upos": "INTJ",
+                "head": 0,
+                "deprel": "root"
+            }
+        ])];
+        let diags = diagnose_parse_failure(&raw);
+        assert!(diags.is_empty(), "Clean output should produce no diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn test_diagnose_skips_lemma_for_range_tokens() {
+        let raw = vec![json!([
+            {
+                "id": [1, 2],
+                "text": "du",
+                "upos": "X",
+                "head": 0,
+                "deprel": "root"
+            }
+        ])];
+        let diags = diagnose_parse_failure(&raw);
+        // Range tokens should NOT be flagged for missing lemma
+        assert!(
+            !diags.iter().any(|d| d.field == "lemma"),
+            "Range token should not be flagged for missing lemma: {diags:?}"
         );
     }
 }

@@ -87,6 +87,11 @@ pub(crate) async fn materialize_submission_job(
             .collect();
 
         ensure_dir(&staging_dir, "creating paths-mode staging dir").await?;
+        ensure_dir(
+            &staging_dir.join("output"),
+            "creating paths-mode staged output dir",
+        )
+        .await?;
 
         (
             filenames,

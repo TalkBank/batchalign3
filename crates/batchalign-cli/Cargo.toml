@@ -47,6 +47,7 @@ libc = { workspace = true }
 zip = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+sysinfo = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

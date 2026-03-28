@@ -144,6 +144,7 @@
 - [IPC Type Sync (Rust→Python)](developer/ipc-type-sync.md)
 - [IPC Union Migration Plan](developer/ipc-union-migration.md)
 - [Tracing and Debugging](developer/tracing-and-debugging.md)
+- [Debugging Infrastructure](developer/debugging-infrastructure.md)
 - [CHAT Validation Failures](developer/chat-validation-failures.md)
 - [Debugging Transcribe Pipelines](developer/debugging-transcribe-pipelines.md)
 - [Apple MPS Workarounds](developer/apple-mps-workarounds.md)

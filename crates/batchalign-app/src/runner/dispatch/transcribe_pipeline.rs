@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::api::{DisplayPath, EngineVersion, NumWorkers, RevAiJobId, UnixTimestamp};
 use crate::cache::UtteranceCache;
 use crate::pipeline::PipelineServices;
-use crate::recipe_runner::runtime::{output_write_path, primary_output_artifact};
+use crate::recipe_runner::runtime::{primary_output_artifact, write_text_output_artifact};
 use crate::runner::DispatchHostContext;
 use crate::scheduling::{FailureCategory, RetryPolicy, WorkUnitKind};
 use crate::worker::pool::WorkerPool;
@@ -238,15 +238,14 @@ async fn process_one_transcribe_file(
                 let primary_output =
                     primary_output_artifact(job.dispatch.command, &DisplayPath::from(filename));
 
-                // Write output
-                let write_path =
-                    output_write_path(&job.filesystem, file_index, &primary_output.display_path);
-
-                if let Some(parent) = write_path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-
-                if let Err(e) = tokio::fs::write(&write_path, &output_text).await {
+                if let Err(e) = write_text_output_artifact(
+                    &job.filesystem,
+                    file_index,
+                    &primary_output.display_path,
+                    &output_text,
+                )
+                .await
+                {
                     warn!(
                         job_id = %job_id,
                         correlation_id = %correlation_id,

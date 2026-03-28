@@ -118,6 +118,45 @@ pub(crate) fn output_write_path(
     }
 }
 
+fn staged_output_path(
+    filesystem: &RunnerFilesystemConfig,
+    result_display_path: &DisplayPath,
+) -> PathBuf {
+    filesystem
+        .staging_dir
+        .join("output")
+        .join(result_display_path.as_ref())
+}
+
+async fn write_text_file(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(path, content).await
+}
+
+/// Write a text result to the command's primary target and to staged output.
+///
+/// Paths-mode jobs still write to the execution host's requested output path,
+/// but they also preserve a staged copy so the submitting CLI can download and
+/// write the same result back to its own local filesystem.
+pub(crate) async fn write_text_output_artifact(
+    filesystem: &RunnerFilesystemConfig,
+    file_index: usize,
+    result_display_path: &DisplayPath,
+    content: &str,
+) -> std::io::Result<()> {
+    let write_path = output_write_path(filesystem, file_index, result_display_path);
+    write_text_file(&write_path, content).await?;
+
+    let staged_path = staged_output_path(filesystem, result_display_path);
+    if staged_path != write_path {
+        write_text_file(&staged_path, content).await?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -276,6 +315,46 @@ mod tests {
         assert_eq!(
             write_path,
             PathBuf::from("/tmp/staging/output/nested/result.compare.csv")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_text_output_artifact_keeps_staged_copy_for_paths_mode() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let host_out = root.path().join("host/output/sample.cha");
+        let filesystem = RunnerFilesystemConfig {
+            paths_mode: true,
+            source_paths: vec![root.path().join("input/sample.cha")],
+            output_paths: vec![host_out.clone()],
+            before_paths: Vec::new(),
+            staging_dir: root.path().join("jobs/job-1"),
+            media_mapping: String::new(),
+            media_subdir: String::new(),
+            source_dir: root.path().join("input"),
+        };
+
+        write_text_output_artifact(
+            &filesystem,
+            0,
+            &DisplayPath::from("nested/sample.cha"),
+            "@Begin\n@End\n",
+        )
+        .await
+        .expect("write output");
+
+        assert_eq!(
+            std::fs::read_to_string(&host_out).expect("host output"),
+            "@Begin\n@End\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                filesystem
+                    .staging_dir
+                    .join("output")
+                    .join("nested/sample.cha")
+            )
+            .expect("staged output"),
+            "@Begin\n@End\n"
         );
     }
 }

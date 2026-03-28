@@ -29,6 +29,68 @@ use crate::worker::provider_credentials::HkAsrCredentialSources;
 const STARTUP_STDERR_TAIL_CHARS: usize = 2_000;
 const MAX_READY_STDOUT_PREAMBLE_LINES: usize = 32;
 const MAX_RESPONSE_STDOUT_NOISE_LINES: usize = 8;
+/// Maximum bytes of response/error text to include in a failure dump.
+const FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES: usize = 1_024 * 1_024;
+
+/// Dump a failed worker IPC request to the always-on debug directory.
+///
+/// Writes to `~/.batchalign3/debug/failed_ipc_{timestamp}.json` so the
+/// operator can inspect exactly what was sent, what came back (or didn't),
+/// and which worker handled it — without needing `--debug-dir`.
+///
+/// The response field is truncated to [`FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES`]
+/// to avoid disk exhaustion from malformed worker output.
+fn dump_failed_ipc_request(
+    worker_pid: WorkerPid,
+    worker_label: &str,
+    request_json: &str,
+    error: &WorkerError,
+    response_fragment: Option<&str>,
+) {
+    let fallback_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(".batchalign3")
+        .join("debug");
+    if std::fs::create_dir_all(&fallback_dir).is_err() {
+        return;
+    }
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S%3f");
+    let path = fallback_dir.join(format!("failed_ipc_{timestamp}.json"));
+
+    let truncated_response = response_fragment.map(|r| {
+        if r.len() > FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES {
+            format!("{}... [truncated, {} bytes total]", &r[..FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES], r.len())
+        } else {
+            r.to_string()
+        }
+    });
+
+    let dump = serde_json::json!({
+        "timestamp": timestamp.to_string(),
+        "worker_pid": *worker_pid,
+        "worker_label": worker_label,
+        "error_type": format!("{error:?}").split('(').next().unwrap_or("Unknown"),
+        "error_message": error.to_string(),
+        "request": request_json,
+        "response_fragment": truncated_response,
+    });
+
+    match serde_json::to_string_pretty(&dump) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                debug!(%e, "failed to write IPC failure dump");
+            } else {
+                warn!(
+                    path = %path.display(),
+                    worker_pid = *worker_pid,
+                    "Worker IPC failure dump written for post-mortem"
+                );
+            }
+        }
+        Err(e) => debug!(%e, "failed to serialize IPC failure dump"),
+    }
+}
 
 /// Ready signal emitted by the Python worker on stdout.
 #[derive(Debug, Deserialize)]
@@ -784,6 +846,12 @@ impl WorkerHandle {
     ) -> Result<ExecuteResponseV2, WorkerError> {
         self.last_activity = tokio::time::Instant::now();
 
+        // Capture serialized request for failure dumps (before sending).
+        let request_json_for_dump = serde_json::to_string(
+            &WorkerRequest::ExecuteV2 { request },
+        )
+        .unwrap_or_else(|_| "<serialization failed>".into());
+
         self.write_request(&WorkerRequest::ExecuteV2 { request })
             .await?;
 
@@ -795,18 +863,46 @@ impl WorkerHandle {
         let response = tokio::time::timeout(timeout, self.read_response())
             .await
             .map_err(|_| {
-                WorkerError::Protocol(format!(
+                let err = WorkerError::Protocol(format!(
                     "timeout ({timeout_s}s) waiting for execute_v2 response ({:?})",
                     request.task
-                ))
+                ));
+                dump_failed_ipc_request(
+                    self.pid,
+                    &self.config.bootstrap_label(),
+                    &request_json_for_dump,
+                    &err,
+                    None,
+                );
+                err
             })??;
 
         match response {
             WorkerResponse::ExecuteV2 { response } => Ok(response),
-            WorkerResponse::Error { error } => Err(WorkerError::WorkerResponse(error)),
-            other => Err(WorkerError::Protocol(format!(
-                "unexpected response for execute_v2: {other:?}"
-            ))),
+            WorkerResponse::Error { error } => {
+                let err = WorkerError::WorkerResponse(error);
+                dump_failed_ipc_request(
+                    self.pid,
+                    &self.config.bootstrap_label(),
+                    &request_json_for_dump,
+                    &err,
+                    None,
+                );
+                Err(err)
+            }
+            other => {
+                let err = WorkerError::Protocol(format!(
+                    "unexpected response for execute_v2: {other:?}"
+                ));
+                dump_failed_ipc_request(
+                    self.pid,
+                    &self.config.bootstrap_label(),
+                    &request_json_for_dump,
+                    &err,
+                    Some(&format!("{other:?}")),
+                );
+                Err(err)
+            }
         }
     }
 
