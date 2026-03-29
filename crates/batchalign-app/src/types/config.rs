@@ -143,13 +143,13 @@ pub struct ServerConfig {
     /// for transcribe/align.  Paths that do not exist at startup produce a
     /// validation warning but are not fatal.
     #[serde(default)]
-    pub media_roots: Vec<String>,
+    pub media_roots: Vec<batchalign_types::paths::ServerPath>,
     /// Named media directory mappings (e.g. `{"childes-data": "/nfs/childes"}`).
     /// Clients reference the key in `JobSubmission.media_mapping`; the server
     /// resolves it to the filesystem root.  Allows stable logical names even
     /// when mount paths change.
     #[serde(default)]
-    pub media_mappings: BTreeMap<String, String>,
+    pub media_mappings: BTreeMap<batchalign_types::paths::MediaMappingKey, batchalign_types::paths::ServerPath>,
     /// 3-letter ISO language code used when the client omits `lang`.
     /// Defaults to `"eng"`.
     #[serde(default = "default_lang")]
@@ -518,12 +518,12 @@ impl ServerConfig {
         let mut warnings = Vec::new();
 
         for root in &self.media_roots {
-            if !Path::new(root).is_dir() {
+            if !root.as_path().is_dir() {
                 warnings.push(format!("media_root does not exist: {root}"));
             }
         }
         for (key, root) in &self.media_mappings {
-            if !Path::new(root).is_dir() {
+            if !root.as_path().is_dir() {
                 warnings.push(format!("media_mapping '{key}' root does not exist: {root}"));
             }
         }
@@ -703,8 +703,8 @@ warmup_commands:
 auto_daemon: true
 "#;
         let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(cfg.media_roots, vec!["/data/media", "/data/media2"]);
-        assert_eq!(cfg.media_mappings["childes-data"], "/nfs/childes");
+        assert_eq!(cfg.media_roots.len(), 2); assert_eq!(cfg.media_roots[0].as_str(), "/data/media");
+        assert_eq!(cfg.media_mappings[&batchalign_types::paths::MediaMappingKey::new("childes-data")].as_str(), "/nfs/childes");
         assert_eq!(cfg.default_lang, "spa");
         assert_eq!(cfg.port, 9000);
         assert_eq!(cfg.backend, ServerBackendKind::Temporal);

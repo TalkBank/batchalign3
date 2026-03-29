@@ -1,116 +1,97 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapabilitiesResponseV2",
   "description": "Response describing task capabilities for the worker.",
   "type": "object",
-  "required": [
-    "engine_versions",
-    "request_id",
-    "tasks"
-  ],
   "properties": {
     "engine_versions": {
       "description": "Engine version strings keyed by task name.",
       "type": "object",
       "additionalProperties": {
-        "type": "string"
+        "$ref": "#/$defs/EngineVersion"
       }
     },
     "request_id": {
       "description": "Correlation id that matches the request.",
-      "type": "string"
+      "$ref": "#/$defs/WorkerRequestIdV2"
     },
     "tasks": {
       "description": "Task capabilities advertised by the runtime.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/TaskCapabilityV2"
+        "$ref": "#/$defs/TaskCapabilityV2"
       }
     }
   },
-  "definitions": {
+  "required": [
+    "request_id",
+    "tasks",
+    "engine_versions"
+  ],
+  "$defs": {
+    "EngineVersion": {
+      "description": "ML engine version string for cache keying (e.g. `\"stanza-1.9.2\"`, non-empty).",
+      "type": "string"
+    },
     "InferenceTaskV2": {
       "description": "High-level V2 task family.",
       "oneOf": [
         {
           "description": "Morphosyntax tagging.",
           "type": "string",
-          "enum": [
-            "morphosyntax"
-          ]
+          "const": "morphosyntax"
         },
         {
           "description": "Utterance segmentation.",
           "type": "string",
-          "enum": [
-            "utseg"
-          ]
+          "const": "utseg"
         },
         {
           "description": "Machine translation.",
           "type": "string",
-          "enum": [
-            "translate"
-          ]
+          "const": "translate"
         },
         {
           "description": "Coreference annotation.",
           "type": "string",
-          "enum": [
-            "coref"
-          ]
+          "const": "coref"
         },
         {
           "description": "Automatic speech recognition.",
           "type": "string",
-          "enum": [
-            "asr"
-          ]
+          "const": "asr"
         },
         {
           "description": "Forced alignment.",
           "type": "string",
-          "enum": [
-            "forced_alignment"
-          ]
+          "const": "forced_alignment"
         },
         {
           "description": "Speaker diarization.",
           "type": "string",
-          "enum": [
-            "speaker"
-          ]
+          "const": "speaker"
         },
         {
           "description": "OpenSMILE feature extraction.",
           "type": "string",
-          "enum": [
-            "opensmile"
-          ]
+          "const": "opensmile"
         },
         {
           "description": "AVQI feature extraction.",
           "type": "string",
-          "enum": [
-            "avqi"
-          ]
+          "const": "avqi"
         }
       ]
     },
     "TaskCapabilityV2": {
       "description": "One task capability advertised by a V2 worker.",
       "type": "object",
-      "required": [
-        "accepted_inputs",
-        "supports_progress_events",
-        "task"
-      ],
       "properties": {
         "accepted_inputs": {
           "description": "Attachment/input kinds the task can consume.",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/WorkerAttachmentKindV2"
+            "$ref": "#/$defs/WorkerAttachmentKindV2"
           }
         },
         "supports_progress_events": {
@@ -119,13 +100,14 @@
         },
         "task": {
           "description": "Task family supported by the worker.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/InferenceTaskV2"
-            }
-          ]
+          "$ref": "#/$defs/InferenceTaskV2"
         }
-      }
+      },
+      "required": [
+        "task",
+        "accepted_inputs",
+        "supports_progress_events"
+      ]
     },
     "WorkerAttachmentKindV2": {
       "description": "Small artifact-kind vocabulary advertised in task capabilities.",
@@ -133,39 +115,33 @@
         {
           "description": "File-backed prepared PCM audio.",
           "type": "string",
-          "enum": [
-            "prepared_audio"
-          ]
+          "const": "prepared_audio"
         },
         {
           "description": "File-backed prepared text/JSON.",
           "type": "string",
-          "enum": [
-            "prepared_text"
-          ]
+          "const": "prepared_text"
         },
         {
           "description": "Inline JSON attachment carried inside the envelope.",
           "type": "string",
-          "enum": [
-            "inline_json"
-          ]
+          "const": "inline_json"
         },
         {
           "description": "Provider-local media path that Rust still has not replaced.",
           "type": "string",
-          "enum": [
-            "provider_media"
-          ]
+          "const": "provider_media"
         },
         {
           "description": "Previously submitted provider job identifier.",
           "type": "string",
-          "enum": [
-            "submitted_job"
-          ]
+          "const": "submitted_job"
         }
       ]
+    },
+    "WorkerRequestIdV2": {
+      "description": "Stable identifier for one V2 protocol request/response pair.",
+      "type": "string"
     }
   }
 }

@@ -551,6 +551,19 @@ Matches Rust `batchalign-types::worker::InferTask`:
 - Active targeting of 3.14t / free-threaded Python is paused.
 - Do not add new public-repo workflow assumptions that depend on 3.14t.
 
+## Stanza Capability Table
+
+Per-language processor availability is determined by reading Stanza's
+`resources.json` at worker startup, NOT by hardcoded tables.
+
+- **Source of truth:** `batchalign/worker/_stanza_capabilities.py`
+- Reads `stanza.resources.common.load_resources_json()`
+- Reports per-language: tokenize, pos, lemma, depparse, mwt, constituency, coref
+- Derives iso3→alpha2 mapping from `pycountry` + small override table
+- **Never hardcode** processor assumptions. Query the capability table.
+- ~11 languages have constituency (utseg degrades gracefully without it)
+- ~45 languages have MWT
+
 ## Key Patterns
 
 - Times throughout are in **milliseconds**
@@ -581,6 +594,24 @@ rm -f ~/.cache/batchalign3/cache.db*             # Linux
 Implementation: `crates/batchalign-app/src/cache/` (mod.rs, sqlite.rs).
 
 ## Gotchas
+
+### @Media status: `unlinked` means "not yet bulletted", NOT "no media"
+
+The `@Media` header's third token describes transcript-to-media link state:
+
+| Status | Media exists? | Meaning |
+|--------|:------------:|---------|
+| (none) | Yes | Media linked, utterances have timestamps |
+| `unlinked` | **Yes** | Media exists but utterances NOT yet aligned to timestamps |
+| `missing` | No | Media file is absent or lost |
+| `notrans` | Yes | Media exists but no transcription done |
+
+**`unlinked` is the normal pre-alignment state.** When a user runs `align`
+on an `unlinked` file, the whole point is to CREATE the links. The media
+resolution pipeline MUST still find and use the audio. Never skip a file
+just because it says `unlinked`.
+
+Types: `MediaStatus` enum in `talkbank-model/src/model/header/enums.rs`.
 
 ### Stanza token.id
 Stanza `token.id` is ALWAYS a tuple: `(word_id,)` for regular words, `(start, end)` for MWT (multi-word tokens). Never assume it's an int.

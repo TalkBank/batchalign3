@@ -148,6 +148,14 @@ pub(crate) async fn submit_job(
         )));
     }
 
+    // Authoritative language validation using the Stanza capability
+    // registry (when populated from a worker's resources.json report).
+    // This supersedes the hardcoded fallback table in submission.validate().
+    if let Some(registry) = state.workers.pool.stanza_registry() {
+        crate::types::request::validate_language_with_registry(&submission, Some(registry))
+            .map_err(|e| ServerError::Validation(e.to_string()))?;
+    }
+
     let job_id = uuid::Uuid::new_v4().to_string()[..12].to_string();
     let correlation_id = correlation_id_from_headers(&headers, &job_id);
     let job = materialize_submission_job(

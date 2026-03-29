@@ -1,78 +1,101 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PreparedAudioRefV2",
   "description": "File-backed prepared audio artifact.",
   "type": "object",
-  "required": [
-    "byte_len",
-    "byte_offset",
-    "channels",
-    "encoding",
-    "frame_count",
-    "id",
-    "path",
-    "sample_rate_hz"
-  ],
   "properties": {
     "byte_len": {
       "description": "Byte length inside the artifact file.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0.0
+      "$ref": "#/$defs/ByteLengthV2"
     },
     "byte_offset": {
       "description": "Byte offset inside the artifact file.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0.0
+      "$ref": "#/$defs/ByteOffsetV2"
     },
     "channels": {
       "description": "Number of channels in the artifact view.",
-      "type": "integer",
-      "format": "uint16",
-      "minimum": 0.0
+      "$ref": "#/$defs/ChannelCountV2"
     },
     "encoding": {
       "description": "PCM encoding for the prepared audio.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/PreparedAudioEncodingV2"
-        }
-      ]
+      "$ref": "#/$defs/PreparedAudioEncodingV2"
     },
     "frame_count": {
       "description": "Number of frames in the view.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0.0
+      "$ref": "#/$defs/FrameCountV2"
     },
     "id": {
       "description": "Stable artifact id referenced by request payloads.",
-      "type": "string"
+      "$ref": "#/$defs/WorkerArtifactIdV2"
     },
     "path": {
       "description": "Filesystem path to the prepared artifact.",
-      "type": "string"
+      "$ref": "#/$defs/WorkerArtifactPathV2"
     },
     "sample_rate_hz": {
       "description": "Sample rate in Hz.",
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0.0
+      "$ref": "#/$defs/SampleRateHzV2"
     }
   },
-  "definitions": {
+  "required": [
+    "id",
+    "path",
+    "encoding",
+    "channels",
+    "sample_rate_hz",
+    "frame_count",
+    "byte_offset",
+    "byte_len"
+  ],
+  "$defs": {
+    "ByteLengthV2": {
+      "description": "Byte length inside a prepared artifact file.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "ByteOffsetV2": {
+      "description": "Byte offset inside a prepared artifact file.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "ChannelCountV2": {
+      "description": "Number of channels in a prepared audio artifact.",
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "FrameCountV2": {
+      "description": "Number of audio frames in a prepared artifact.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
     "PreparedAudioEncodingV2": {
       "description": "PCM encoding used for prepared audio artifacts.",
       "oneOf": [
         {
           "description": "Little-endian float32 PCM frames.",
           "type": "string",
-          "enum": [
-            "pcm_f32le"
-          ]
+          "const": "pcm_f32le"
         }
       ]
+    },
+    "SampleRateHzV2": {
+      "description": "Audio sample rate in Hz carried by prepared artifacts.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "WorkerArtifactIdV2": {
+      "description": "Stable identifier for one prepared worker artifact.",
+      "type": "string"
+    },
+    "WorkerArtifactPathV2": {
+      "description": "Filesystem path to a prepared worker artifact.",
+      "type": "string"
     }
   }
 }

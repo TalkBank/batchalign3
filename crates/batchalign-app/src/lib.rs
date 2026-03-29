@@ -163,6 +163,7 @@ pub mod runner;
 pub mod runtime_paths;
 pub(crate) mod runtime_supervisor;
 pub mod server;
+pub mod stanza_registry;
 pub mod server_backend;
 pub mod state;
 pub mod store;

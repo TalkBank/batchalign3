@@ -8,6 +8,22 @@ use crate::error::ServerError;
 use crate::scheduling::FailureCategory;
 use crate::worker::error::WorkerError;
 
+/// Truncate a string to keep only the last `max_chars` characters.
+///
+/// Python tracebacks have the actual error at the END, so keeping the tail
+/// is more useful than keeping the head.
+fn truncate_tail(s: &str, max_chars: usize) -> &str {
+    if s.len() <= max_chars {
+        return s;
+    }
+    // Find a char boundary near the truncation point.
+    let start = s.len() - max_chars;
+    match s[start..].find('\n') {
+        Some(offset) => &s[start + offset + 1..],
+        None => &s[start..],
+    }
+}
+
 /// Classify worker errors into control-plane failure categories.
 pub(crate) fn classify_worker_error(error: &WorkerError) -> FailureCategory {
     match error {
@@ -71,11 +87,15 @@ pub(crate) fn user_facing_error(
     raw_error: &str,
 ) -> String {
     match category {
-        FailureCategory::WorkerCrash => format!(
-            "{command_label} failed for {filename}: the processing engine crashed \
-             unexpectedly. This is usually a temporary issue — try restarting the job. \
-             If the problem persists, please contact your administrator."
-        ),
+        FailureCategory::WorkerCrash => {
+            // Include the raw error (which now contains worker stderr via
+            // ProcessExited's Display impl) so users see the actual Python
+            // traceback or OOM message, not a generic "contact administrator."
+            let detail = truncate_tail(raw_error, 500);
+            format!(
+                "{command_label} failed for {filename}: the processing engine crashed.\n{detail}"
+            )
+        }
         FailureCategory::WorkerTimeout => format!(
             "{command_label} timed out for {filename}: the processing engine did not \
              respond in time. The file may be too large or the server may be overloaded. \

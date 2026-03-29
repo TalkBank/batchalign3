@@ -1,6 +1,7 @@
 //! Utility functions, constants, and auto-tuning for the runner module.
 
 mod auto_tune;
+pub(crate) mod batch_progress;
 mod error_classification;
 mod file_status;
 mod media;
@@ -136,7 +137,7 @@ mod tests {
     #[test]
     fn worker_error_classification_is_stable() {
         assert_eq!(
-            classify_worker_error(&WorkerError::ProcessExited { code: Some(9) }),
+            classify_worker_error(&WorkerError::ProcessExited { code: Some(9), stderr: None }),
             FailureCategory::WorkerCrash
         );
         assert_eq!(
@@ -166,6 +167,42 @@ mod tests {
             FailureCategory::WorkerProtocol
         ));
         assert!(!is_retryable_worker_failure(FailureCategory::Validation));
+    }
+
+    #[test]
+    fn process_exited_display_includes_stderr_when_present() {
+        let error = WorkerError::ProcessExited {
+            code: Some(1),
+            stderr: Some("Traceback (most recent call last):\n  File \"worker.py\", line 42\ntorch.cuda.OutOfMemoryError: CUDA out of memory".into()),
+        };
+        let msg = error.to_string();
+        assert!(msg.contains("exit code: Some(1)"), "should show exit code: {msg}");
+        assert!(msg.contains("OutOfMemoryError"), "should include stderr tail: {msg}");
+        assert!(msg.contains("--- worker stderr ---"), "should have stderr header: {msg}");
+    }
+
+    #[test]
+    fn process_exited_display_without_stderr_is_clean() {
+        let error = WorkerError::ProcessExited {
+            code: Some(9),
+            stderr: None,
+        };
+        let msg = error.to_string();
+        assert!(msg.contains("exit code: Some(9)"), "should show exit code: {msg}");
+        assert!(!msg.contains("stderr"), "should not mention stderr: {msg}");
+    }
+
+    #[test]
+    fn worker_crash_user_facing_error_includes_raw_detail() {
+        let raw = "FA processing failed: worker process exited unexpectedly (exit code: Some(-9))\n--- worker stderr ---\nKilled: 9";
+        let msg = user_facing_error(
+            FailureCategory::WorkerCrash,
+            "Alignment",
+            "test.cha",
+            raw,
+        );
+        assert!(msg.contains("Killed: 9"), "should include stderr detail: {msg}");
+        assert!(msg.contains("test.cha"), "should include filename: {msg}");
     }
 
     #[test]
@@ -240,7 +277,7 @@ mod tests {
             filename: "audio.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![std::path::PathBuf::from("/nonexistent/audio.wav")];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new("/nonexistent/audio.wav")];
         let failures = preflight_validate_media(&file_list, &source_paths, false).await;
         assert!(
             failures.is_empty(),
@@ -255,7 +292,7 @@ mod tests {
             filename: "test.cha".into(),
             has_chat: true,
         }];
-        let source_paths = vec![std::path::PathBuf::from("/nonexistent/test.cha")];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new("/nonexistent/test.cha")];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert!(failures.is_empty(), "Should skip CHAT files");
     }
@@ -267,7 +304,7 @@ mod tests {
             filename: "missing.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![std::path::PathBuf::from("/nonexistent/path/missing.wav")];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new("/nonexistent/path/missing.wav")];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("not found"));
@@ -286,7 +323,7 @@ mod tests {
             filename: "test.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![std::path::PathBuf::from(&wav_path)];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new(&wav_path)];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("empty"));
@@ -303,7 +340,7 @@ mod tests {
             filename: "test.xyz".into(),
             has_chat: false,
         }];
-        let source_paths = vec![std::path::PathBuf::from(&path)];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new(&path)];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("Unknown media format"));
@@ -319,7 +356,7 @@ mod tests {
             filename: "test.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![std::path::PathBuf::from(&path)];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new(&path)];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert!(failures.is_empty(), "Valid .wav file should pass");
     }
@@ -335,7 +372,7 @@ mod tests {
                 filename: DisplayPath::from(format!("test.{ext}")),
                 has_chat: false,
             }];
-            let source_paths = vec![std::path::PathBuf::from(&path)];
+            let source_paths = vec![batchalign_types::paths::ClientPath::new(&path)];
             let failures = preflight_validate_media(&file_list, &source_paths, true).await;
             assert!(failures.is_empty(), "Extension .{ext} should be accepted");
         }
@@ -404,13 +441,13 @@ mod tests {
             },
             filesystem: RunnerFilesystemConfig {
                 paths_mode: true,
-                source_paths: vec![chat_path.to_path_buf()],
+                source_paths: vec![batchalign_types::paths::ClientPath::new(chat_path.to_string_lossy().to_string())],
                 output_paths: vec![],
                 before_paths: vec![],
-                staging_dir: std::path::PathBuf::new(),
-                media_mapping: String::new(),
-                media_subdir: String::new(),
-                source_dir: std::path::PathBuf::new(),
+                staging_dir: Default::default(),
+                media_mapping: Default::default(),
+                media_subdir: Default::default(),
+                source_dir: Default::default(),
             },
             cancel_token: CancellationToken::new(),
             pending_files: vec![PendingJobFile {

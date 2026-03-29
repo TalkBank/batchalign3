@@ -11,7 +11,7 @@ pub use config::{WorkerConfig, WorkerRuntimeConfig};
 use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
 
-use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
+use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2, ProgressEventV2};
 use crate::worker::target::task_name;
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, WorkerCapabilities,
@@ -113,12 +113,18 @@ enum WorkerRequest<'a> {
 }
 
 /// Internal wire-level response envelope read from Python.
+///
+/// The `progress_v2` variant carries intermediate progress events emitted by
+/// long-running V2 tasks.  Workers emit zero or more progress lines before the
+/// final `execute_v2` response.  See `execute_v2_with_progress` for the
+/// multiplexed read loop.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum WorkerResponse {
     Infer { response: InferResponse },
     BatchInfer { response: BatchInferResponse },
     ExecuteV2 { response: ExecuteResponseV2 },
+    ProgressV2 { event: ProgressEventV2 },
     Health { response: WorkerHealthResponse },
     Capabilities { response: WorkerCapabilities },
     Shutdown,
@@ -417,6 +423,12 @@ pub struct WorkerHandle {
     stdout: BufReader<ChildStdout>,
     /// Monotonic instant when the last request was dispatched.
     last_activity: tokio::time::Instant,
+    /// Receiver for stderr lines captured by the background drain task.
+    ///
+    /// The drain task sends each non-empty stderr line through this channel.
+    /// On worker crash, [`drain_stderr_tail`](Self::drain_stderr_tail) reads
+    /// remaining lines to attach to the [`WorkerError::ProcessExited`] error.
+    stderr_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 }
 
 /// Raw parts extracted from a [`WorkerHandle`] via [`WorkerHandle::into_parts`].
@@ -541,6 +553,7 @@ impl WorkerHandle {
         super::pool::reaper::record_worker_pid(pid.0);
 
         let target_label = config.bootstrap_label();
+        let (stderr_tx, stderr_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {
             let mut line = String::new();
             loop {
@@ -551,6 +564,8 @@ impl WorkerHandle {
                         let trimmed = line.trim_end();
                         if !trimmed.is_empty() {
                             debug!(worker = %target_label, "{}", trimmed);
+                            // Best-effort: if the receiver is dropped, we just stop sending.
+                            let _ = stderr_tx.send(trimmed.to_owned());
                         }
                     }
                     Err(_) => break,
@@ -565,6 +580,7 @@ impl WorkerHandle {
             stdin,
             stdout: stdout_reader,
             last_activity: tokio::time::Instant::now(),
+            stderr_rx,
         })
     }
 
@@ -695,6 +711,27 @@ impl WorkerHandle {
         Some(compact)
     }
 
+    /// Drain buffered stderr lines from the background capture task.
+    ///
+    /// Returns the last `max_lines` lines joined by newline, or `None` if
+    /// no stderr was captured. Called on worker crash to attach diagnostic
+    /// output (Python tracebacks, OOM messages) to the error.
+    fn drain_stderr_tail(&mut self, max_lines: usize) -> Option<String> {
+        use std::collections::VecDeque;
+        let mut tail = VecDeque::with_capacity(max_lines);
+        while let Ok(line) = self.stderr_rx.try_recv() {
+            tail.push_back(line);
+            if tail.len() > max_lines {
+                tail.pop_front();
+            }
+        }
+        if tail.is_empty() {
+            None
+        } else {
+            Some(tail.into_iter().collect::<Vec<_>>().join("\n"))
+        }
+    }
+
     async fn write_request(&mut self, request: &WorkerRequest<'_>) -> Result<(), WorkerError> {
         let mut line = serde_json::to_string(request)
             .map_err(|e| WorkerError::Protocol(format!("failed to encode request: {e}")))?;
@@ -712,7 +749,8 @@ impl WorkerHandle {
             let bytes = self.stdout.read_line(&mut line).await?;
             if bytes == 0 {
                 let code = self.child.try_wait().ok().flatten().and_then(|s| s.code());
-                return Err(WorkerError::ProcessExited { code });
+                let stderr = self.drain_stderr_tail(50);
+                return Err(WorkerError::ProcessExited { code, stderr });
             }
 
             let trimmed = line.trim();
@@ -840,9 +878,30 @@ impl WorkerHandle {
     /// This keeps the live FA migration on the same long-lived worker process
     /// and stdio transport while replacing the request/response payload shape
     /// with the staged V2 contract.
+    /// Send an `execute_v2` request and return the final response.
+    ///
+    /// Any `ProgressV2` events emitted by the worker before the final
+    /// response are silently discarded.  Use [`execute_v2_with_progress`]
+    /// to receive them.
     pub async fn execute_v2(
         &mut self,
         request: &ExecuteRequestV2,
+    ) -> Result<ExecuteResponseV2, WorkerError> {
+        self.execute_v2_with_progress(request, None).await
+    }
+
+    /// Send an `execute_v2` request, forwarding intermediate progress events
+    /// through an optional async channel.
+    ///
+    /// The worker may emit zero or more `ProgressV2` JSON lines before the
+    /// final `ExecuteV2` response.  Each progress event is sent through
+    /// `progress_tx` (if provided) without blocking the read loop.  If the
+    /// channel is full or closed, progress events are dropped silently —
+    /// losing a progress update is not an error.
+    pub async fn execute_v2_with_progress(
+        &mut self,
+        request: &ExecuteRequestV2,
+        progress_tx: Option<&tokio::sync::mpsc::Sender<ProgressEventV2>>,
     ) -> Result<ExecuteResponseV2, WorkerError> {
         self.last_activity = tokio::time::Instant::now();
 
@@ -859,49 +918,61 @@ impl WorkerHandle {
             self.config.audio_task_timeout_s,
             self.config.analysis_task_timeout_s,
         );
-        let timeout = Duration::from_secs(timeout_s);
-        let response = tokio::time::timeout(timeout, self.read_response())
-            .await
-            .map_err(|_| {
-                let err = WorkerError::Protocol(format!(
-                    "timeout ({timeout_s}s) waiting for execute_v2 response ({:?})",
-                    request.task
-                ));
-                dump_failed_ipc_request(
-                    self.pid,
-                    &self.config.bootstrap_label(),
-                    &request_json_for_dump,
-                    &err,
-                    None,
-                );
-                err
-            })??;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_s);
 
-        match response {
-            WorkerResponse::ExecuteV2 { response } => Ok(response),
-            WorkerResponse::Error { error } => {
-                let err = WorkerError::WorkerResponse(error);
-                dump_failed_ipc_request(
-                    self.pid,
-                    &self.config.bootstrap_label(),
-                    &request_json_for_dump,
-                    &err,
-                    None,
-                );
-                Err(err)
-            }
-            other => {
-                let err = WorkerError::Protocol(format!(
-                    "unexpected response for execute_v2: {other:?}"
-                ));
-                dump_failed_ipc_request(
-                    self.pid,
-                    &self.config.bootstrap_label(),
-                    &request_json_for_dump,
-                    &err,
-                    Some(&format!("{other:?}")),
-                );
-                Err(err)
+        // Read loop: consume progress events until the final response arrives.
+        loop {
+            let response = tokio::time::timeout_at(deadline, self.read_response())
+                .await
+                .map_err(|_| {
+                    let err = WorkerError::Protocol(format!(
+                        "timeout ({timeout_s}s) waiting for execute_v2 response ({:?})",
+                        request.task
+                    ));
+                    dump_failed_ipc_request(
+                        self.pid,
+                        &self.config.bootstrap_label(),
+                        &request_json_for_dump,
+                        &err,
+                        None,
+                    );
+                    err
+                })??;
+
+            match response {
+                WorkerResponse::ProgressV2 { event } => {
+                    // Forward to the progress channel.  Drop silently if the
+                    // receiver is gone or the channel is full.
+                    if let Some(tx) = progress_tx {
+                        let _ = tx.try_send(event);
+                    }
+                    continue;
+                }
+                WorkerResponse::ExecuteV2 { response } => return Ok(response),
+                WorkerResponse::Error { error } => {
+                    let err = WorkerError::WorkerResponse(error);
+                    dump_failed_ipc_request(
+                        self.pid,
+                        &self.config.bootstrap_label(),
+                        &request_json_for_dump,
+                        &err,
+                        None,
+                    );
+                    return Err(err);
+                }
+                other => {
+                    let err = WorkerError::Protocol(format!(
+                        "unexpected response for execute_v2: {other:?}"
+                    ));
+                    dump_failed_ipc_request(
+                        self.pid,
+                        &self.config.bootstrap_label(),
+                        &request_json_for_dump,
+                        &err,
+                        Some(&format!("{other:?}")),
+                    );
+                    return Err(err);
+                }
             }
         }
     }
@@ -1238,5 +1309,32 @@ mod tests {
             envs.get("BATCHALIGN_TENCENT_BUCKET").map(String::as_str),
             Some("bucket")
         );
+    }
+
+    /// Verify that a `ProgressV2` JSON line deserializes correctly into the
+    /// `WorkerResponse` enum.  This is the wire format emitted by Python
+    /// workers during long-running V2 tasks.
+    #[test]
+    fn deserialize_progress_v2_response() {
+        let json = r#"{"op": "progress_v2", "event": {"request_id": "req-001", "completed": 42, "total": 100, "stage": "stanza_processing"}}"#;
+        let resp: super::WorkerResponse = serde_json::from_str(json).unwrap();
+        match resp {
+            super::WorkerResponse::ProgressV2 { event } => {
+                assert_eq!(&*event.request_id, "req-001");
+                assert_eq!(event.completed, 42);
+                assert_eq!(event.total, 100);
+                assert_eq!(event.stage, "stanza_processing");
+            }
+            other => panic!("Expected ProgressV2, got {other:?}"),
+        }
+    }
+
+    /// Verify backward compatibility: a response stream with zero progress
+    /// events still deserializes the final `ExecuteV2` response correctly.
+    #[test]
+    fn deserialize_execute_v2_without_progress() {
+        let json = r#"{"op": "execute_v2", "response": {"request_id": "req-002", "outcome": {"kind": "success"}, "elapsed_s": 1.5}}"#;
+        let resp: super::WorkerResponse = serde_json::from_str(json).unwrap();
+        assert!(matches!(resp, super::WorkerResponse::ExecuteV2 { .. }));
     }
 }

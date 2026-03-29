@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
@@ -53,18 +52,19 @@ fn make_media_job(job_id: &str, source_path: &str) -> Job {
         source: JobSourceContext {
             submitted_by: "127.0.0.1".into(),
             submitted_by_name: "localhost".into(),
-            source_dir: PathBuf::new(),
+            source_dir: Default::default(),
         },
         filesystem: JobFilesystemConfig {
             filenames: vec![DisplayPath::from(filename)],
             has_chat: vec![false],
-            staging_dir: PathBuf::new(),
+            staging_dir: Default::default(),
             paths_mode: true,
-            source_paths: vec![PathBuf::from(source_path)],
-            output_paths: vec![PathBuf::new()],
+            source_paths: vec![batchalign_types::paths::ClientPath::new(source_path)],
+            output_paths: vec![Default::default()],
             before_paths: Vec::new(),
-            media_mapping: String::new(),
-            media_subdir: String::new(),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
+            source_dir: Default::default(),
         },
         execution: JobExecutionState {
             status: JobStatus::Queued,

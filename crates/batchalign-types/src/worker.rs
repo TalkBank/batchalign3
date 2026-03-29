@@ -102,6 +102,27 @@ pub struct WorkerCapabilities {
     /// Engine version strings by task (e.g. `{"morphosyntax": "stanza-1.9.2"}`).
     /// Used by the server to match cache entries to the correct engine version.
     pub engine_versions: BTreeMap<String, String>,
+    /// Per-language Stanza processor availability.
+    ///
+    /// Key is ISO-639-3 code (e.g. "eng", "nld"); value lists available
+    /// processor names. Built from Stanza's `resources.json` at worker
+    /// startup. Empty when the worker does not load Stanza (e.g. IO
+    /// profile) or when the worker is an older version that does not
+    /// report this field.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stanza_capabilities: BTreeMap<String, StanzaLanguageProcessors>,
+}
+
+/// Processor availability for one language in Stanza.
+///
+/// Reported by the Python worker from `resources.json`. Used by the
+/// Rust server for submission validation and dispatch routing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StanzaLanguageProcessors {
+    /// Stanza alpha-2 code this ISO-639-3 code maps to.
+    pub alpha2: String,
+    /// Available processor names (e.g. `["tokenize", "pos", "lemma", "depparse", "mwt"]`).
+    pub processors: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +234,7 @@ mod tests {
             free_threaded: true,
             infer_tasks: vec![],
             engine_versions: BTreeMap::new(),
+            stanza_capabilities: BTreeMap::new(),
         };
         let json = serde_json::to_string(&caps).unwrap();
         let back: WorkerCapabilities = serde_json::from_str(&json).unwrap();
@@ -229,6 +251,7 @@ mod tests {
                 ("morphosyntax".into(), "stanza-1.9.2".into()),
                 ("utseg".into(), "stanza-1.9.2".into()),
             ]),
+            stanza_capabilities: BTreeMap::new(),
         };
         let json = serde_json::to_string(&caps).unwrap();
         let back: WorkerCapabilities = serde_json::from_str(&json).unwrap();

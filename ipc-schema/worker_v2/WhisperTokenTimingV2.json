@@ -1,12 +1,8 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "WhisperTokenTimingV2",
   "description": "One raw Whisper forced-alignment token span returned by Python.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
   "type": "object",
-  "required": [
-    "text",
-    "time_s"
-  ],
   "properties": {
     "text": {
       "description": "Surface token text returned by the FA runtime.",
@@ -14,6 +10,16 @@
     },
     "time_s": {
       "description": "Token onset timestamp in seconds.",
+      "$ref": "#/$defs/DurationSeconds"
+    }
+  },
+  "required": [
+    "text",
+    "time_s"
+  ],
+  "$defs": {
+    "DurationSeconds": {
+      "description": "Duration measured in fractional seconds.",
       "type": "number",
       "format": "double"
     }

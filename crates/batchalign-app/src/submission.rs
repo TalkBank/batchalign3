@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use batchalign_types::paths::ServerPath;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::{CorrelationId, DisplayPath, JobId, JobStatus, JobSubmission};
@@ -65,7 +66,7 @@ pub(crate) async fn materialize_submission_job(
         .validate()
         .map_err(|error| ServerError::Validation(error.to_string()))?;
 
-    let staging_dir = context.jobs_dir.join(context.job_id.to_string());
+    let staging_dir = ServerPath::from(context.jobs_dir.join(context.job_id.to_string()));
     let (filenames, has_chat, paths_mode, source_paths, output_paths) = if submission.paths_mode {
         let filenames: Vec<DisplayPath> = if !submission.display_names.is_empty() {
             submission
@@ -77,18 +78,18 @@ pub(crate) async fn materialize_submission_job(
             submission
                 .source_paths
                 .iter()
-                .map(|path| path_mode_filename_from_source(path))
+                .map(|path| path_mode_filename_from_source(path.as_str()))
                 .collect::<Result<Vec<_>, _>>()?
         };
         let has_chat: Vec<bool> = submission
             .source_paths
             .iter()
-            .map(|path| path.to_ascii_lowercase().ends_with(".cha"))
+            .map(|path| path.as_str().to_ascii_lowercase().ends_with(".cha"))
             .collect();
 
-        ensure_dir(&staging_dir, "creating paths-mode staging dir").await?;
+        ensure_dir(staging_dir.as_ref(), "creating paths-mode staging dir").await?;
         ensure_dir(
-            &staging_dir.join("output"),
+            staging_dir.join("output").as_ref(),
             "creating paths-mode staged output dir",
         )
         .await?;
@@ -97,8 +98,8 @@ pub(crate) async fn materialize_submission_job(
             filenames,
             has_chat,
             true,
-            submission.source_paths.iter().map(PathBuf::from).collect(),
-            submission.output_paths.iter().map(PathBuf::from).collect(),
+            submission.source_paths.clone(),
+            submission.output_paths.clone(),
         )
     } else {
         if submission.files.is_empty() && submission.media_files.is_empty() {
@@ -108,12 +109,11 @@ pub(crate) async fn materialize_submission_job(
         }
 
         let input_dir = staging_dir.join("input");
-        ensure_dir(&input_dir, "creating content-mode input dir").await?;
+        ensure_dir(input_dir.as_ref(), "creating content-mode input dir").await?;
         ensure_dir(
-            &staging_dir.join("output"),
+            staging_dir.join("output").as_ref(),
             "creating content-mode output dir",
-        )
-        .await?;
+        ).await?;
 
         let mut filenames: Vec<DisplayPath> = Vec::new();
         let mut has_chat = Vec::new();
@@ -121,7 +121,7 @@ pub(crate) async fn materialize_submission_job(
         for file in &submission.files {
             filenames.push(file.filename.clone());
             has_chat.push(true);
-            let dest = input_dir.join(file.filename.as_ref());
+            let dest = input_dir.as_path().join(file.filename.as_ref());
             if let Some(parent) = dest.parent() {
                 ensure_dir(parent, "creating staged input parent dir").await?;
             }
@@ -156,7 +156,7 @@ pub(crate) async fn materialize_submission_job(
         source: JobSourceContext {
             submitted_by: context.submitted_by.clone(),
             submitted_by_name: context.submitted_by_name.clone(),
-            source_dir: submission.source_dir.clone().into(),
+            source_dir: submission.source_dir.clone(),
         },
         filesystem: JobFilesystemConfig {
             filenames,
@@ -166,12 +166,13 @@ pub(crate) async fn materialize_submission_job(
             source_paths,
             output_paths,
             before_paths: if submission.paths_mode {
-                submission.before_paths.iter().map(PathBuf::from).collect()
+                submission.before_paths.clone()
             } else {
                 Vec::new()
             },
             media_mapping: submission.media_mapping.clone(),
             media_subdir: submission.media_subdir.clone(),
+            source_dir: submission.source_dir.clone(),
         },
         execution: JobExecutionState {
             status: JobStatus::Queued,
@@ -200,8 +201,6 @@ pub(crate) async fn materialize_submission_job(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::{SubmissionContext, materialize_submission_job};
     use crate::api::{
         DisplayPath, FilePayload, JobSubmission, LanguageCode3, LanguageSpec, NumSpeakers,
@@ -216,8 +215,8 @@ mod tests {
             num_speakers: NumSpeakers(1),
             files: Vec::new(),
             media_files: Vec::new(),
-            media_mapping: String::new(),
-            media_subdir: String::new(),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
             source_dir: "/tmp/input".into(),
             options: CommandOptions::Morphotag(MorphotagOptions {
                 common: CommonOptions::default(),
@@ -261,14 +260,14 @@ mod tests {
         );
         assert_eq!(
             job.filesystem.source_paths[0],
-            PathBuf::from("/tmp/source/sample.cha")
+            batchalign_types::paths::ClientPath::new("/tmp/source/sample.cha")
         );
         assert_eq!(
             job.filesystem.output_paths[0],
-            PathBuf::from("/tmp/output/sample.cha")
+            batchalign_types::paths::ClientPath::new("/tmp/output/sample.cha")
         );
-        assert!(job.filesystem.staging_dir.ends_with("job-paths"));
-        assert!(job.filesystem.staging_dir.exists());
+        assert!(job.filesystem.staging_dir.as_path().ends_with("job-paths"));
+        assert!(job.filesystem.staging_dir.as_path().exists());
     }
 
     #[tokio::test]
@@ -294,7 +293,7 @@ mod tests {
 
         let staged_input = job.filesystem.staging_dir.join("input/nested/sample.cha");
         assert!(!job.filesystem.paths_mode);
-        assert!(job.filesystem.staging_dir.join("output").exists());
+        assert!(job.filesystem.staging_dir.join("output").as_path().exists());
         assert_eq!(
             tokio::fs::read_to_string(staged_input)
                 .await

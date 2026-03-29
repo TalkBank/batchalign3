@@ -257,6 +257,10 @@ pub struct JobInfo {
     /// Active lease information when this job is currently claimed by a node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_lease: Option<LeaseRecord>,
+    /// Per-language-group progress for batched text commands (morphotag,
+    /// utseg, translate, coref).  Present only while a batch is in flight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_progress: Option<crate::runner::util::batch_progress::BatchInferProgress>,
     /// Server control-plane metadata for this job when returned by a server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_plane: Option<JobControlPlaneInfo>,

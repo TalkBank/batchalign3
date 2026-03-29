@@ -1,42 +1,32 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "WorkerAttachmentKindV2",
   "description": "Small artifact-kind vocabulary advertised in task capabilities.",
   "oneOf": [
     {
       "description": "File-backed prepared PCM audio.",
       "type": "string",
-      "enum": [
-        "prepared_audio"
-      ]
+      "const": "prepared_audio"
     },
     {
       "description": "File-backed prepared text/JSON.",
       "type": "string",
-      "enum": [
-        "prepared_text"
-      ]
+      "const": "prepared_text"
     },
     {
       "description": "Inline JSON attachment carried inside the envelope.",
       "type": "string",
-      "enum": [
-        "inline_json"
-      ]
+      "const": "inline_json"
     },
     {
       "description": "Provider-local media path that Rust still has not replaced.",
       "type": "string",
-      "enum": [
-        "provider_media"
-      ]
+      "const": "provider_media"
     },
     {
       "description": "Previously submitted provider job identifier.",
       "type": "string",
-      "enum": [
-        "submitted_job"
-      ]
+      "const": "submitted_job"
     }
   ]
 }

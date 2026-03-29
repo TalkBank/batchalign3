@@ -367,6 +367,7 @@ mod tests {
                 ("morphosyntax".to_string(), "stanza-1.10.1".to_string()),
                 ("utseg".to_string(), "stanza-1.10.1".to_string()),
             ]),
+            stanza_capabilities: BTreeMap::new(),
         };
 
         let snapshot = resolve_worker_capability_snapshot(
@@ -430,6 +431,7 @@ mod tests {
             free_threaded: false,
             infer_tasks: Vec::new(),
             engine_versions: BTreeMap::new(),
+            stanza_capabilities: BTreeMap::new(),
         };
 
         let snapshot = resolve_worker_capability_snapshot(

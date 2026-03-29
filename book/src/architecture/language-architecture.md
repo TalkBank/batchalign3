@@ -1,7 +1,7 @@
 # Language Architecture
 
 **Status:** Current
-**Last updated:** 2026-03-20
+**Last updated:** 2026-03-28 16:15 EDT
 
 How language information flows from CHAT headers through the entire
 batchalign3 pipeline, where it affects processing, and where gaps exist.
@@ -347,6 +347,67 @@ FA engine selection is language-aware:
 ### Translation (source/target — IMPLEMENTED)
 
 Source language from `@Languages`, target language from CLI `--target-lang`.
+
+## Stanza Capability Registry
+
+Per-language processor availability (tokenize, pos, lemma, depparse, mwt,
+constituency, coref) is determined **dynamically** from Stanza's
+`resources.json`, NOT hardcoded. See the
+[dedicated registry page](stanza-capability-registry.md) for the full
+architecture, data flow diagram, and source file inventory.
+
+### Architecture
+
+```
+Stanza resources.json (authoritative, per-install)
+  → Python: _stanza_capabilities.py reads at worker startup
+    → StanzaCapabilityTable (per-language processor booleans)
+      → Serialized in WorkerCapabilities.stanza_capabilities
+        → Rust: StanzaRegistry (stored in WorkerPool)
+          → Submission validation (POST /jobs rejects unsupported lang)
+          → Dispatch routing (only request available processors)
+          → Utseg config (constituency only if available)
+```
+
+### Key files
+
+| File | Role |
+|------|------|
+| `batchalign/worker/_stanza_capabilities.py` | Reads resources.json, builds table |
+| `crates/batchalign-app/src/stanza_registry.rs` | Rust registry with typed queries |
+| `crates/batchalign-app/src/routes/jobs/mod.rs` | Calls `validate_language_with_registry()` |
+| `crates/batchalign-app/src/morphosyntax/batch.rs` | Language filter queries registry |
+| `batchalign/worker/_stanza_loading.py` | Utseg uses table for constituency/MWT |
+| `scripts/generate_stanza_language_table.py` | Regenerates Rust fallback tables |
+
+### Per-command processor requirements
+
+| Command | Required | Optional |
+|---------|----------|----------|
+| morphotag | tokenize + pos + lemma + depparse | mwt (if available) |
+| utseg | tokenize + pos | constituency (if available — else sentence-boundary fallback) |
+| translate | (uses googletrans, not Stanza) | — |
+| coref | (English-only, uses Stanza) | — |
+| align/transcribe | (uses ASR, not Stanza directly) | — |
+
+### Graceful degradation
+
+- **No MWT:** Morphotag works, just without contraction expansion
+- **No constituency:** Utseg falls back to sentence-boundary segmentation
+- **No depparse:** Morphotag rejected at submission
+- **Unknown language:** Rejected at submission with clear error listing supported languages
+
+### Fallback behavior
+
+Hardcoded fallback tables (`STANZA_SUPPORTED_ISO3` in `request.rs`,
+`SUPPORTED_STANZA_CODES` in `stanza_languages.rs`) are used ONLY when the
+registry hasn't been populated (before first worker spawn). Once a worker
+reports capabilities, the registry is authoritative.
+
+Regenerate fallback tables after Stanza upgrades:
+```bash
+uv run scripts/generate_stanza_language_table.py
+```
 
 ## Language Gaps and Improvement Opportunities
 

@@ -246,18 +246,19 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: "localhost".into(),
-                source_dir: std::path::PathBuf::new(),
+                source_dir: Default::default(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: vec![DisplayPath::from(filename)],
                 has_chat: vec![true],
-                staging_dir: std::path::PathBuf::from(staging_dir),
+                staging_dir: batchalign_types::paths::ServerPath::new(staging_dir),
                 paths_mode: false,
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),
                 before_paths: Vec::new(),
-                media_mapping: String::new(),
-                media_subdir: String::new(),
+                media_mapping: Default::default(),
+                media_subdir: Default::default(),
+                source_dir: Default::default(),
             },
             execution: JobExecutionState {
                 status: JobStatus::Queued,

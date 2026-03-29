@@ -49,7 +49,7 @@ impl JobDebugArtifacts {
 
         Self {
             job_id,
-            staging_dir: detail.staging_dir.clone(),
+            staging_dir: detail.staging_dir.as_path().to_owned(),
             trace_file,
             bug_report_ids,
             bug_report_files,

@@ -1,7 +1,8 @@
 //! Job struct, associated types, and conflict detection.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+
+use batchalign_types::paths::{ClientPath, MediaMappingKey, RepoRelativePath, ServerPath};
 
 use crate::api::{
     ContentType, CorrelationId, DisplayPath, FileProgressStage, JobId, JobStatus, LanguageSpec,
@@ -78,7 +79,7 @@ pub struct JobSourceContext {
     /// Human-readable hostname resolved from `submitted_by`.
     pub submitted_by_name: String,
     /// Client-visible source directory used for display and locality hints.
-    pub source_dir: PathBuf,
+    pub source_dir: ClientPath,
 }
 
 /// File lists and storage layout for one job.
@@ -89,19 +90,26 @@ pub struct JobFilesystemConfig {
     /// Parallel CHAT/media markers for [`Self::filenames`].
     pub has_chat: Vec<bool>,
     /// Server-local temporary directory for staged input/output content.
-    pub staging_dir: PathBuf,
+    pub staging_dir: ServerPath,
     /// Whether the job reads and writes directly on the filesystem.
     pub paths_mode: bool,
     /// Absolute source paths parallel to [`Self::filenames`] in paths mode.
-    pub source_paths: Vec<PathBuf>,
+    pub source_paths: Vec<ClientPath>,
     /// Absolute output paths parallel to [`Self::filenames`] in paths mode.
-    pub output_paths: Vec<PathBuf>,
+    pub output_paths: Vec<ClientPath>,
     /// Optional "before" paths parallel to [`Self::source_paths`].
-    pub before_paths: Vec<PathBuf>,
+    pub before_paths: Vec<ClientPath>,
     /// Key into the server's configured media-mapping roots.
-    pub media_mapping: String,
+    pub media_mapping: MediaMappingKey,
     /// Optional subdirectory within the selected media mapping.
-    pub media_subdir: String,
+    pub media_subdir: RepoRelativePath,
+    /// Client-provided source directory for media locality inference.
+    ///
+    /// In paths mode, the FA pipeline uses this to auto-detect the media
+    /// mapping via [`batchalign_types::paths::infer_media_mapping()`].
+    /// Without this field, `--server` jobs from remote clients cannot
+    /// resolve media files.
+    pub source_dir: ClientPath,
 }
 
 /// Mutable execution state for one job.
@@ -243,19 +251,22 @@ pub struct RunnerFilesystemConfig {
     /// Whether the job reads and writes directly on the filesystem.
     pub paths_mode: bool,
     /// Source paths parallel to [`PendingJobFile::file_index`].
-    pub source_paths: Vec<PathBuf>,
+    pub source_paths: Vec<ClientPath>,
     /// Output paths parallel to [`PendingJobFile::file_index`].
-    pub output_paths: Vec<PathBuf>,
+    pub output_paths: Vec<ClientPath>,
     /// Optional "before" paths parallel to [`PendingJobFile::file_index`].
-    pub before_paths: Vec<PathBuf>,
+    pub before_paths: Vec<ClientPath>,
     /// Staging directory for uploaded content mode.
-    pub staging_dir: PathBuf,
+    pub staging_dir: ServerPath,
     /// Media-mapping key for server-side audio lookup.
-    pub media_mapping: String,
+    pub media_mapping: MediaMappingKey,
     /// Subdirectory within the selected media mapping.
-    pub media_subdir: String,
-    /// Client-provided source directory, used for media locality fallback.
-    pub source_dir: PathBuf,
+    pub media_subdir: RepoRelativePath,
+    /// Client-provided source directory, used for media locality inference.
+    ///
+    /// The FA pipeline passes this to `infer_media_mapping()` to auto-detect
+    /// which media volume and repo-relative subdir to search for audio files.
+    pub source_dir: ClientPath,
 }
 
 /// Immutable runner-facing snapshot of job state.

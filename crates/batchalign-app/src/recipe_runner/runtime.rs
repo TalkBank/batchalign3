@@ -21,16 +21,26 @@ pub(crate) fn discover_input_for_pending_file(
     file: &PendingJobFile,
 ) -> DiscoveredInput {
     let source_path = if filesystem.paths_mode && file.file_index < filesystem.source_paths.len() {
-        filesystem.source_paths[file.file_index].clone()
+        filesystem.source_paths[file.file_index]
+            .assume_shared_filesystem()
+            .as_path()
+            .to_owned()
     } else {
         filesystem
             .staging_dir
             .join("input")
             .join(file.filename.as_ref())
+            .as_path()
+            .to_owned()
     };
     let before_path = (!filesystem.before_paths.is_empty()
         && file.file_index < filesystem.before_paths.len())
-    .then(|| filesystem.before_paths[file.file_index].clone());
+    .then(|| {
+        filesystem.before_paths[file.file_index]
+            .assume_shared_filesystem()
+            .as_path()
+            .to_owned()
+    });
     DiscoveredInput {
         display_path: file.filename.clone(),
         source_path,
@@ -106,7 +116,8 @@ pub(crate) fn output_write_path(
         let result_name = Path::new(result_display_path.as_ref())
             .file_name()
             .unwrap_or_default();
-        filesystem.output_paths[file_index]
+        let output_server_path = filesystem.output_paths[file_index].assume_shared_filesystem();
+        Path::new(output_server_path.as_str())
             .parent()
             .map(|parent| parent.join(result_name))
             .unwrap_or_else(|| result_name.into())
@@ -115,6 +126,8 @@ pub(crate) fn output_write_path(
             .staging_dir
             .join("output")
             .join(result_display_path.as_ref())
+            .as_path()
+            .to_owned()
     }
 }
 
@@ -126,6 +139,8 @@ fn staged_output_path(
         .staging_dir
         .join("output")
         .join(result_display_path.as_ref())
+        .as_path()
+        .to_owned()
 }
 
 async fn write_text_file(path: &Path, content: &str) -> std::io::Result<()> {
@@ -196,13 +211,13 @@ mod tests {
             },
             filesystem: RunnerFilesystemConfig {
                 paths_mode: true,
-                source_paths: source_paths.into_iter().map(PathBuf::from).collect(),
-                output_paths: vec![PathBuf::from("/out/main.cha"); pending_files.len()],
-                before_paths: before_paths.into_iter().map(PathBuf::from).collect(),
-                staging_dir: PathBuf::from("/tmp/staging"),
-                media_mapping: String::new(),
-                media_subdir: String::new(),
-                source_dir: PathBuf::from("/source"),
+                source_paths: source_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
+                output_paths: vec![batchalign_types::paths::ClientPath::new("/out/main.cha"); pending_files.len()],
+                before_paths: before_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
+                staging_dir: batchalign_types::paths::ServerPath::new("/tmp/staging"),
+                media_mapping: Default::default(),
+                media_subdir: Default::default(),
+                source_dir: batchalign_types::paths::ClientPath::new("/source"),
             },
             cancel_token: CancellationToken::new(),
             pending_files,
@@ -302,10 +317,10 @@ mod tests {
             source_paths: Vec::new(),
             output_paths: Vec::new(),
             before_paths: Vec::new(),
-            staging_dir: PathBuf::from("/tmp/staging"),
-            media_mapping: String::new(),
-            media_subdir: String::new(),
-            source_dir: PathBuf::from("/source"),
+            staging_dir: batchalign_types::paths::ServerPath::new("/tmp/staging"),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
+            source_dir: batchalign_types::paths::ClientPath::new("/source"),
         };
         let write_path = output_write_path(
             &filesystem,
@@ -324,13 +339,15 @@ mod tests {
         let host_out = root.path().join("host/output/sample.cha");
         let filesystem = RunnerFilesystemConfig {
             paths_mode: true,
-            source_paths: vec![root.path().join("input/sample.cha")],
-            output_paths: vec![host_out.clone()],
+            source_paths: vec![batchalign_types::paths::ClientPath::new(root.path().join("input/sample.cha").to_string_lossy().to_string())],
+            output_paths: vec![batchalign_types::paths::ClientPath::new(host_out.to_string_lossy().to_string())],
             before_paths: Vec::new(),
-            staging_dir: root.path().join("jobs/job-1"),
-            media_mapping: String::new(),
-            media_subdir: String::new(),
-            source_dir: root.path().join("input"),
+            staging_dir: batchalign_types::paths::ServerPath::from(root.path().join("jobs/job-1")),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
+            source_dir: batchalign_types::paths::ClientPath::new(
+                root.path().join("input").to_string_lossy().to_string(),
+            ),
         };
 
         write_text_output_artifact(

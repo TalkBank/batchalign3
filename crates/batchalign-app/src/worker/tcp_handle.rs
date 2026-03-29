@@ -22,7 +22,7 @@ use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::api::WorkerLanguage;
-use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2};
+use crate::types::worker_v2::{ExecuteRequestV2, ExecuteResponseV2, ProgressEventV2};
 use crate::worker::error::WorkerError;
 use crate::worker::{
     BatchInferRequest, BatchInferResponse, InferRequest, InferResponse, WorkerCapabilities,
@@ -51,6 +51,7 @@ enum WorkerResponse {
     Infer { response: InferResponse },
     BatchInfer { response: BatchInferResponse },
     ExecuteV2 { response: ExecuteResponseV2 },
+    ProgressV2 { event: ProgressEventV2 },
     Health { response: WorkerHealthResponse },
     Capabilities { response: WorkerCapabilities },
     Shutdown,
@@ -288,6 +289,16 @@ impl TcpWorkerHandle {
         &mut self,
         request: &ExecuteRequestV2,
     ) -> Result<ExecuteResponseV2, WorkerError> {
+        self.execute_v2_with_progress(request, None).await
+    }
+
+    /// Send an `execute_v2` request over TCP, forwarding intermediate
+    /// progress events through an optional async channel.
+    pub async fn execute_v2_with_progress(
+        &mut self,
+        request: &ExecuteRequestV2,
+        progress_tx: Option<&tokio::sync::mpsc::Sender<ProgressEventV2>>,
+    ) -> Result<ExecuteResponseV2, WorkerError> {
         self.last_activity = tokio::time::Instant::now();
         self.write_request(&WorkerRequest::ExecuteV2 { request })
             .await?;
@@ -296,22 +307,35 @@ impl TcpWorkerHandle {
             self.info.audio_task_timeout_s,
             self.info.analysis_task_timeout_s,
         );
-        let timeout = Duration::from_secs(timeout_s);
-        let response = tokio::time::timeout(timeout, self.read_response())
-            .await
-            .map_err(|_| {
-                WorkerError::Protocol(format!(
-                    "timeout ({timeout_s}s) waiting for TCP execute_v2 response ({:?})",
-                    request.task
-                ))
-            })??;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_s);
 
-        match response {
-            WorkerResponse::ExecuteV2 { response } => Ok(response),
-            WorkerResponse::Error { error } => Err(WorkerError::WorkerResponse(error)),
-            other => Err(WorkerError::Protocol(format!(
-                "unexpected TCP response for execute_v2: {other:?}"
-            ))),
+        loop {
+            let response = tokio::time::timeout_at(deadline, self.read_response())
+                .await
+                .map_err(|_| {
+                    WorkerError::Protocol(format!(
+                        "timeout ({timeout_s}s) waiting for TCP execute_v2 response ({:?})",
+                        request.task
+                    ))
+                })??;
+
+            match response {
+                WorkerResponse::ProgressV2 { event } => {
+                    if let Some(tx) = progress_tx {
+                        let _ = tx.try_send(event);
+                    }
+                    continue;
+                }
+                WorkerResponse::ExecuteV2 { response } => return Ok(response),
+                WorkerResponse::Error { error } => {
+                    return Err(WorkerError::WorkerResponse(error));
+                }
+                other => {
+                    return Err(WorkerError::Protocol(format!(
+                        "unexpected TCP response for execute_v2: {other:?}"
+                    )));
+                }
+            }
         }
     }
 

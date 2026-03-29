@@ -43,13 +43,13 @@ pub struct JobSubmission {
     pub media_files: Vec<String>,
     /// Key into server's media_mappings config (e.g. "childes-data").
     #[serde(default)]
-    pub media_mapping: String,
+    pub media_mapping: batchalign_types::paths::MediaMappingKey,
     /// Subdirectory under the mapped root (e.g. "Eng-NA/MacWhinney/0young-ASR").
     #[serde(default)]
-    pub media_subdir: String,
+    pub media_subdir: batchalign_types::paths::RepoRelativePath,
     /// Client's input directory path (for dashboard display).
     #[serde(default)]
-    pub source_dir: String,
+    pub source_dir: batchalign_types::paths::ClientPath,
     /// Typed command options (engine selections, processing flags, etc.).
     #[schema(value_type = serde_json::Value)]
     pub options: CommandOptions,
@@ -60,10 +60,10 @@ pub struct JobSubmission {
     pub paths_mode: bool,
     /// Absolute paths to read input files from (paths_mode only).
     #[serde(default)]
-    pub source_paths: Vec<String>,
+    pub source_paths: Vec<batchalign_types::paths::ClientPath>,
     /// Absolute paths to write output files to (paths_mode only).
     #[serde(default)]
-    pub output_paths: Vec<String>,
+    pub output_paths: Vec<batchalign_types::paths::ClientPath>,
     /// Human-readable filenames for display (paths_mode only, optional).
     #[serde(default)]
     pub display_names: Vec<String>,
@@ -82,7 +82,7 @@ pub struct JobSubmission {
     ///
     /// Must be the same length as `source_paths` when non-empty.
     #[serde(default)]
-    pub before_paths: Vec<String>,
+    pub before_paths: Vec<batchalign_types::paths::ClientPath>,
 }
 
 pub(crate) fn default_lang() -> LanguageSpec {
@@ -228,18 +228,21 @@ impl JobSubmission {
 pub struct ValidationError(pub String);
 
 // ---------------------------------------------------------------------------
-// Stanza language support table
+// Stanza language support — hardcoded fallback table
 // ---------------------------------------------------------------------------
 
-/// ISO 639-3 codes that Stanza supports via the `iso3_to_alpha2()` mapping in
-/// `batchalign/worker/_stanza_loading.py`. This table must be kept in sync with
-/// the Python mapping — it is the Rust-side mirror used for fast pre-validation
-/// at job submission time.
+/// Hardcoded fallback table of ISO 639-3 codes supported by Stanza.
 ///
-/// The table includes every 3-letter code from the Python mapping plus any
-/// 2-letter codes that would pass through unchanged (Stanza accepts its own
-/// ISO 639-1 codes directly). We only check 3-letter codes here because
-/// batchalign uses ISO 639-3 everywhere.
+/// **DEPRECATED as the primary check.** The authoritative source is now
+/// the `StanzaRegistry` built from Stanza's `resources.json` at worker
+/// startup. This table is ONLY used as a pre-validation safety net when
+/// the registry hasn't been populated yet (before first worker spawn).
+///
+/// Use `StanzaRegistry::supports_morphosyntax()` for authoritative checks
+/// when the registry is available (via `WorkerPool::stanza_registry()`).
+///
+/// See `batchalign/worker/_stanza_capabilities.py` for the authoritative
+/// Python-side table builder.
 const STANZA_SUPPORTED_ISO3: &[&str] = &[
     "ara", "ben", "bul", "cat", "ces", "cmn", "cym", "dan", "deu", "ell", "eng", "est", "eus",
     "fas", "fin", "fra", "gla", "gle", "glg", "heb", "hin", "hrv", "hun", "hye", "ind", "isl",
@@ -263,6 +266,58 @@ fn stanza_supported_languages_help() -> String {
         .join(",\n  ")
 }
 
+/// Validate a job's language support using the runtime Stanza registry.
+///
+/// This is the **authoritative** language validation, called from
+/// `materialize_submission_job()` where the registry is available.
+/// It supersedes the hardcoded `is_stanza_supported_language()` check
+/// in `validate_language_support()`, which acts as a conservative
+/// pre-filter only.
+///
+/// Returns `Ok(())` when:
+/// - The command doesn't use Stanza
+/// - The language is auto-detect
+/// - The registry confirms the language has required processors
+/// - The registry is not populated (fallback to hardcoded table)
+pub fn validate_language_with_registry(
+    submission: &JobSubmission,
+    registry: Option<&crate::stanza_registry::StanzaRegistry>,
+) -> Result<(), ValidationError> {
+    let lang = match &submission.lang {
+        LanguageSpec::Auto => return Ok(()),
+        LanguageSpec::Resolved(code) => code,
+    };
+
+    let uses_stanza = matches!(
+        &submission.options,
+        CommandOptions::Morphotag(_)
+            | CommandOptions::Utseg(_)
+            | CommandOptions::Coref(_)
+            | CommandOptions::Compare(_)
+    );
+
+    if !uses_stanza {
+        return Ok(());
+    }
+
+    let Some(reg) = registry else {
+        // Registry not populated — the hardcoded table in validate() already
+        // caught obviously unsupported languages.
+        return Ok(());
+    };
+
+    if !reg.supports_morphosyntax(lang.as_ref()) {
+        let supported = reg.supported_languages().join(", ");
+        return Err(ValidationError(format!(
+            "Language '{}' is not supported by Stanza on this server. \
+             Supported languages: {}",
+            lang, supported
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,9 +331,9 @@ mod tests {
             num_speakers: NumSpeakers(1),
             files: vec![],
             media_files: vec![],
-            media_mapping: String::new(),
-            media_subdir: String::new(),
-            source_dir: String::new(),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
+            source_dir: Default::default(),
             options: CommandOptions::Morphotag(MorphotagOptions {
                 common: CommonOptions::default(),
                 retokenize: false,
@@ -301,9 +356,9 @@ mod tests {
             num_speakers: NumSpeakers(1),
             files: vec![],
             media_files: vec![],
-            media_mapping: String::new(),
-            media_subdir: String::new(),
-            source_dir: String::new(),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
+            source_dir: Default::default(),
             options: CommandOptions::Utseg(UtsegOptions {
                 common: CommonOptions::default(),
                 merge_abbrev: Default::default(),

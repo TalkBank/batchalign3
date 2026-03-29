@@ -1,7 +1,7 @@
 # User Workflow Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-27 23:16 EDT
+**Last updated:** 2026-03-28 17:54 EDT
 
 This page describes durable differences between:
 
@@ -134,7 +134,10 @@ explicit no-ops in Rust CLI compatibility mode, while others (`--force-cpu`,
 This keeps BA2-era scripts from breaking without pretending every legacy flag still
 does real work.
 
-The explicit no-op globals currently accepted for script continuity are:
+The explicit no-op globals currently accepted for script continuity are
+listed below. Note: these flags did not exist in the Jan 9 BA2 baseline —
+they were all added in the Feb 9 master. The no-op compatibility is with
+Feb 9 BA2 scripts, not Jan 9:
 
 - `--memlog`
 - `--mem-guard`

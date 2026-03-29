@@ -127,11 +127,16 @@ impl DispatchHostContext {
         &self.sink
     }
 
-    pub(crate) fn media_mapping_root(&self, key: &str) -> Option<&str> {
-        self.config.media_mappings.get(key).map(String::as_str)
+    pub(crate) fn media_mapping_root(
+        &self,
+        key: &str,
+    ) -> Option<&batchalign_types::paths::ServerPath> {
+        self.config
+            .media_mappings
+            .get(&batchalign_types::paths::MediaMappingKey::new(key))
     }
 
-    pub(crate) fn media_roots(&self) -> &[String] {
+    pub(crate) fn media_roots(&self) -> &[batchalign_types::paths::ServerPath] {
         &self.config.media_roots
     }
 
@@ -1008,12 +1013,17 @@ async fn dispatch_test_echo_files(
         let result_filename = result_filename_for_command(job.dispatch.command, filename);
 
         let output_text = if file.has_chat {
-            let read_path = if job.filesystem.paths_mode
+            let read_path: std::path::PathBuf = if job.filesystem.paths_mode
                 && file.file_index < job.filesystem.source_paths.len()
             {
-                job.filesystem.source_paths[file.file_index].clone()
+                job.filesystem.source_paths[file.file_index]
+                    .assume_shared_filesystem()
+                    .as_path()
+                    .to_owned()
             } else {
                 job.filesystem.staging_dir.join("input").join(filename)
+                    .as_path()
+                    .to_owned()
             };
             match tokio::fs::read_to_string(&read_path).await {
                 Ok(content) => content,
@@ -1032,7 +1042,9 @@ async fn dispatch_test_echo_files(
         let write_path =
             if job.filesystem.paths_mode && file.file_index < job.filesystem.output_paths.len() {
                 apply_result_filename(
-                    &job.filesystem.output_paths[file.file_index],
+                    job.filesystem.output_paths[file.file_index]
+                        .assume_shared_filesystem()
+                        .as_path(),
                     &result_filename,
                 )
             } else {
@@ -1040,6 +1052,8 @@ async fn dispatch_test_echo_files(
                     .staging_dir
                     .join("output")
                     .join(&result_filename)
+                    .as_path()
+                    .to_owned()
             };
 
         if let Some(parent) = write_path.parent() {

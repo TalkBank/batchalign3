@@ -275,6 +275,29 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Aggregate progress for a batched infer job across all language groups. */
+        BatchInferProgress: {
+            /**
+             * @description Per-language-group progress, keyed by language code.
+             *     Uses BTreeMap for deterministic JSON serialization.
+             */
+            language_groups: {
+                [key: string]: components["schemas"]["LanguageGroupProgress"];
+            };
+        };
+        /**
+         * @description A path on the submitting client's filesystem.
+         *
+         *     The server MUST NOT do filesystem I/O on this directly — it's metadata
+         *     only.  The only way to convert it to a [`ServerPath`] for I/O is via
+         *     [`assume_shared_filesystem`](Self::assume_shared_filesystem), which
+         *     requires the caller to verify that the server shares the client's
+         *     filesystem (paths_mode with a local daemon).
+         *
+         *     Deliberately does NOT implement `AsRef<Path>` to prevent accidental
+         *     filesystem operations.
+         */
+        ClientPath: string;
         /**
          * @description Engine category that supports backend overrides.
          *
@@ -638,6 +661,7 @@ export interface components {
          */
         JobInfo: {
             active_lease?: null | components["schemas"]["LeaseRecord"];
+            batch_progress?: null | components["schemas"]["BatchInferProgress"];
             /** @description Batchalign command that was submitted (e.g. "morphotag", "align"). */
             command: components["schemas"]["ReleasedCommand"];
             /** @description ISO 8601 timestamp of when the job reached a terminal state. */
@@ -788,7 +812,7 @@ export interface components {
              *
              *     Must be the same length as `source_paths` when non-empty.
              */
-            before_paths?: string[];
+            before_paths?: components["schemas"]["ClientPath"][];
             /** @description Batchalign command (align, morphotag, etc.). */
             command: components["schemas"]["ReleasedCommand"];
             /**
@@ -810,21 +834,21 @@ export interface components {
             /** @description Media filenames for the server to resolve from media_roots (transcribe only). */
             media_files?: string[];
             /** @description Key into server's media_mappings config (e.g. "childes-data"). */
-            media_mapping?: string;
+            media_mapping?: components["schemas"]["MediaMappingKey"];
             /** @description Subdirectory under the mapped root (e.g. "Eng-NA/MacWhinney/0young-ASR"). */
-            media_subdir?: string;
+            media_subdir?: components["schemas"]["RepoRelativePath"];
             /** @description Number of speakers. */
             num_speakers?: components["schemas"]["NumSpeakers"];
             /** @description Typed command options (engine selections, processing flags, etc.). */
             options: unknown;
             /** @description Absolute paths to write output files to (paths_mode only). */
-            output_paths?: string[];
+            output_paths?: components["schemas"]["ClientPath"][];
             /** @description When true, server reads/writes files directly via source_paths/output_paths. */
             paths_mode?: boolean;
             /** @description Client's input directory path (for dashboard display). */
-            source_dir?: string;
+            source_dir?: components["schemas"]["ClientPath"];
             /** @description Absolute paths to read input files from (paths_mode only). */
-            source_paths?: string[];
+            source_paths?: components["schemas"]["ClientPath"][];
         };
         /**
          * @description 3-letter ISO 639-3 language code (e.g. `"eng"`, `"spa"`).
@@ -834,6 +858,21 @@ export interface components {
          *     [`LanguageSpec`] at boundaries where auto-detection is meaningful.
          */
         LanguageCode3: string;
+        /** @description Progress snapshot for one language group within a batched infer job. */
+        LanguageGroupProgress: {
+            /**
+             * Format: int64
+             * @description Number of utterances completed so far.
+             */
+            completed_utterances: number;
+            /** @description ISO 639-3 language code (e.g. "fra", "eng"). */
+            lang: string;
+            /**
+             * Format: int64
+             * @description Total utterances in this language group.
+             */
+            total_utterances: number;
+        };
         /**
          * @description Language specification from the CLI or job submission.
          *
@@ -862,6 +901,13 @@ export interface components {
             leased_by_node: components["schemas"]["NodeId"];
         };
         /**
+         * @description Key into `ServerConfig.media_mappings` (e.g. `"slabank-data"`).
+         *
+         *     Not a filesystem path — it's a logical name that maps to a
+         *     [`ServerPath`] via the server's configuration.
+         */
+        MediaMappingKey: string;
+        /**
          * Format: int64
          * @description Physical memory quantity in megabytes.
          *
@@ -886,6 +932,13 @@ export interface components {
          * @enum {string}
          */
         ReleasedCommand: "align" | "transcribe" | "transcribe_s" | "translate" | "morphotag" | "coref" | "utseg" | "benchmark" | "opensmile" | "compare" | "avqi";
+        /**
+         * @description A path relative to a data repo root (e.g. `"French/Newcastle/Photos/13"`).
+         *
+         *     Valid on any machine that has the repo cloned, but must be combined
+         *     with a server root path to produce a [`ServerPath`] for I/O.
+         */
+        RepoRelativePath: string;
         /**
          * @description Response body for mutating operations that return a status confirmation
          *     (e.g. cancel, delete, restart).
@@ -930,6 +983,11 @@ export interface components {
         UnixTimestamp: number;
         /**
          * @description Lifecycle state of background model warmup.
+         *     Background warmup lifecycle state for the worker pool.
+         *
+         *     The server pre-spawns workers at startup ("warmup") so the first job
+         *     does not pay cold-start costs. This enum tracks that lifecycle for
+         *     the health endpoint.
          * @enum {string}
          */
         WarmupStatus: "not_started" | "in_progress" | "complete";

@@ -13,6 +13,7 @@ pub use super::domain::*;
 pub use super::request::*;
 pub use super::response::*;
 pub use super::status::*;
+pub use crate::runner::util::batch_progress::{BatchInferProgress, LanguageGroupProgress};
 
 #[cfg(test)]
 mod tests {
@@ -89,6 +90,7 @@ mod tests {
             next_eligible_at: None,
             num_workers: None,
             active_lease: None,
+            batch_progress: None,
             control_plane: Some(JobControlPlaneInfo::temporal_with_execution(
                 TemporalWorkflowExecutionInfo {
                     workflow_id: "job-temporal".into(),
@@ -123,9 +125,9 @@ mod tests {
             num_speakers: NumSpeakers(1),
             files: vec![],
             media_files: vec![],
-            media_mapping: String::new(),
-            media_subdir: String::new(),
-            source_dir: String::new(),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
+            source_dir: Default::default(),
             options: morphotag_opts,
             paths_mode: true,
             source_paths: vec![],
@@ -346,6 +348,7 @@ mod tests {
                 heartbeat_at: UnixTimestamp(1700000001.0),
                 expires_at: UnixTimestamp(1700000301.0),
             }),
+            batch_progress: None,
             control_plane: None,
         };
         let json = serde_json::to_string_pretty(&info).unwrap();

@@ -160,9 +160,14 @@ async fn process_one_transcribe_file(
     // Resolve audio path
     let original_audio_path: PathBuf =
         if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
-            job.filesystem.source_paths[file_index].clone()
+            job.filesystem.source_paths[file_index]
+                .assume_shared_filesystem()
+                .as_path()
+                .to_owned()
         } else {
             job.filesystem.staging_dir.join("input").join(filename)
+                .as_path()
+                .to_owned()
         };
     let audio_path = original_audio_path.clone();
 
@@ -366,18 +371,19 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: "localhost".into(),
-                source_dir: std::path::PathBuf::new(),
+                source_dir: Default::default(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: vec![DisplayPath::from(filename)],
                 has_chat: vec![false],
-                staging_dir: std::path::PathBuf::new(),
+                staging_dir: Default::default(),
                 paths_mode: true,
-                source_paths: vec![source_path.to_path_buf()],
-                output_paths: vec![output_path.to_path_buf()],
+                source_paths: vec![batchalign_types::paths::ClientPath::new(source_path.to_string_lossy().to_string())],
+                output_paths: vec![batchalign_types::paths::ClientPath::new(output_path.to_string_lossy().to_string())],
                 before_paths: Vec::new(),
-                media_mapping: String::new(),
-                media_subdir: String::new(),
+                media_mapping: Default::default(),
+                media_subdir: Default::default(),
+                source_dir: Default::default(),
             },
             execution: JobExecutionState {
                 status: JobStatus::Queued,

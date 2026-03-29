@@ -137,6 +137,13 @@ class FaEngine(str, Enum):
     WAV2VEC_CANTO = "wav2vec_canto"
 
 
+class StanzaLanguageProcessors(BaseModel):
+    """Per-language Stanza processor availability."""
+
+    alpha2: str
+    processors: list[str]
+
+
 class CapabilitiesResponse(BaseModel):
     """Response body for capabilities operation."""
 
@@ -144,6 +151,9 @@ class CapabilitiesResponse(BaseModel):
     free_threaded: bool
     infer_tasks: list[InferTask]
     engine_versions: dict[InferTask, str]
+    stanza_capabilities: dict[str, StanzaLanguageProcessors] = Field(
+        default_factory=dict
+    )
 
 
 class InferRequest(BaseModel):
@@ -241,6 +251,11 @@ class _WorkerState:
         # engine-specific routing here instead of branching on raw state in the
         # hot request path.
         self.batch_infer_handlers: dict[InferTask, BatchInferHandler] = {}
+
+        # Transient progress callback set by the V2 execution path during a
+        # long-running morphosyntax batch.  Read by the handler to emit
+        # ProgressEventV2 lines.  None when no V2 request is in flight.
+        self.active_progress_callback: Callable[[int, int], None] | None = None
 
     def register_batch_infer_handler(
         self,

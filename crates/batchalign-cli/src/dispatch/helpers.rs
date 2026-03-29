@@ -57,6 +57,9 @@ impl DirectProgressTracker {
     /// Project one job snapshot into the CLI progress sink.
     pub(super) fn observe(&mut self, progress: &dyn ProgressSink, info: &JobInfo) {
         progress.update(info.completed_files.max(0) as u64, &info.file_statuses);
+        if let Some(ref bp) = info.batch_progress {
+            progress.update_batch_progress(bp);
+        }
 
         for entry in &info.file_statuses {
             let filename = entry.filename.to_string();
@@ -505,16 +508,36 @@ pub(super) fn print_failure_summary(errors: &[FileErrorDetail], total_files: u64
     eprintln!("{bar}");
 
     for error in errors {
-        let first_line = error.message.split('\n').next().unwrap_or("unknown error");
         let filename = error.filename.as_ref();
+        let lines: Vec<&str> = error.message.lines().collect();
+        let first_line = lines.first().copied().unwrap_or("unknown error");
         if let Some(bug_report_id) = error.bug_report_id.as_deref() {
             eprintln!("  \u{2717} {filename}: {first_line} (bug report: {bug_report_id})");
         } else {
             eprintln!("  \u{2717} {filename}: {first_line}");
         }
+        // Show the last few lines of worker stderr when available (the
+        // actual Python traceback or OOM message). Skip the first line
+        // which is the header we already printed.
+        if lines.len() > 1 {
+            let tail_start = if lines.len() > 6 { lines.len() - 5 } else { 1 };
+            for line in &lines[tail_start..] {
+                eprintln!("    {line}");
+            }
+        }
     }
 
     eprintln!("{bar}");
+    // Point users to where they can find more diagnostic detail.
+    if let Some(home) = dirs::home_dir() {
+        let daemon_log = home.join(".batchalign3").join("daemon.log");
+        if daemon_log.exists() {
+            eprintln!(
+                "  hint: server logs at {}",
+                daemon_log.display()
+            );
+        }
+    }
     eprintln!();
 }
 
@@ -582,6 +605,7 @@ mod tests {
             next_eligible_at: None,
             num_workers: None,
             active_lease: None,
+            batch_progress: None,
             control_plane: None,
         }
     }

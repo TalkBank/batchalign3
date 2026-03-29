@@ -124,9 +124,41 @@ def _capabilities() -> CapabilitiesResponse:
             else "rev" if has_revai_key else "whisper"
         )
 
+    # Build per-language Stanza capability map from resources.json.
+    stanza_caps: dict[str, StanzaLanguageProcessors] = {}
+    try:
+        from batchalign.worker._stanza_capabilities import get_cached_capability_table
+        from batchalign.worker._types import StanzaLanguageProcessors
+
+        table = get_cached_capability_table()
+        if table is not None:
+            for iso3, caps in table.languages.items():
+                processors = []
+                if caps.has_tokenize:
+                    processors.append("tokenize")
+                if caps.has_pos:
+                    processors.append("pos")
+                if caps.has_lemma:
+                    processors.append("lemma")
+                if caps.has_depparse:
+                    processors.append("depparse")
+                if caps.has_mwt:
+                    processors.append("mwt")
+                if caps.has_constituency:
+                    processors.append("constituency")
+                if caps.has_coref:
+                    processors.append("coref")
+                stanza_caps[iso3] = StanzaLanguageProcessors(
+                    alpha2=caps.alpha2,
+                    processors=processors,
+                )
+    except Exception as e:
+        L.warning("Failed to build stanza_capabilities: %s", e)
+
     return CapabilitiesResponse(
         commands=[],
         free_threaded=is_free_threaded(),
         infer_tasks=infer_tasks,
         engine_versions=engine_versions,
+        stanza_capabilities=stanza_caps,
     )

@@ -14,6 +14,7 @@ pub mod api {
 }
 
 pub mod domain;
+pub mod paths;
 pub mod scheduling;
 pub mod worker;
 pub mod worker_v2;

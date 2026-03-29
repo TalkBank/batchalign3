@@ -140,16 +140,16 @@ pub(super) fn prepare_paths_submission(
             num_speakers: num_speakers.into(),
             files: vec![],
             media_files: vec![],
-            media_mapping: mapping_key,
-            media_subdir: mapping_subdir,
-            source_dir: base_dir.to_string_lossy().to_string(),
+            media_mapping: mapping_key.into(),
+            media_subdir: mapping_subdir.into(),
+            source_dir: base_dir.to_string_lossy().to_string().into(),
             options: opts,
             paths_mode: true,
-            source_paths,
-            output_paths,
+            source_paths: source_paths.into_iter().map(Into::into).collect(),
+            output_paths: output_paths.into_iter().map(Into::into).collect(),
             display_names: server_names,
             debug_traces,
-            before_paths,
+            before_paths: before_paths.into_iter().map(Into::into).collect(),
         },
         effective_out,
         total_files: files.len(),
@@ -228,9 +228,9 @@ mod tests {
         .unwrap()
         .expect("expected one prepared submission");
 
-        assert_eq!(prepared.submission.media_mapping, "slabank-data");
+        assert_eq!(prepared.submission.media_mapping.as_str(), "slabank-data");
         assert_eq!(
-            prepared.submission.media_subdir,
+            prepared.submission.media_subdir.as_str(),
             "French/Newcastle/Discussion/12"
         );
     }

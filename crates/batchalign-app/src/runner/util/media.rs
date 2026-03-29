@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use batchalign_types::paths::ClientPath;
 use crate::api::ReleasedCommand;
 use crate::options::{CommandOptions, UtrEngine};
 use crate::store::{PendingJobFile, RunnerJobSnapshot};
@@ -45,7 +46,7 @@ pub(in crate::runner) fn should_preflight(
 /// Returns the set of file indices that failed validation.
 pub(in crate::runner) async fn preflight_validate_media(
     file_list: &[PendingJobFile],
-    source_paths: &[PathBuf],
+    source_paths: &[ClientPath],
     paths_mode: bool,
 ) -> HashMap<usize, String> {
     if !paths_mode {
@@ -60,24 +61,27 @@ pub(in crate::runner) async fn preflight_validate_media(
             continue;
         }
 
-        let Some(path) = source_paths.get(file.file_index) else {
+        let Some(client_path) = source_paths.get(file.file_index) else {
             failures.insert(file.file_index, "No source path for file index".to_string());
             continue;
         };
 
+        // In paths_mode the client and server share a filesystem.
+        let path = client_path.assume_shared_filesystem();
+
         // Check file exists and non-empty via metadata (one syscall)
-        match tokio::fs::metadata(path).await {
+        match tokio::fs::metadata(&path).await {
             Err(_) => {
                 failures.insert(
                     file.file_index,
-                    format!("File not found: {}", path.display()),
+                    format!("File not found: {}", path),
                 );
                 continue;
             }
             Ok(meta) if meta.len() == 0 => {
                 failures.insert(
                     file.file_index,
-                    format!("File is empty: {}", path.display()),
+                    format!("File is empty: {}", path),
                 );
                 continue;
             }
@@ -85,7 +89,7 @@ pub(in crate::runner) async fn preflight_validate_media(
         }
 
         // Check known extension
-        let ext = path
+        let ext = path.as_path()
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase());
@@ -93,13 +97,13 @@ pub(in crate::runner) async fn preflight_validate_media(
             if !KNOWN_MEDIA_EXTENSIONS.contains(&ext.as_str()) {
                 failures.insert(
                     file.file_index,
-                    format!("Unknown media format '.{ext}': {}", path.display()),
+                    format!("Unknown media format '.{ext}': {}", path),
                 );
             }
         } else {
             failures.insert(
                 file.file_index,
-                format!("File has no extension: {}", path.display()),
+                format!("File has no extension: {}", path),
             );
         }
     }
@@ -126,7 +130,10 @@ pub(in crate::runner) async fn collect_preflight_audio_paths(
             .filter_map(|file| {
                 if job.filesystem.paths_mode && file.file_index < job.filesystem.source_paths.len()
                 {
-                    Some(job.filesystem.source_paths[file.file_index].clone())
+                    Some(job.filesystem.source_paths[file.file_index]
+                        .assume_shared_filesystem()
+                        .as_path()
+                        .to_owned())
                 } else {
                     None
                 }
@@ -151,10 +158,11 @@ async fn collect_align_preflight_audio_paths(
 
     let mut paths = Vec::new();
     for file in file_list {
-        let Some(chat_path) = job.filesystem.source_paths.get(file.file_index) else {
+        let Some(client_path) = job.filesystem.source_paths.get(file.file_index) else {
             continue;
         };
-        if let Some(audio_path) = resolve_audio_for_chat(chat_path).await {
+        let server_path = client_path.assume_shared_filesystem();
+        if let Some(audio_path) = resolve_audio_for_chat(server_path.as_path()).await {
             paths.push(audio_path);
         }
     }

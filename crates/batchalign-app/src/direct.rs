@@ -165,7 +165,7 @@ impl DirectHost {
     ) -> Result<JobDebugArtifacts, ServerError> {
         let detail = self.job_detail(job_id).await?;
         let trace_file = self
-            .persist_debug_traces(job_id, &detail.staging_dir)
+            .persist_debug_traces(job_id, detail.staging_dir.as_ref())
             .await?;
         let artifacts = JobDebugArtifacts::from_job_detail(
             job_id.clone(),
@@ -263,13 +263,14 @@ mod tests {
             num_speakers: NumSpeakers(1),
             files: Vec::new(),
             media_files: Vec::new(),
-            media_mapping: String::new(),
-            media_subdir: String::new(),
+            media_mapping: Default::default(),
+            media_subdir: Default::default(),
             source_dir: source_path
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new(""))
                 .to_string_lossy()
-                .into_owned(),
+                .into_owned()
+                .into(),
             options: CommandOptions::Transcribe(TranscribeOptions {
                 common: CommonOptions::default(),
                 asr_engine: AsrEngineName::RevAi,
@@ -279,8 +280,8 @@ mod tests {
                 batch_size: 1,
             }),
             paths_mode: true,
-            source_paths: vec![source_path.to_string_lossy().into_owned()],
-            output_paths: vec![output_path.to_string_lossy().into_owned()],
+            source_paths: vec![source_path.to_string_lossy().into_owned().into()],
+            output_paths: vec![output_path.to_string_lossy().into_owned().into()],
             display_names: Vec::new(),
             debug_traces: false,
             before_paths: Vec::new(),

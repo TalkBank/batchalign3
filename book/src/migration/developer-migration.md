@@ -1,7 +1,7 @@
 # Developer Architecture Migration (batchalign2 -> batchalign3)
 
 **Status:** Current
-**Last updated:** 2026-03-27 23:16 EDT
+**Last updated:** 2026-03-28 17:54 EDT
 
 Comparison anchors for this page:
 
@@ -96,12 +96,17 @@ contracts, and CHAT ownership into Rust.
 
 ### batchalign2 model
 
-batchalign2-master (anchored at `84ad500b`) uses Python's `concurrent.futures`
-directly:
+**Jan 9 baseline (`84ad500b`):** Purely sequential. `dispatch.py` (196 lines)
+processes files one at a time in a simple for-loop — no `ProcessPoolExecutor`,
+no `ThreadPoolExecutor`, no adaptive workers, no file sorting, no shared-models
+mode. The pipeline is created once and called on each file sequentially.
+
+**Feb 9 master (`e8f8bfad`):** Adds full concurrent dispatch (1,096 lines in
+`dispatch.py`). Uses Python's `concurrent.futures`:
 
 ```mermaid
 flowchart TD
-    cli["CLI dispatch"]
+    cli["CLI dispatch\n(Feb 9 only)"]
     classify{"Engine pool-safe?"}
     thread["ThreadPoolExecutor\n(shared pipeline, mutex)"]
     process["ProcessPoolExecutor\n(forked, model copy per worker)"]
@@ -117,7 +122,7 @@ flowchart TD
     process --> file2
 ```
 
-Key characteristics:
+Key characteristics (Feb 9 only — none of these exist in Jan 9):
 
 - **Pool-safe engines** (Rev.AI, Google Translate): `ThreadPoolExecutor` — one
   pipeline loaded in the main process, threads share models via a mutex.
@@ -133,7 +138,7 @@ Key characteristics:
 - **Optional shared-models mode** (`--shared-models`): uses `fork()` to inherit
   parent's loaded models. Linux-only, disabled on macOS+MPS, crash-prone.
 
-Memory characteristics (from BA2 benchmarks):
+Memory characteristics (from Feb 9 BA2 benchmarks):
 
 | Workload | Per-worker peak | Workers | Total |
 |----------|----------------|---------|-------|
@@ -351,8 +356,10 @@ Batchalign3 makes concurrency explicit at architecture boundaries:
 - queueable jobs with durable status and logs,
 - explicit server health, job status, and observable daemon/server boundaries.
 
-BA2 had no concurrency model: it spawned one process per file, loaded all
-models fresh each time, and had no mechanism to share state across runs.
+Jan 9 BA2 had no concurrency: it processed files sequentially in the main
+process, loaded all models fresh each time, and had no mechanism to share state
+across runs. Feb 9 BA2 added concurrent dispatch (see Section 2), but workers
+were still job-scoped and models were reloaded from scratch per job.
 In BA3, contributors should model command execution as staged orchestration
 across explicit runtime boundaries.
 
@@ -394,9 +401,6 @@ implementation churn.
 
 Migration-era quality now depends on layered tests:
 
-- contract tests for the direct Python pipeline facade
-  (`batchalign/tests/test_pipeline_api.py` — operation records, provider
-  adapters, and Rust-owned pipeline execution),
 - golden tests for edge corpora (repeat/retrace/overlap/multilingual),
 - no-DP-runtime allowlist tests
   (`batchalign/tests/test_dp_allowlist.py` — Rust PyO3 call sites, chat-ops

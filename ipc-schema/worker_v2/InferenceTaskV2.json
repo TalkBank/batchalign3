@@ -1,70 +1,52 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "InferenceTaskV2",
   "description": "High-level V2 task family.",
   "oneOf": [
     {
       "description": "Morphosyntax tagging.",
       "type": "string",
-      "enum": [
-        "morphosyntax"
-      ]
+      "const": "morphosyntax"
     },
     {
       "description": "Utterance segmentation.",
       "type": "string",
-      "enum": [
-        "utseg"
-      ]
+      "const": "utseg"
     },
     {
       "description": "Machine translation.",
       "type": "string",
-      "enum": [
-        "translate"
-      ]
+      "const": "translate"
     },
     {
       "description": "Coreference annotation.",
       "type": "string",
-      "enum": [
-        "coref"
-      ]
+      "const": "coref"
     },
     {
       "description": "Automatic speech recognition.",
       "type": "string",
-      "enum": [
-        "asr"
-      ]
+      "const": "asr"
     },
     {
       "description": "Forced alignment.",
       "type": "string",
-      "enum": [
-        "forced_alignment"
-      ]
+      "const": "forced_alignment"
     },
     {
       "description": "Speaker diarization.",
       "type": "string",
-      "enum": [
-        "speaker"
-      ]
+      "const": "speaker"
     },
     {
       "description": "OpenSMILE feature extraction.",
       "type": "string",
-      "enum": [
-        "opensmile"
-      ]
+      "const": "opensmile"
     },
     {
       "description": "AVQI feature extraction.",
       "type": "string",
-      "enum": [
-        "avqi"
-      ]
+      "const": "avqi"
     }
   ]
 }

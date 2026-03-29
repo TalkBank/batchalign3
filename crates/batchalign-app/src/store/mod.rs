@@ -23,7 +23,6 @@ pub(crate) use queries::{
     AttemptFinishRecord, AttemptStartRecord, PersistedFileUpdate, PersistedJobUpdate,
 };
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -219,7 +218,7 @@ pub struct JobDetail {
     /// download/writeback.
     pub paths_mode: bool,
     /// Server-local directory containing staged result files.
-    pub staging_dir: PathBuf,
+    pub staging_dir: batchalign_types::paths::ServerPath,
     /// Per-file result entries for files that have reached a terminal state.
     pub results: Vec<FileResultEntry>,
     /// Current status of every file in the job, for returning alongside results.

@@ -99,7 +99,7 @@ pub(crate) async fn process_morphosyntax_batch(
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
 ) -> TextBatchFileResults {
-    run_morphosyntax_batch_impl(files, services, params).await
+    run_morphosyntax_batch_impl(files, services, params, None).await
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ pub(crate) async fn process_morphosyntax_incremental(
     if !misses.is_empty() {
         let miss_line_indices: Vec<usize> = misses.iter().map(|(idx, ..)| *idx).collect();
 
-        match infer_batch(services.pool, &misses, params.lang, params.mwt, retokenize).await {
+        match infer_batch(services.pool, &misses, params.lang, params.mwt, retokenize, None).await {
             Ok(responses) => {
                 match inject_results(
                     &parser,

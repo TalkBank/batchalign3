@@ -1,7 +1,7 @@
 # Batchalign2 -> Batchalign3 Migration Book
 
 **Status:** Current
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-28 17:54 EDT
 
 ## Scope
 
@@ -66,7 +66,7 @@ This page is the summary layer. Detailed command-by-command changes now live in:
 | Core CHAT handling | Python lexer/parser/generator + string transforms | Rust parser + typed AST + serializer + structured validation |
 | Alignment remap strategy | DP-heavy fallback remapping and post-hoc reconstruction | Identity/index-first deterministic mapping with narrower, explicit fallback policies |
 | Runtime topology | Primarily local CLI dispatch | Local daemon, HTTP server, jobs/logs tooling, contributor-facing OpenAPI export |
-| Concurrency | Simpler local execution | Daemon/server job lifecycle, persistent worker subprocesses, resumable state |
+| Concurrency | Sequential file processing (Jan 9); concurrent dispatch added in Feb 9 but job-scoped | Daemon/server job lifecycle, persistent worker subprocesses, resumable state |
 | Extensibility | Forking/custom branches | In-tree engines plus `batchalign.pipeline_api`; no public entry-point plugin loader in the current release |
 | UI/ops | Terminal-centric | Web dashboard plus health/jobs/log surfaces; desktop/Tauri launcher deferred from first release |
 | Test posture | Lower coverage and fewer corpus gates | broad golden/integration suites + policy guards |

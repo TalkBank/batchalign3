@@ -87,6 +87,11 @@ pub(super) type WorkerKey = (WorkerTarget, WorkerLanguage, String);
     utoipa::ToSchema,
 )]
 #[serde(rename_all = "snake_case")]
+/// Background warmup lifecycle state for the worker pool.
+///
+/// The server pre-spawns workers at startup ("warmup") so the first job
+/// does not pay cold-start costs. This enum tracks that lifecycle for
+/// the health endpoint.
 pub enum WarmupStatus {
     /// No warmup has been requested yet (initial state).
     #[default]
@@ -321,6 +326,9 @@ pub struct WorkerPool {
     warmup_status: AtomicU8,
     /// Lazily detected worker capabilities (populated on first worker spawn).
     lazy_capabilities: std::sync::OnceLock<WorkerCapabilities>,
+    /// Per-language Stanza processor registry (populated from first worker's
+    /// stanza_capabilities field). Used for submission validation and dispatch.
+    stanza_registry: std::sync::OnceLock<Box<crate::stanza_registry::StanzaRegistry>>,
 }
 
 impl WorkerPool {
@@ -359,6 +367,7 @@ impl WorkerPool {
             cancel: CancellationToken::new(),
             warmup_status: AtomicU8::new(WarmupStatus::NotStarted.as_u8()),
             lazy_capabilities: std::sync::OnceLock::new(),
+            stanza_registry: std::sync::OnceLock::new(),
         }
     }
 
@@ -377,6 +386,25 @@ impl WorkerPool {
     /// languages × workers_per_key exceeds the global cap.
     pub fn effective_max_total_workers(&self) -> usize {
         self.config.effective_max_total_workers()
+    }
+
+    /// Access the per-language Stanza processor registry.
+    ///
+    /// Returns `None` until the first worker reports its capabilities.
+    pub fn stanza_registry(&self) -> Option<&crate::stanza_registry::StanzaRegistry> {
+        self.stanza_registry.get().map(|b| b.as_ref())
+    }
+
+    /// Record worker capabilities and populate the Stanza registry.
+    fn record_capabilities(&self, caps: WorkerCapabilities) {
+        if !caps.stanza_capabilities.is_empty() && self.stanza_registry.get().is_none() {
+            let _ = self.stanza_registry.set(Box::new(
+                crate::stanza_registry::StanzaRegistry::from_capabilities(
+                    &caps.stanza_capabilities,
+                ),
+            ));
+        }
+        let _ = self.lazy_capabilities.set(caps);
     }
 
     /// Discover pre-started TCP workers from the registry file.
@@ -510,9 +538,10 @@ impl WorkerPool {
             info!(
                 infer_tasks = ?caps.infer_tasks,
                 engine_versions = ?caps.engine_versions,
+                stanza_languages = caps.stanza_capabilities.len(),
                 "Recorded detected worker capabilities from registry discovery"
             );
-            let _ = self.lazy_capabilities.set(caps);
+            self.record_capabilities(caps);
         }
 
         count
@@ -685,6 +714,18 @@ impl WorkerPool {
         lang: impl Into<WorkerLanguage>,
         request: &ExecuteRequestV2,
     ) -> Result<ExecuteResponseV2, WorkerError> {
+        self.dispatch_execute_v2_with_progress(lang, request, None)
+            .await
+    }
+
+    /// Dispatch a V2 execute request, forwarding intermediate progress events
+    /// through an optional async channel.
+    pub async fn dispatch_execute_v2_with_progress(
+        &self,
+        lang: impl Into<WorkerLanguage>,
+        request: &ExecuteRequestV2,
+        progress_tx: Option<&tokio::sync::mpsc::Sender<crate::types::worker_v2::ProgressEventV2>>,
+    ) -> Result<ExecuteResponseV2, WorkerError> {
         let lang = lang.into();
         let (target, worker_lang, engine_overrides) = execute_v2_worker_key(
             lang,
@@ -694,6 +735,7 @@ impl WorkerPool {
         )?;
 
         if target.is_concurrent() {
+            // GPU workers don't support progress forwarding yet.
             return self
                 .dispatch_gpu_execute_v2(&target, &worker_lang, &engine_overrides, request)
                 .await;
@@ -704,7 +746,9 @@ impl WorkerPool {
             && let Some(mut tcp_handle) =
                 self.try_checkout_tcp(&target, &worker_lang, &engine_overrides)
         {
-            let result = tcp_handle.execute_v2(request).await;
+            let result = tcp_handle
+                .execute_v2_with_progress(request, progress_tx)
+                .await;
             self.return_tcp_worker(tcp_handle, &target, &worker_lang, &engine_overrides);
             return result;
         }
@@ -713,7 +757,7 @@ impl WorkerPool {
         let mut worker = self
             .checkout(&target, &worker_lang, &engine_overrides)
             .await?;
-        worker.execute_v2(request).await
+        worker.execute_v2_with_progress(request, progress_tx).await
     }
 
     /// Dispatch a V2 execute request to a GPU worker.
@@ -785,7 +829,7 @@ impl WorkerPool {
                     engine_versions = ?caps.engine_versions,
                     "Recorded detected worker capabilities"
                 );
-                let _ = self.lazy_capabilities.set(caps);
+                self.record_capabilities(caps);
             }
             self.return_tcp_worker(tcp_handle, &target, &lang, engine_overrides);
             return Ok(());
@@ -877,7 +921,7 @@ impl WorkerPool {
             engine_versions = ?caps.engine_versions,
             "Recorded detected worker capabilities"
         );
-        let _ = self.lazy_capabilities.set(caps);
+        self.record_capabilities(caps);
         Ok(())
     }
 
@@ -1070,7 +1114,7 @@ impl WorkerPool {
                             engine_versions = ?caps.engine_versions,
                             "Recorded detected worker capabilities"
                         );
-                        let _ = self.lazy_capabilities.set(caps);
+                        self.record_capabilities(caps);
                     }
                     Err(e) => {
                         warn!(

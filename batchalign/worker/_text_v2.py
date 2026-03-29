@@ -117,15 +117,35 @@ def execute_morphosyntax_request_v2(
             load_json_attachment_v2(request.attachments, morphosyntax_request.payload_ref_id)
         )
         _validate_item_count(batch.items, morphosyntax_request.item_count, "morphosyntax")
-        response = _require_runner(host.morphosyntax_runner, "morphosyntax")(
-            BatchInferRequest(
-                task=InferTask.MORPHOSYNTAX,
-                lang=morphosyntax_request.lang,
-                items=[item.model_dump(mode="json") for item in batch.items],
-                mwt=batch.mwt,
-                retokenize=morphosyntax_request.retokenize,
+
+        # Set up progress emission: the morphosyntax handler reads the
+        # progress callback from worker state (thread-local-safe because
+        # the sequential stdio loop is single-threaded).
+        from batchalign.worker._protocol import write_progress_event
+        from batchalign.worker._main import _state
+
+        _last_progress_time = [0.0]
+
+        def _on_progress(completed: int, total: int) -> None:
+            now = time.monotonic()
+            if now - _last_progress_time[0] < 1.0 and completed < total:
+                return
+            _last_progress_time[0] = now
+            write_progress_event(request.request_id, completed, total)
+
+        _state.active_progress_callback = _on_progress
+        try:
+            response = _require_runner(host.morphosyntax_runner, "morphosyntax")(
+                BatchInferRequest(
+                    task=InferTask.MORPHOSYNTAX,
+                    lang=morphosyntax_request.lang,
+                    items=[item.model_dump(mode="json") for item in batch.items],
+                    mwt=batch.mwt,
+                    retokenize=morphosyntax_request.retokenize,
+                )
             )
-        )
+        finally:
+            _state.active_progress_callback = None
 
         return ExecuteResponseV2(
             request_id=request.request_id,

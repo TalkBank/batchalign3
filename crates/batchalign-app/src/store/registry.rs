@@ -6,7 +6,8 @@
 //! exposes only projection/mutation helpers.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+
+use batchalign_types::paths::ServerPath;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -295,7 +296,7 @@ impl JobRegistry {
     }
 
     /// Remove one job and return its staging directory for cleanup.
-    pub(crate) async fn remove_staging_dir(&self, job_id: &JobId) -> Option<PathBuf> {
+    pub(crate) async fn remove_staging_dir(&self, job_id: &JobId) -> Option<ServerPath> {
         self.remove_job(job_id.clone(), |job| job.filesystem.staging_dir)
             .await
     }

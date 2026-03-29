@@ -1,14 +1,20 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PreparedAudioInputV2",
   "description": "Request-time reference to a prepared audio artifact.",
   "type": "object",
-  "required": [
-    "audio_ref_id"
-  ],
   "properties": {
     "audio_ref_id": {
       "description": "Artifact id of the audio descriptor included in `attachments`.",
+      "$ref": "#/$defs/WorkerArtifactIdV2"
+    }
+  },
+  "required": [
+    "audio_ref_id"
+  ],
+  "$defs": {
+    "WorkerArtifactIdV2": {
+      "description": "Stable identifier for one prepared worker artifact.",
       "type": "string"
     }
   }

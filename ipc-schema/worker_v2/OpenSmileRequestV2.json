@@ -1,17 +1,12 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "OpenSmileRequestV2",
   "description": "V2 openSMILE request payload.",
   "type": "object",
-  "required": [
-    "audio_ref_id",
-    "feature_level",
-    "feature_set"
-  ],
   "properties": {
     "audio_ref_id": {
       "description": "Reference to the prepared audio attachment.",
-      "type": "string"
+      "$ref": "#/$defs/WorkerArtifactIdV2"
     },
     "feature_level": {
       "description": "Requested openSMILE feature-level name.",
@@ -19,6 +14,17 @@
     },
     "feature_set": {
       "description": "Requested openSMILE feature-set name.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "audio_ref_id",
+    "feature_set",
+    "feature_level"
+  ],
+  "$defs": {
+    "WorkerArtifactIdV2": {
+      "description": "Stable identifier for one prepared worker artifact.",
       "type": "string"
     }
   }

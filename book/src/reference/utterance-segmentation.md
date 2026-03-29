@@ -145,6 +145,14 @@ For model-backed languages, Python may return direct typed assignments; for the
 Stanza path it returns raw constituency trees and Rust computes assignments
 locally.
 
+**Not all languages have constituency parsing.** Stanza has constituency
+models for ~11 languages (en, de, es, it, pt, da, id, ja, tr, vi, zh-hans).
+For other languages (e.g. Dutch, Polish, Russian), the utseg config builder
+omits the constituency processor and falls back to sentence-boundary
+segmentation. This is handled automatically by the Stanza capability table
+(`batchalign/worker/_stanza_capabilities.py`), which reads Stanza's
+`resources.json` to discover per-language processor availability.
+
 This is a different mechanism from the pre-CHAT utterance models above — it operates on
 already-segmented text and can refine boundaries using syntactic structure.
 It runs as part of the `morphotag` command, not the `transcribe` command.

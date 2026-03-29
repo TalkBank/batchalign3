@@ -326,6 +326,7 @@ fn stage_infer<'a, 'ctx>(ctx: &'a mut MorphosyntaxPipelineContext<'ctx>) -> Stag
             &lang_code,
             ctx.mwt,
             retokenize,
+            None,
         )
         .await?;
         Ok(())

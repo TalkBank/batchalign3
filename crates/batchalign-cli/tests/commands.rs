@@ -25,9 +25,9 @@ fn test_submission(files: Vec<FilePayload>) -> JobSubmission {
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
-        media_mapping: String::new(),
-        media_subdir: String::new(),
-        source_dir: String::new(),
+        media_mapping: Default::default(),
+        media_subdir: Default::default(),
+        source_dir: Default::default(),
         options: CommandOptions::Transcribe(TranscribeOptions {
             common: CommonOptions::default(),
             asr_engine: batchalign_app::options::AsrEngineName::RevAi,

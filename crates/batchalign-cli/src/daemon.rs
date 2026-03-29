@@ -447,7 +447,13 @@ async fn start_daemon(
     }
 
     let log_path = profile.log_file(dir);
-    let log_file = std::fs::File::create(&log_path)?;
+    // Append mode: preserve previous daemon logs across restarts.
+    // Previous behavior (File::create) truncated logs on every restart,
+    // destroying crash diagnostics from the previous session.
+    let log_file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&log_path)?;
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(log_file);
 

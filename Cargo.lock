@@ -369,6 +369,7 @@ dependencies = [
  "axum",
  "batchalign-app",
  "batchalign-chat-ops",
+ "batchalign-types",
  "clap",
  "crossterm",
  "dirs",

@@ -18,7 +18,7 @@ impl JobStore {
             lang: job.dispatch.lang.to_string(),
             num_speakers: job.dispatch.num_speakers.0,
             status: job.execution.status.to_string(),
-            staging_dir: job.filesystem.staging_dir.to_string_lossy().into_owned(),
+            staging_dir: job.filesystem.staging_dir.to_string(),
             filenames: job
                 .filesystem
                 .filenames
@@ -28,9 +28,9 @@ impl JobStore {
                 .collect(),
             has_chat: job.filesystem.has_chat.clone(),
             options: job.dispatch.options.clone(),
-            media_mapping: job.filesystem.media_mapping.clone(),
-            media_subdir: job.filesystem.media_subdir.clone(),
-            source_dir: job.source.source_dir.to_string_lossy().into_owned(),
+            media_mapping: job.filesystem.media_mapping.to_string(),
+            media_subdir: job.filesystem.media_subdir.to_string(),
+            source_dir: job.source.source_dir.as_str().to_owned(),
             submitted_by: job.source.submitted_by.clone(),
             submitted_by_name: job.source.submitted_by_name.clone(),
             submitted_at: job.schedule.submitted_at.0,
@@ -39,13 +39,13 @@ impl JobStore {
                 .filesystem
                 .source_paths
                 .iter()
-                .map(|p| p.to_string_lossy().into_owned())
+                .map(|p| p.as_str().to_owned())
                 .collect(),
             output_paths: job
                 .filesystem
                 .output_paths
                 .iter()
-                .map(|p| p.to_string_lossy().into_owned())
+                .map(|p| p.as_str().to_owned())
                 .collect(),
         };
         let job_id = job.identity.job_id.clone();

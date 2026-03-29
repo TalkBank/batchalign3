@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ValidationError, model_validator
@@ -205,6 +205,7 @@ def batch_infer_morphosyntax(
     nlp_lock: threading.Lock,
     free_threaded: bool,
     mwt_lexicon: dict[str, list[str]] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> BatchInferResponse:
     """Batch Stanza inference: (words, lang) -> UdResponse.
 
@@ -372,6 +373,14 @@ def batch_infer_morphosyntax(
             )
             if tok_ctx is not None:
                 tok_ctx.original_words = []
+
+        # Report progress: how many items have been processed so far
+        # (across all language groups).
+        if progress_callback is not None:
+            completed_so_far = sum(
+                1 for r in results if r.result != empty_ud or r.error is not None
+            )
+            progress_callback(completed_so_far, n)
 
     elapsed = time.monotonic() - t0
     if results:

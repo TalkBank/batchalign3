@@ -484,7 +484,7 @@ impl Job {
             command: self.dispatch.command,
             options: self.dispatch.options.clone(),
             lang: self.dispatch.lang.clone(),
-            source_dir: self.source.source_dir.to_string_lossy().into_owned(),
+            source_dir: self.source.source_dir.as_str().to_owned(),
             total_files: self.total_files() as i64,
             completed_files: self.execution.completed_files,
             current_file: None,
@@ -506,6 +506,7 @@ impl Job {
             next_eligible_at: self.schedule.next_eligible_at,
             num_workers: self.schedule.num_workers,
             active_lease: self.active_lease(),
+            batch_progress: None,
             control_plane: None,
         }
     }
@@ -528,7 +529,7 @@ impl Job {
             status: self.execution.status,
             command: self.dispatch.command,
             lang: self.dispatch.lang.clone(),
-            source_dir: self.source.source_dir.to_string_lossy().into_owned(),
+            source_dir: self.source.source_dir.as_str().to_owned(),
             total_files: self.total_files() as i64,
             completed_files: self.execution.completed_files,
             error_files,
@@ -640,10 +641,10 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
         .filenames
         .iter()
         .map(|fn_| {
-            let path = if incoming.source.source_dir.as_os_str().is_empty() {
+            let path = if incoming.source.source_dir.is_empty() {
                 String::from(fn_.clone())
             } else {
-                format!("{}/{fn_}", incoming.source.source_dir.display())
+                format!("{}/{fn_}", incoming.source.source_dir)
             };
             (incoming.source.submitted_by.clone(), path)
         })
@@ -655,10 +656,10 @@ pub(crate) fn find_conflicts(jobs: &HashMap<JobId, Job>, incoming: &Job) -> Vec<
             continue;
         }
         for fn_ in &active.filesystem.filenames {
-            let path = if active.source.source_dir.as_os_str().is_empty() {
+            let path = if active.source.source_dir.is_empty() {
                 String::from(fn_.clone())
             } else {
-                format!("{}/{fn_}", active.source.source_dir.display())
+                format!("{}/{fn_}", active.source.source_dir)
             };
             let key = (active.source.submitted_by.clone(), path);
             if incoming_keys.contains(&key) {
@@ -727,8 +728,9 @@ mod tests {
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),
                 before_paths: Vec::new(),
-                media_mapping: String::new(),
-                media_subdir: String::new(),
+                media_mapping: Default::default(),
+                media_subdir: Default::default(),
+                source_dir: Default::default(),
             },
             execution: JobExecutionState {
                 status: JobStatus::Queued,

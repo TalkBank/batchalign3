@@ -64,6 +64,8 @@
 - [Command Contracts](architecture/command-contracts.md)
 - [Error Handling](architecture/error-handling.md)
 - [Type-Driven Design](architecture/type-driven-design.md)
+- [Typed Path Provenance](architecture/path-provenance.md)
+- [Stanza Capability Registry](architecture/stanza-capability-registry.md)
 - [Command Trait Proposal (ADR)](architecture/command-trait-proposal.md)
 - [Recipe-Driven Command Architecture](architecture/recipe-runner-architecture.md)
 - [Parameter Design](architecture/parameter-design.md)

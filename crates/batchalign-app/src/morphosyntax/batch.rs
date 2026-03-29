@@ -39,6 +39,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     files: &[TextBatchFileInput],
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
+    progress_tx: Option<tokio::sync::mpsc::Sender<crate::types::worker_v2::ProgressEventV2>>,
 ) -> TextBatchFileResults {
     let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
         .expect("tree-sitter CHAT grammar must load");
@@ -245,7 +246,15 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             let lang3 = crate::api::LanguageCode3::try_new(lang.as_ref())
                 .unwrap_or_else(|_| params.lang.clone());
 
-            if !batchalign_chat_ops::morphosyntax::stanza_languages::is_stanza_supported(lang)
+            // Check language support via the capability registry (populated
+            // from worker's resources.json), falling back to the hardcoded
+            // table when the registry hasn't been populated yet.
+            let lang_supported = if let Some(reg) = services.pool.stanza_registry() {
+                reg.supports_morphosyntax(lang.as_ref())
+            } else {
+                batchalign_chat_ops::morphosyntax::stanza_languages::is_stanza_supported(lang)
+            };
+            if !lang_supported
             {
                 tracing::warn!(
                     lang = %lang3,
@@ -306,6 +315,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             .iter()
             .map(|d| {
                 let sem = lang_sem.clone();
+                let ptx = progress_tx.clone();
                 async move {
                     let _permit = sem.acquire().await.map_err(|_| {
                         ServerError::Validation("language group semaphore closed".into())
@@ -315,7 +325,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
                         items = d.items.len(),
                         "Dispatching morphosyntax batch for language group"
                     );
-                    infer_batch(services.pool, &d.items, &d.lang3, params.mwt, retokenize).await
+                    infer_batch(services.pool, &d.items, &d.lang3, params.mwt, retokenize, ptx.as_ref()).await
                 }
             })
             .collect();

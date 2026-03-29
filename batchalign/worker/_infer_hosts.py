@@ -81,6 +81,7 @@ def build_morphosyntax_batch_infer_handler() -> BatchInferHandler:
             nlp_lock=nlp_lock,
             free_threaded=FREE_THREADED,
             mwt_lexicon=req.mwt,
+            progress_callback=_state.active_progress_callback,
         )
 
     return _handler

@@ -195,7 +195,7 @@ pub(crate) async fn dispatch_fa_infer(
         let file = file.clone();
         let file_index = file.file_index;
         let before_path = if !before_paths.is_empty() && file_index < before_paths.len() {
-            Some(before_paths[file_index].clone())
+            Some(before_paths[file_index].assume_shared_filesystem())
         } else {
             None
         };
@@ -232,7 +232,7 @@ pub(crate) async fn dispatch_fa_infer(
                     services,
                     fa_params,
                     should_merge_abbrev,
-                    before_path: before_path.as_deref(),
+                    before_path: before_path.as_ref().map(|p| p.as_path()),
                     utr_engine: utr_engine.as_ref(),
                     utr_overlap_strategy,
                     rev_job_ids: rev_job_ids.as_ref(),
@@ -294,9 +294,14 @@ async fn process_one_fa_file(
     // Read the CHAT file
     let read_path: PathBuf =
         if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
-            job.filesystem.source_paths[file_index].clone()
+            job.filesystem.source_paths[file_index]
+                .assume_shared_filesystem()
+                .as_path()
+                .to_owned()
         } else {
             job.filesystem.staging_dir.join("input").join(filename)
+                .as_path()
+                .to_owned()
         };
     let media_mapping = job.filesystem.media_mapping.clone();
     let media_subdir = job.filesystem.media_subdir.clone();
@@ -327,7 +332,7 @@ async fn process_one_fa_file(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let mapped_subdir = media_search_subdir(filename, &media_subdir);
+    let mapped_subdir = media_search_subdir(filename, media_subdir.as_str());
     let media_dir_path = media_dir.map(Path::new);
 
     let mut original_audio_path = None;
@@ -348,14 +353,18 @@ async fn process_one_fa_file(
         original_audio_path = resolve_audio_for_chat_with_media_dir(&read_path, None).await;
     }
 
-    if original_audio_path.is_none() && !source_dir.as_os_str().is_empty() {
-        let source_path = source_dir.join(Path::new(filename).file_name().unwrap_or_default());
+    if original_audio_path.is_none() && !source_dir.is_empty() {
+        // paths_mode is active here — convert to a ServerPath for I/O.
+        let server_source_dir = source_dir.assume_shared_filesystem();
+        let source_path =
+            server_source_dir.join(Path::new(filename).file_name().unwrap_or_default());
         let source_audio =
-            resolve_audio_for_chat_with_media_dir(&source_path, media_dir.map(Path::new)).await;
+            resolve_audio_for_chat_with_media_dir(source_path.as_path(), media_dir.map(Path::new))
+                .await;
         if source_audio.is_some() {
             info!(
                 filename,
-                source_dir = %source_dir.display(),
+                source_dir = %source_dir,
                 "Resolved audio via client source directory"
             );
             original_audio_path = source_audio;
@@ -363,13 +372,13 @@ async fn process_one_fa_file(
     }
 
     if original_audio_path.is_none() && !media_mapping.is_empty() {
-        if let Some(root) = host.media_mapping_root(&media_mapping) {
+        if let Some(root) = host.media_mapping_root(media_mapping.as_str()) {
             if let Some(candidate) =
-                find_media_in_root(Path::new(root), &mapped_subdir, &stem).await
+                find_media_in_root(root.as_path(), &mapped_subdir, &stem).await
             {
                 info!(
                     filename,
-                    media_mapping,
+                    media_mapping = %media_mapping,
                     mapped_subdir = %mapped_subdir,
                     "Resolved audio via local media mapping"
                 );
@@ -378,9 +387,66 @@ async fn process_one_fa_file(
         }
     }
 
+    // Auto-detect media mapping from the source path when no explicit
+    // mapping was provided.  If the source path contains a known repo
+    // name (e.g. "slabank-data" in /Users/macw/0data/slabank-data/...),
+    // use the corresponding media_mappings root.
+    //
+    // The subdir within the media volume is computed from the source
+    // path: everything after the repo name component.  Example:
+    //   source: /Users/macw/0data/slabank-data/French/Newcastle/Photos
+    //   repo key: slabank-data
+    //   subdir within volume: French/Newcastle/Photos
+    //   media root: /Volumes/Other/slabank
+    //   search: /Volumes/Other/slabank/French/Newcastle/Photos/13/p01ana13.mp3
+    // Auto-detect media mapping from the client's source path using typed
+    // provenance-tracking path newtypes. `infer_media_mapping()` is a pure
+    // string operation on the ClientPath — it extracts the repo name component
+    // and repo-relative subdir WITHOUT filesystem I/O. This works for both
+    // local daemon (paths_mode) AND remote --server jobs where the client
+    // path is NOT on the server's filesystem.
+    if original_audio_path.is_none() && media_mapping.is_empty() {
+        // Determine the client path to use for inference.
+        let infer_client: Option<batchalign_types::paths::ClientPath> =
+            if !source_dir.is_empty() {
+                Some(source_dir.clone())
+            } else if job.filesystem.paths_mode {
+                // Fall back to the read_path (which in paths_mode is a client path).
+                Some(batchalign_types::paths::ClientPath::new(
+                    read_path.as_path().to_string_lossy().to_string(),
+                ))
+            } else {
+                None
+            };
+        if let Some(client_path) = infer_client {
+            if let Some((_inferred_key, inferred_root, repo_subdir)) =
+                batchalign_types::paths::infer_media_mapping(
+                    &client_path,
+                    &host.config().media_mappings,
+                )
+            {
+                // Combine repo-relative subdir with filename's parent dir
+                let full_subdir = repo_subdir.join(&mapped_subdir);
+                let search_dir = full_subdir.resolve_on_server(&inferred_root);
+
+                if let Some(candidate) =
+                    find_media_in_root(search_dir.as_path(), "", &stem).await
+                {
+                    info!(
+                        filename,
+                        inferred_key = %_inferred_key,
+                        full_subdir = %full_subdir,
+                        "Resolved audio via auto-detected media mapping"
+                    );
+                    original_audio_path = Some(candidate);
+                }
+            }
+        }
+    }
+
     if original_audio_path.is_none() && !host.media_roots().is_empty() {
         'roots: for root in host.media_roots() {
-            if let Some(candidate) = find_media_in_root(Path::new(root), "", &stem).await {
+            if let Some(candidate) = find_media_in_root(root.as_path(), "", &stem).await {
                 original_audio_path = Some(candidate);
                 break 'roots;
             }
@@ -395,10 +461,10 @@ async fn process_one_fa_file(
     let original_audio_path = match original_audio_path {
         Some(p) => p,
         None => {
-            let search_hint = if !source_dir.as_os_str().is_empty() {
+            let search_hint = if !source_dir.is_empty() {
                 format!(
                     "in shared source directory '{}' or via --media-dir",
-                    source_dir.display()
+                    source_dir
                 )
             } else if !media_mapping.is_empty() {
                 format!("via local media mapping '{media_mapping}' subdir '{mapped_subdir}'")
@@ -709,4 +775,59 @@ async fn process_one_fa_file(
     }
 
     FileTaskOutcome::MissingTerminalState
+}
+
+#[cfg(test)]
+mod auto_detect_tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Simulate Brian's scenario: source_dir contains "slabank-data",
+    /// media_mappings has slabank-data → /Volumes/Other/slabank.
+    /// The auto-detect should compute the full subdir and find the audio.
+    #[tokio::test]
+    async fn auto_detect_media_mapping_from_source_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let media_root = dir.path().join("slabank");
+        let nested = media_root.join("French/Newcastle/Photos/13");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("p08aul13.mp3"), b"mp3").unwrap();
+
+        // Simulate: source_dir = .../slabank-data/French/Newcastle/Photos
+        // filename = 13/p08aul13.cha
+        // media_mapping root = <tempdir>/slabank
+        let source_dir = Path::new("/Users/macw/0data/slabank-data/French/Newcastle/Photos");
+        let filename = "13/p08aul13.cha";
+        let stem = "p08aul13";
+        let mapped_subdir = media_search_subdir(filename, "");
+        assert_eq!(mapped_subdir, "13");
+
+        // Simulate infer_media_mapping_from_path
+        let inferred_key = "slabank-data";
+        let inferred_root = media_root.to_str().unwrap();
+
+        // Compute repo-relative subdir
+        let path_str = source_dir.to_string_lossy();
+        let repo_suffix = path_str
+            .split(&format!("/{inferred_key}/"))
+            .nth(1)
+            .unwrap_or("");
+        assert_eq!(repo_suffix, "French/Newcastle/Photos");
+
+        let full_subdir = if repo_suffix.is_empty() {
+            mapped_subdir.clone()
+        } else if mapped_subdir.is_empty() {
+            repo_suffix.to_string()
+        } else {
+            format!("{repo_suffix}/{mapped_subdir}")
+        };
+        assert_eq!(full_subdir, "French/Newcastle/Photos/13");
+
+        let found = find_media_in_root(Path::new(inferred_root), &full_subdir, stem).await;
+        assert!(
+            found.is_some(),
+            "Should find p08aul13.mp3 at {}/{}",
+            inferred_root, full_subdir
+        );
+    }
 }

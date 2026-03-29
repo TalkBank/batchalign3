@@ -1,7 +1,7 @@
 # Algorithms, Language, and Alignment Migration
 
 **Status:** Current
-**Last updated:** 2026-03-28 06:02 EDT
+**Last updated:** 2026-03-28 17:54 EDT
 
 Comparison anchors:
 
@@ -427,15 +427,12 @@ Mitigation strategy:
 
 Algorithmic migrations are now defended by:
 
-- perturbation and golden test matrices
-  (`batchalign/tests/test_dp_broad_validation.py`, `batchalign/tests/golden/`),
+- golden test matrices (`batchalign/tests/golden/`),
 - no-DP-runtime allowlist tests
   (`batchalign/tests/test_dp_allowlist.py` — 3 tests: Rust PyO3 call sites,
   chat-ops call sites, Python inference zero-DP),
-- corpus-level A/B validation tests
-  (`test_dp_broad_validation.py` — metrics computed in-memory per test run),
 - tracing instrumentation for mapping-mode divergence
-  (`retokenize/mapping.rs` line 64: `warn!` when falling back to
+  (`retokenize/mapping.rs` line 61: `warn!` when falling back to
   length-aware monotonic mapping).
 
 That governance change is itself part of the migration: the codebase is less
@@ -556,6 +553,26 @@ The supported language set is maintained in
 preflight) and `batchalign/worker/_stanza_loading.py` (Python-side
 mapping). Both must stay in sync.
 
+### Processor capability discovery
+
+BA2 and early BA3 both hardcoded assumptions about which Stanza
+processors are available per language. This caused runtime crashes
+when a language lacked an assumed processor.
+
+| Behavior | BA2 | BA3 (before registry) | BA3 (with registry) |
+|----------|-----|----------------------|---------------------|
+| Capability source | Hardcoded in code | Hardcoded in 7 tables | Stanza `resources.json` (authoritative) |
+| Dutch utseg | **Crash** ("constituency not known for nl") | **Crash** (same bug) | Graceful (constituency omitted, sentence-boundary fallback) |
+| MWT detection | BA2 exclusion-list inversion | Copy of BA2 exclusion list (`MWT_LANGS`) | Per-language from `resources.json` |
+| Unsupported language | Wrong model (MultilingualPipeline fallback) | Reject/skip at dispatch | Reject at submission with clear error |
+| iso3→alpha2 mapping | Hardcoded dict (56 codes) | Hardcoded dict (3 copies: Python + 2 Rust) | Derived from `pycountry` + `resources.json` |
+| Constituency availability | Always requested (crashed for 180+ languages) | Always requested (same) | Per-language check (~11 languages have it) |
+
+The capability table (`batchalign/worker/_stanza_capabilities.py`) reads
+Stanza's `resources.json` once at worker startup and reports per-language
+processor availability.  This eliminates the manual sync burden between
+Python and Rust and prevents runtime crashes from missing processors.
+
 See [Language Architecture](../architecture/language-architecture.md) for
 the remaining gaps (per-word `@s:` routing, per-utterance ASR engine
 selection).
@@ -652,7 +669,7 @@ in proper CHAT `<...> [/]` AST nodes (`AnnotatedWord` / `AnnotatedGroup`).
 
 | Operation | BA2 | BA3 | Rationale |
 |-----------|-----|-----|-----------|
-| Hyphen stripping | Stripped `-` from words before Stanza | **Preserves hyphens** | Stanza handles hyphenated words correctly. Stripping loses compound info. |
+| Hyphen normalization | Normalized hyphens before Stanza: stripped trailing dashes, collapsed double dashes to single, replaced `-` with en-dash `–` | **Preserves hyphens** | Stanza handles hyphenated words correctly. Stripping and normalization lose compound info. |
 | Parenthesis stripping | Stripped `(` and `)` before Stanza | **No stripping** — Rust `cleaned_text()` handles CHAT notation at extraction time | Python-side stripping silently drops bare paren words, causing word count mismatches. |
 | Cantonese word segmentation | None | PyCantonese `segment()` via `--retokenize` | BA2 had no word segmentation for CJK per-character ASR output. |
 | Cantonese POS | Stanza zh (Mandarin model, ~62% accuracy) | PyCantonese POS override (~95% on core vocabulary) | BA2 used the same Mandarin model; batchalignHK used zh-hant (equally wrong). |
@@ -671,7 +688,9 @@ transformation. BA2 used bare `str` throughout.
 ### Transcribe: Rev.AI language code mapping
 
 BA2 used `pycountry.languages.get(alpha_3=lang).alpha_2` for ISO 639-3
-to Rev.AI code conversion. This had a silent truncation fallback
+to Rev.AI code conversion. When `pycountry` returned `None` for an unknown
+language code, BA2 crashed with an uncaught `AttributeError` (no fallback
+at all). Early BA3 Rust code introduced a silent truncation fallback
 (`&other[..2]`) that produced wrong codes for many languages:
 - `pol` → `po` (should be `pl`)
 - `hak` → `ha` (not a valid ISO 639-1 code)

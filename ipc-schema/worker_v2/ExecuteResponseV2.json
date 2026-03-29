@@ -1,147 +1,208 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ExecuteResponseV2",
   "description": "Top-level V2 execute response.",
   "type": "object",
-  "required": [
-    "elapsed_s",
-    "outcome",
-    "request_id"
-  ],
   "properties": {
     "elapsed_s": {
       "description": "Execution time in seconds.",
-      "type": "number",
-      "format": "double"
+      "$ref": "#/$defs/DurationSeconds"
     },
     "outcome": {
       "description": "Success or typed protocol/runtime error.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ExecuteOutcomeV2"
-        }
-      ]
+      "$ref": "#/$defs/ExecuteOutcomeV2"
     },
     "request_id": {
       "description": "Correlation id for the request.",
-      "type": "string"
+      "$ref": "#/$defs/WorkerRequestIdV2"
     },
     "result": {
       "description": "Typed task result when execution succeeded.",
-      "default": null,
       "anyOf": [
         {
-          "$ref": "#/definitions/TaskResultV2"
+          "$ref": "#/$defs/TaskResultV2"
         },
         {
           "type": "null"
         }
-      ]
+      ],
+      "default": null
     }
   },
-  "definitions": {
+  "required": [
+    "request_id",
+    "outcome",
+    "elapsed_s"
+  ],
+  "$defs": {
     "AsrElementKindV2": {
       "description": "Stable vocabulary for one monologue element returned by an ASR provider.",
       "oneOf": [
         {
           "description": "Lexical content that should become transcript tokens.",
           "type": "string",
-          "enum": [
-            "text"
-          ]
+          "const": "text"
         },
         {
           "description": "Punctuation emitted by the provider.",
           "type": "string",
-          "enum": [
-            "punctuation"
-          ]
+          "const": "punctuation"
         }
       ]
     },
     "AsrElementV2": {
       "description": "One raw ASR element inside a speaker monologue.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
       "type": "object",
-      "required": [
-        "kind",
-        "value"
-      ],
       "properties": {
         "confidence": {
           "description": "Optional model/provider confidence score.",
-          "default": null,
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "default": null
         },
         "end_s": {
           "description": "End timestamp in seconds when the provider exposes one.",
-          "default": null,
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSeconds"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double"
+          "default": null
         },
         "kind": {
           "description": "Stable element kind selected by the worker adapter.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/AsrElementKindV2"
-            }
-          ]
+          "$ref": "#/$defs/AsrElementKindV2"
         },
         "start_s": {
           "description": "Start timestamp in seconds when the provider exposes one.",
-          "default": null,
-          "type": [
-            "number",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationSeconds"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "double"
+          "default": null
         },
         "value": {
           "description": "Surface token or punctuation value.",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "value",
+        "kind"
+      ]
     },
     "AsrMonologueV2": {
       "description": "One speaker-attributed monologue returned by a provider ASR backend.",
       "type": "object",
-      "required": [
-        "elements",
-        "speaker"
-      ],
       "properties": {
         "elements": {
           "description": "Ordered elements inside the monologue.",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AsrElementV2"
+            "$ref": "#/$defs/AsrElementV2"
           }
         },
         "speaker": {
           "description": "Stable speaker label chosen by the worker adapter.",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "speaker",
+        "elements"
+      ]
+    },
+    "AvqiResultV2": {
+      "description": "Raw AVQI output returned by the model host.",
+      "type": "object",
+      "properties": {
+        "avqi": {
+          "description": "AVQI score.",
+          "type": "number",
+          "format": "double"
+        },
+        "cpps": {
+          "description": "Cepstral Peak Prominence Smoothed.",
+          "type": "number",
+          "format": "double"
+        },
+        "cs_file": {
+          "description": "Continuous-speech file label echoed by the worker.",
+          "type": "string"
+        },
+        "error": {
+          "description": "Optional runtime error detail.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hnr": {
+          "description": "Harmonics-to-noise ratio.",
+          "type": "number",
+          "format": "double"
+        },
+        "shimmer_local": {
+          "description": "Local shimmer percentage.",
+          "type": "number",
+          "format": "double"
+        },
+        "shimmer_local_db": {
+          "description": "Local shimmer in dB.",
+          "type": "number",
+          "format": "double"
+        },
+        "slope": {
+          "description": "LTAS slope.",
+          "type": "number",
+          "format": "double"
+        },
+        "success": {
+          "description": "Whether the runtime succeeded.",
+          "type": "boolean"
+        },
+        "sv_file": {
+          "description": "Sustained-vowel file label echoed by the worker.",
+          "type": "string"
+        },
+        "tilt": {
+          "description": "LTAS tilt.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "avqi",
+        "cpps",
+        "hnr",
+        "shimmer_local",
+        "shimmer_local_db",
+        "slope",
+        "tilt",
+        "cs_file",
+        "sv_file",
+        "success"
+      ]
     },
     "CorefAnnotationV2": {
       "description": "One per-sentence coreference annotation returned by Python.",
       "type": "object",
-      "required": [
-        "sentence_idx",
-        "words"
-      ],
       "properties": {
         "sentence_idx": {
           "description": "Sentence index inside the corresponding document item.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         },
         "words": {
           "description": "Per-word chain references parallel to the sentence words.",
@@ -149,26 +210,25 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/definitions/CorefChainRefV2"
+              "$ref": "#/$defs/CorefChainRefV2"
             }
           }
         }
-      }
+      },
+      "required": [
+        "sentence_idx",
+        "words"
+      ]
     },
     "CorefChainRefV2": {
       "description": "One structured coreference chain reference returned by Python.",
       "type": "object",
-      "required": [
-        "chain_id",
-        "is_end",
-        "is_start"
-      ],
       "properties": {
         "chain_id": {
           "description": "Chain identifier assigned by the coreference runtime.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         },
         "is_end": {
           "description": "Whether the current word ends this mention.",
@@ -178,7 +238,12 @@
           "description": "Whether the current word starts this mention.",
           "type": "boolean"
         }
-      }
+      },
+      "required": [
+        "chain_id",
+        "is_start",
+        "is_end"
+      ]
     },
     "CorefItemResultV2": {
       "description": "One coreference item result returned by Python.",
@@ -191,7 +256,7 @@
             "null"
           ],
           "items": {
-            "$ref": "#/definitions/CorefAnnotationV2"
+            "$ref": "#/$defs/CorefAnnotationV2"
           }
         },
         "error": {
@@ -203,62 +268,100 @@
         }
       }
     },
+    "CorefResultV2": {
+      "description": "Batched coreference response payload.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Item results aligned to the prepared batch payload order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CorefItemResultV2"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "DurationMs": {
+      "description": "Duration or audio position measured in milliseconds.\n\nUsed for audio timestamps (`start_ms`, `end_ms`) and durations\n(`max_group_ms`, `tight_buffer_ms`) throughout the FA, ASR, and\nspeaker pipelines. All ML worker IPC timing fields use this type.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "DurationSeconds": {
+      "description": "Duration measured in fractional seconds.",
+      "type": "number",
+      "format": "double"
+    },
     "ExecuteOutcomeV2": {
       "description": "Top-level execute outcome.",
       "oneOf": [
         {
           "description": "Request completed successfully.",
           "type": "object",
-          "required": [
-            "kind"
-          ],
           "properties": {
             "kind": {
               "type": "string",
-              "enum": [
-                "success"
-              ]
+              "const": "success"
             }
-          }
+          },
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Request failed at the protocol/runtime boundary.",
           "type": "object",
-          "required": [
-            "code",
-            "kind",
-            "message"
-          ],
           "properties": {
             "code": {
               "description": "Stable protocol error category.",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ProtocolErrorCodeV2"
-                }
-              ]
+              "$ref": "#/$defs/ProtocolErrorCodeV2"
             },
             "kind": {
               "type": "string",
-              "enum": [
-                "error"
-              ]
+              "const": "error"
             },
             "message": {
               "description": "Human-readable detail for logs and tests.",
               "type": "string"
             }
+          },
+          "required": [
+            "kind",
+            "code",
+            "message"
+          ]
+        }
+      ]
+    },
+    "IndexedWordTimingResultV2": {
+      "description": "Forced-alignment indexed response.",
+      "type": "object",
+      "properties": {
+        "indexed_timings": {
+          "description": "Indexed timing results aligned to the request words.",
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IndexedWordTimingV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
+      },
+      "required": [
+        "indexed_timings"
       ]
     },
     "IndexedWordTimingV2": {
       "description": "One word-level timing result.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
       "type": "object",
-      "required": [
-        "end_ms",
-        "start_ms"
-      ],
       "properties": {
         "confidence": {
           "description": "Optional model confidence.",
@@ -270,17 +373,42 @@
         },
         "end_ms": {
           "description": "End time in milliseconds.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "$ref": "#/$defs/DurationMs"
         },
         "start_ms": {
           "description": "Start time in milliseconds.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "$ref": "#/$defs/DurationMs"
         }
-      }
+      },
+      "required": [
+        "start_ms",
+        "end_ms"
+      ]
+    },
+    "LanguageCode3": {
+      "description": "3-letter ISO 639-3 language code (e.g. `\"eng\"`, `\"spa\"`).\n\nConstruction validates that the value is exactly 3 ASCII alphabetic\ncharacters, lowercased. Sentinel values like `\"auto\"` are rejected — use\n[`LanguageSpec`] at boundaries where auto-detection is meaningful.",
+      "type": "string"
+    },
+    "MonologueAsrResultV2": {
+      "description": "One ASR result built from provider-shaped speaker monologues.",
+      "type": "object",
+      "properties": {
+        "lang": {
+          "description": "Transcript language reported by the provider adapter.",
+          "$ref": "#/$defs/LanguageCode3"
+        },
+        "monologues": {
+          "description": "Speaker-grouped ASR output.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AsrMonologueV2"
+          }
+        }
+      },
+      "required": [
+        "lang",
+        "monologues"
+      ]
     },
     "MorphosyntaxItemResultV2": {
       "description": "One morphosyntax item result returned by Python.",
@@ -303,67 +431,141 @@
         }
       }
     },
+    "MorphosyntaxResultV2": {
+      "description": "Batched morphosyntax response payload.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Item results aligned to the prepared batch payload order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MorphosyntaxItemResultV2"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "OpenSmileResultV2": {
+      "description": "Raw openSMILE output returned by the model host.",
+      "type": "object",
+      "properties": {
+        "audio_file": {
+          "description": "Source audio identifier echoed by the worker.",
+          "type": "string"
+        },
+        "duration_segments": {
+          "description": "Number of result rows/segments.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "description": "Optional runtime error detail.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "feature_level": {
+          "description": "Requested feature-level name.",
+          "type": "string"
+        },
+        "feature_set": {
+          "description": "Requested feature-set name.",
+          "type": "string"
+        },
+        "num_features": {
+          "description": "Number of extracted feature columns.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "Tabular feature rows keyed by feature name.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "success": {
+          "description": "Whether the underlying runtime succeeded.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "feature_set",
+        "feature_level",
+        "num_features",
+        "duration_segments",
+        "audio_file",
+        "rows",
+        "success"
+      ]
+    },
     "ProtocolErrorCodeV2": {
       "description": "Error category for protocol-level failures.",
       "oneOf": [
         {
           "description": "Worker/runtime does not understand the requested protocol version.",
           "type": "string",
-          "enum": [
-            "unsupported_protocol"
-          ]
+          "const": "unsupported_protocol"
         },
         {
           "description": "Request payload shape was invalid for the task.",
           "type": "string",
-          "enum": [
-            "invalid_payload"
-          ]
+          "const": "invalid_payload"
         },
         {
           "description": "Required attachment was not supplied.",
           "type": "string",
-          "enum": [
-            "missing_attachment"
-          ]
+          "const": "missing_attachment"
         },
         {
           "description": "Attachment existed logically but could not be read.",
           "type": "string",
-          "enum": [
-            "attachment_unreadable"
-          ]
+          "const": "attachment_unreadable"
         },
         {
           "description": "Model or SDK runtime for the task is unavailable.",
           "type": "string",
-          "enum": [
-            "model_unavailable"
-          ]
+          "const": "model_unavailable"
         },
         {
           "description": "Runtime failed while executing the task.",
           "type": "string",
-          "enum": [
-            "runtime_failure"
-          ]
+          "const": "runtime_failure"
         }
+      ]
+    },
+    "SpeakerResultV2": {
+      "description": "Raw speaker diarization output returned by the model host.",
+      "type": "object",
+      "properties": {
+        "segments": {
+          "description": "Ordered diarization segments.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpeakerSegmentV2"
+          }
+        }
+      },
+      "required": [
+        "segments"
       ]
     },
     "SpeakerSegmentV2": {
       "description": "One raw speaker diarization segment returned by Python.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
       "type": "object",
-      "required": [
-        "end_ms",
-        "speaker",
-        "start_ms"
-      ],
       "properties": {
         "end_ms": {
           "description": "Segment end in milliseconds.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "$ref": "#/$defs/DurationMs"
         },
         "speaker": {
           "description": "Stable speaker label chosen by the model adapter.",
@@ -371,11 +573,14 @@
         },
         "start_ms": {
           "description": "Segment start in milliseconds.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "$ref": "#/$defs/DurationMs"
         }
-      }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "speaker"
+      ]
     },
     "TaskResultV2": {
       "description": "Typed execute result payload.",
@@ -383,378 +588,156 @@
         {
           "description": "Whisper chunk output.",
           "type": "object",
-          "required": [
-            "chunks",
-            "kind",
-            "lang",
-            "text"
-          ],
           "properties": {
-            "chunks": {
-              "description": "Raw chunk spans.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/WhisperChunkSpanV2"
-              }
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "whisper_chunk_result"
-              ]
-            },
-            "lang": {
-              "description": "Transcript language.",
-              "type": "string"
-            },
-            "text": {
-              "description": "Concatenated transcript text.",
-              "type": "string"
+              "const": "whisper_chunk_result"
             }
-          }
+          },
+          "$ref": "#/$defs/WhisperChunkResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Provider-shaped speaker monologue output.",
           "type": "object",
-          "required": [
-            "kind",
-            "lang",
-            "monologues"
-          ],
           "properties": {
             "kind": {
               "type": "string",
-              "enum": [
-                "monologue_asr_result"
-              ]
-            },
-            "lang": {
-              "description": "Transcript language reported by the provider adapter.",
-              "type": "string"
-            },
-            "monologues": {
-              "description": "Speaker-grouped ASR output.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/AsrMonologueV2"
-              }
+              "const": "monologue_asr_result"
             }
-          }
+          },
+          "$ref": "#/$defs/MonologueAsrResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Raw Whisper FA token timings.",
           "type": "object",
-          "required": [
-            "kind",
-            "tokens"
-          ],
           "properties": {
             "kind": {
               "type": "string",
-              "enum": [
-                "whisper_token_timing_result"
-              ]
-            },
-            "tokens": {
-              "description": "Raw token timings in model order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/WhisperTokenTimingV2"
-              }
+              "const": "whisper_token_timing_result"
             }
-          }
+          },
+          "$ref": "#/$defs/WhisperTokenTimingResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Forced-alignment indexed timings.",
           "type": "object",
-          "required": [
-            "indexed_timings",
-            "kind"
-          ],
           "properties": {
-            "indexed_timings": {
-              "description": "Indexed timing results aligned to the request words.",
-              "type": "array",
-              "items": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/IndexedWordTimingV2"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "indexed_word_timing_result"
-              ]
+              "const": "indexed_word_timing_result"
             }
-          }
+          },
+          "$ref": "#/$defs/IndexedWordTimingResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Batched morphosyntax result.",
           "type": "object",
-          "required": [
-            "items",
-            "kind"
-          ],
           "properties": {
-            "items": {
-              "description": "Item results aligned to the prepared batch payload order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/MorphosyntaxItemResultV2"
-              }
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "morphosyntax_result"
-              ]
+              "const": "morphosyntax_result"
             }
-          }
+          },
+          "$ref": "#/$defs/MorphosyntaxResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Batched utterance-segmentation result.",
           "type": "object",
-          "required": [
-            "items",
-            "kind"
-          ],
           "properties": {
-            "items": {
-              "description": "Item results aligned to the prepared batch payload order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/UtsegItemResultV2"
-              }
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "utseg_result"
-              ]
+              "const": "utseg_result"
             }
-          }
+          },
+          "$ref": "#/$defs/UtsegResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Batched translation result.",
           "type": "object",
-          "required": [
-            "items",
-            "kind"
-          ],
           "properties": {
-            "items": {
-              "description": "Item results aligned to the prepared batch payload order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/TranslationItemResultV2"
-              }
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "translation_result"
-              ]
+              "const": "translation_result"
             }
-          }
+          },
+          "$ref": "#/$defs/TranslationResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Batched coreference result.",
           "type": "object",
-          "required": [
-            "items",
-            "kind"
-          ],
           "properties": {
-            "items": {
-              "description": "Item results aligned to the prepared batch payload order.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/CorefItemResultV2"
-              }
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "coref_result"
-              ]
+              "const": "coref_result"
             }
-          }
+          },
+          "$ref": "#/$defs/CorefResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Raw speaker diarization result.",
           "type": "object",
-          "required": [
-            "kind",
-            "segments"
-          ],
           "properties": {
             "kind": {
               "type": "string",
-              "enum": [
-                "speaker_result"
-              ]
-            },
-            "segments": {
-              "description": "Ordered diarization segments.",
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/SpeakerSegmentV2"
-              }
+              "const": "speaker_result"
             }
-          }
+          },
+          "$ref": "#/$defs/SpeakerResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Raw openSMILE result.",
           "type": "object",
-          "required": [
-            "audio_file",
-            "duration_segments",
-            "feature_level",
-            "feature_set",
-            "kind",
-            "num_features",
-            "rows",
-            "success"
-          ],
           "properties": {
-            "audio_file": {
-              "description": "Source audio identifier echoed by the worker.",
-              "type": "string"
-            },
-            "duration_segments": {
-              "description": "Number of result rows/segments.",
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0.0
-            },
-            "error": {
-              "description": "Optional runtime error detail.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "feature_level": {
-              "description": "Requested feature-level name.",
-              "type": "string"
-            },
-            "feature_set": {
-              "description": "Requested feature-set name.",
-              "type": "string"
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "opensmile_result"
-              ]
-            },
-            "num_features": {
-              "description": "Number of extracted feature columns.",
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0.0
-            },
-            "rows": {
-              "description": "Tabular feature rows keyed by feature name.",
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": {
-                  "type": "number",
-                  "format": "double"
-                }
-              }
-            },
-            "success": {
-              "description": "Whether the underlying runtime succeeded.",
-              "type": "boolean"
+              "const": "opensmile_result"
             }
-          }
+          },
+          "$ref": "#/$defs/OpenSmileResultV2",
+          "required": [
+            "kind"
+          ]
         },
         {
           "description": "Raw AVQI result.",
           "type": "object",
-          "required": [
-            "avqi",
-            "cpps",
-            "cs_file",
-            "hnr",
-            "kind",
-            "shimmer_local",
-            "shimmer_local_db",
-            "slope",
-            "success",
-            "sv_file",
-            "tilt"
-          ],
           "properties": {
-            "avqi": {
-              "description": "AVQI score.",
-              "type": "number",
-              "format": "double"
-            },
-            "cpps": {
-              "description": "Cepstral Peak Prominence Smoothed.",
-              "type": "number",
-              "format": "double"
-            },
-            "cs_file": {
-              "description": "Continuous-speech file label echoed by the worker.",
-              "type": "string"
-            },
-            "error": {
-              "description": "Optional runtime error detail.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "hnr": {
-              "description": "Harmonics-to-noise ratio.",
-              "type": "number",
-              "format": "double"
-            },
             "kind": {
               "type": "string",
-              "enum": [
-                "avqi_result"
-              ]
-            },
-            "shimmer_local": {
-              "description": "Local shimmer percentage.",
-              "type": "number",
-              "format": "double"
-            },
-            "shimmer_local_db": {
-              "description": "Local shimmer in dB.",
-              "type": "number",
-              "format": "double"
-            },
-            "slope": {
-              "description": "LTAS slope.",
-              "type": "number",
-              "format": "double"
-            },
-            "success": {
-              "description": "Whether the runtime succeeded.",
-              "type": "boolean"
-            },
-            "sv_file": {
-              "description": "Sustained-vowel file label echoed by the worker.",
-              "type": "string"
-            },
-            "tilt": {
-              "description": "LTAS tilt.",
-              "type": "number",
-              "format": "double"
+              "const": "avqi_result"
             }
-          }
+          },
+          "$ref": "#/$defs/AvqiResultV2",
+          "required": [
+            "kind"
+          ]
         }
       ]
     },
@@ -778,6 +761,22 @@
         }
       }
     },
+    "TranslationResultV2": {
+      "description": "Batched translation response payload.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Item results aligned to the prepared batch payload order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TranslationItemResultV2"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
     "UtsegItemResultV2": {
       "description": "One utseg item result returned by Python.",
       "type": "object",
@@ -791,7 +790,7 @@
           "items": {
             "type": "integer",
             "format": "uint",
-            "minimum": 0.0
+            "minimum": 0
           }
         },
         "error": {
@@ -813,38 +812,90 @@
         }
       }
     },
+    "UtsegResultV2": {
+      "description": "Batched utterance-segmentation response payload.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "description": "Item results aligned to the prepared batch payload order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UtsegItemResultV2"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "WhisperChunkResultV2": {
+      "description": "One ASR result built from raw Whisper chunks.",
+      "type": "object",
+      "properties": {
+        "chunks": {
+          "description": "Raw chunk spans.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WhisperChunkSpanV2"
+          }
+        },
+        "lang": {
+          "description": "Transcript language.",
+          "$ref": "#/$defs/LanguageCode3"
+        },
+        "text": {
+          "description": "Concatenated transcript text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lang",
+        "text",
+        "chunks"
+      ]
+    },
     "WhisperChunkSpanV2": {
       "description": "One raw Whisper chunk span returned by Python.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
       "type": "object",
-      "required": [
-        "end_s",
-        "start_s",
-        "text"
-      ],
       "properties": {
         "end_s": {
           "description": "End timestamp in seconds.",
-          "type": "number",
-          "format": "double"
+          "$ref": "#/$defs/DurationSeconds"
         },
         "start_s": {
           "description": "Start timestamp in seconds.",
-          "type": "number",
-          "format": "double"
+          "$ref": "#/$defs/DurationSeconds"
         },
         "text": {
           "description": "Surface text for the chunk.",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "text",
+        "start_s",
+        "end_s"
+      ]
+    },
+    "WhisperTokenTimingResultV2": {
+      "description": "Forced-alignment token response returned before Rust token-to-word\nreconciliation.",
+      "type": "object",
+      "properties": {
+        "tokens": {
+          "description": "Raw token timings in model order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WhisperTokenTimingV2"
+          }
+        }
+      },
+      "required": [
+        "tokens"
+      ]
     },
     "WhisperTokenTimingV2": {
       "description": "One raw Whisper forced-alignment token span returned by Python.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
       "type": "object",
-      "required": [
-        "text",
-        "time_s"
-      ],
       "properties": {
         "text": {
           "description": "Surface token text returned by the FA runtime.",
@@ -852,10 +903,17 @@
         },
         "time_s": {
           "description": "Token onset timestamp in seconds.",
-          "type": "number",
-          "format": "double"
+          "$ref": "#/$defs/DurationSeconds"
         }
-      }
+      },
+      "required": [
+        "text",
+        "time_s"
+      ]
+    },
+    "WorkerRequestIdV2": {
+      "description": "Stable identifier for one V2 protocol request/response pair.",
+      "type": "string"
     }
   }
 }

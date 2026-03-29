@@ -207,7 +207,7 @@ async fn dispatch_direct_mode(
         cfg.audio_task_timeout_s = timeout;
     }
 
-    let mapping_keys = cfg.media_mappings.keys().cloned().collect::<Vec<_>>();
+    let mapping_keys: Vec<String> = cfg.media_mappings.keys().map(|k| k.as_str().to_owned()).collect();
     let Some(prepared) = prepare_paths_submission(
         command,
         lang,

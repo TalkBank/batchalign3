@@ -1,19 +1,14 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TaskCapabilityV2",
   "description": "One task capability advertised by a V2 worker.",
   "type": "object",
-  "required": [
-    "accepted_inputs",
-    "supports_progress_events",
-    "task"
-  ],
   "properties": {
     "accepted_inputs": {
       "description": "Attachment/input kinds the task can consume.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/WorkerAttachmentKindV2"
+        "$ref": "#/$defs/WorkerAttachmentKindV2"
       }
     },
     "supports_progress_events": {
@@ -22,79 +17,62 @@
     },
     "task": {
       "description": "Task family supported by the worker.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/InferenceTaskV2"
-        }
-      ]
+      "$ref": "#/$defs/InferenceTaskV2"
     }
   },
-  "definitions": {
+  "required": [
+    "task",
+    "accepted_inputs",
+    "supports_progress_events"
+  ],
+  "$defs": {
     "InferenceTaskV2": {
       "description": "High-level V2 task family.",
       "oneOf": [
         {
           "description": "Morphosyntax tagging.",
           "type": "string",
-          "enum": [
-            "morphosyntax"
-          ]
+          "const": "morphosyntax"
         },
         {
           "description": "Utterance segmentation.",
           "type": "string",
-          "enum": [
-            "utseg"
-          ]
+          "const": "utseg"
         },
         {
           "description": "Machine translation.",
           "type": "string",
-          "enum": [
-            "translate"
-          ]
+          "const": "translate"
         },
         {
           "description": "Coreference annotation.",
           "type": "string",
-          "enum": [
-            "coref"
-          ]
+          "const": "coref"
         },
         {
           "description": "Automatic speech recognition.",
           "type": "string",
-          "enum": [
-            "asr"
-          ]
+          "const": "asr"
         },
         {
           "description": "Forced alignment.",
           "type": "string",
-          "enum": [
-            "forced_alignment"
-          ]
+          "const": "forced_alignment"
         },
         {
           "description": "Speaker diarization.",
           "type": "string",
-          "enum": [
-            "speaker"
-          ]
+          "const": "speaker"
         },
         {
           "description": "OpenSMILE feature extraction.",
           "type": "string",
-          "enum": [
-            "opensmile"
-          ]
+          "const": "opensmile"
         },
         {
           "description": "AVQI feature extraction.",
           "type": "string",
-          "enum": [
-            "avqi"
-          ]
+          "const": "avqi"
         }
       ]
     },
@@ -104,37 +82,27 @@
         {
           "description": "File-backed prepared PCM audio.",
           "type": "string",
-          "enum": [
-            "prepared_audio"
-          ]
+          "const": "prepared_audio"
         },
         {
           "description": "File-backed prepared text/JSON.",
           "type": "string",
-          "enum": [
-            "prepared_text"
-          ]
+          "const": "prepared_text"
         },
         {
           "description": "Inline JSON attachment carried inside the envelope.",
           "type": "string",
-          "enum": [
-            "inline_json"
-          ]
+          "const": "inline_json"
         },
         {
           "description": "Provider-local media path that Rust still has not replaced.",
           "type": "string",
-          "enum": [
-            "provider_media"
-          ]
+          "const": "provider_media"
         },
         {
           "description": "Previously submitted provider job identifier.",
           "type": "string",
-          "enum": [
-            "submitted_job"
-          ]
+          "const": "submitted_job"
         }
       ]
     }

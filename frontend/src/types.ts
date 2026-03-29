@@ -6,6 +6,7 @@ import type { components } from "./generated/api";
 export type JobStatusValue = components["schemas"]["JobStatus"];
 export type FileStatusEntry = components["schemas"]["FileStatusEntry"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
+export type JobControlPlaneInfo = components["schemas"]["JobControlPlaneInfo"];
 
 // JobInfo: override file_statuses to required (server always sends it),
 // add client-side `server` enrichment.

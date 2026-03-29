@@ -72,7 +72,7 @@ impl JobStore {
             .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
 
         // Clean up staged content after releasing the jobs lock.
-        if !staging_dir.as_os_str().is_empty() {
+        if !staging_dir.as_str().is_empty() {
             let _ = tokio::fs::remove_dir_all(&staging_dir).await;
         }
 
@@ -224,18 +224,19 @@ mod tests {
             source: JobSourceContext {
                 submitted_by: "127.0.0.1".into(),
                 submitted_by_name: String::new(),
-                source_dir: PathBuf::new(),
+                source_dir: Default::default(),
             },
             filesystem: JobFilesystemConfig {
                 filenames: filenames.into_iter().map(DisplayPath::from).collect(),
                 has_chat,
-                staging_dir: PathBuf::new(),
+                staging_dir: Default::default(),
                 paths_mode: false,
                 source_paths: Vec::new(),
                 output_paths: Vec::new(),
                 before_paths: Vec::new(),
-                media_mapping: String::new(),
-                media_subdir: String::new(),
+                media_mapping: Default::default(),
+                media_subdir: Default::default(),
+                source_dir: Default::default(),
             },
             execution: JobExecutionState {
                 status: JobStatus::Queued,
@@ -350,7 +351,7 @@ mod tests {
 
         let mut job = make_job("j1", ReleasedCommand::Morphotag, vec!["a.cha".into()]);
         job.execution.status = JobStatus::Completed;
-        job.filesystem.staging_dir = staging_dir.clone();
+        job.filesystem.staging_dir = batchalign_types::paths::ServerPath::from(staging_dir.clone());
         store.submit(job).await.unwrap();
 
         store.delete(&JobId::from("j1")).await.unwrap();

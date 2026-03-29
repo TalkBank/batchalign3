@@ -1,21 +1,21 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "MorphosyntaxResultV2",
   "description": "Batched morphosyntax response payload.",
   "type": "object",
-  "required": [
-    "items"
-  ],
   "properties": {
     "items": {
       "description": "Item results aligned to the prepared batch payload order.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/MorphosyntaxItemResultV2"
+        "$ref": "#/$defs/MorphosyntaxItemResultV2"
       }
     }
   },
-  "definitions": {
+  "required": [
+    "items"
+  ],
+  "$defs": {
     "MorphosyntaxItemResultV2": {
       "description": "One morphosyntax item result returned by Python.",
       "type": "object",

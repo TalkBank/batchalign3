@@ -125,6 +125,11 @@ pub struct BatchalignTemporalActivities {
 
 #[activities]
 impl BatchalignTemporalActivities {
+    /// Execute one job attempt as a Temporal activity.
+    ///
+    /// Bridges from Temporal into the shared Batchalign execution engine.
+    /// Heartbeats periodically so Temporal can detect stuck activities.
+    /// Forwards cancel signals from Temporal to the job store.
     #[activity]
     pub async fn run_job_attempt(
         self: Arc<Self>,

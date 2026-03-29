@@ -61,7 +61,7 @@ pub(crate) async fn list_media(
     let config = &state.environment.config;
 
     let files = if !query.bank.is_empty() {
-        let mapping_root = config.media_mappings.get(&query.bank).ok_or_else(|| {
+        let mapping_root = config.media_mappings.get(&batchalign_types::paths::MediaMappingKey::new(&query.bank)).ok_or_else(|| {
             ServerError::Validation(format!(
                 "Unknown media bank '{}'. Available: {:?}",
                 query.bank,
@@ -71,12 +71,12 @@ pub(crate) async fn list_media(
         state
             .environment
             .media
-            .list_mapped(mapping_root, &query.subdir)
+            .list_mapped(mapping_root.as_str(), &query.subdir)
     } else {
         state
             .environment
             .media
-            .list_files(&config.media_roots, &query.subdir)
+            .list_files(&config.media_roots.iter().map(|p| p.as_str().to_string()).collect::<Vec<_>>(), &query.subdir)
     };
 
     Ok(Json(serde_json::json!({ "files": files })))

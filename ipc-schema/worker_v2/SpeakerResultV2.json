@@ -1,35 +1,34 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "SpeakerResultV2",
   "description": "Raw speaker diarization output returned by the model host.",
   "type": "object",
-  "required": [
-    "segments"
-  ],
   "properties": {
     "segments": {
       "description": "Ordered diarization segments.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/SpeakerSegmentV2"
+        "$ref": "#/$defs/SpeakerSegmentV2"
       }
     }
   },
-  "definitions": {
+  "required": [
+    "segments"
+  ],
+  "$defs": {
+    "DurationMs": {
+      "description": "Duration or audio position measured in milliseconds.\n\nUsed for audio timestamps (`start_ms`, `end_ms`) and durations\n(`max_group_ms`, `tight_buffer_ms`) throughout the FA, ASR, and\nspeaker pipelines. All ML worker IPC timing fields use this type.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
     "SpeakerSegmentV2": {
       "description": "One raw speaker diarization segment returned by Python.\n\nTiming fields validated upstream by Python Pydantic models (see module docs).",
       "type": "object",
-      "required": [
-        "end_ms",
-        "speaker",
-        "start_ms"
-      ],
       "properties": {
         "end_ms": {
           "description": "Segment end in milliseconds.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "$ref": "#/$defs/DurationMs"
         },
         "speaker": {
           "description": "Stable speaker label chosen by the model adapter.",
@@ -37,11 +36,14 @@
         },
         "start_ms": {
           "description": "Segment start in milliseconds.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "$ref": "#/$defs/DurationMs"
         }
-      }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "speaker"
+      ]
     }
   }
 }

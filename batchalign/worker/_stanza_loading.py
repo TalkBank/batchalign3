@@ -214,7 +214,17 @@ def load_utseg_builder(lang: LanguageCode) -> None:
     def build_stanza_config_from_langs(
         langs: list[str],
     ) -> tuple[list[str], dict[str, dict[str, str | bool]]]:
-        """Build the Stanza config payload expected by utseg inference."""
+        """Build the Stanza config payload expected by utseg inference.
+
+        Processor selection is per-language: only request processors that
+        Stanza actually supports for each language (from the capability
+        table). Languages without constituency get sentence-boundary
+        segmentation instead.
+        """
+        from batchalign.worker._stanza_capabilities import get_cached_capability_table
+
+        table = get_cached_capability_table()
+
         lang_alpha2: list[str] = []
         configs: dict[str, dict[str, str | bool]] = {}
         for language in langs:
@@ -222,9 +232,24 @@ def load_utseg_builder(lang: LanguageCode) -> None:
             if alpha2_code == "zh":
                 alpha2_code = "zh-hans"
             lang_alpha2.append(alpha2_code)
-            processors: set[str] = {"tokenize", "pos", "lemma", "constituency"}
-            if has_mwt:
+
+            processors: set[str] = {"tokenize", "pos", "lemma"}
+
+            # Only add constituency if the language supports it.
+            # Stanza has constituency models for ~11 languages.
+            lang_caps = table.languages.get(language) if table else None
+            if lang_caps is not None and lang_caps.has_constituency:
+                processors.add("constituency")
+            elif table is None:
+                # Fallback: if no table, include constituency (old behavior).
+                processors.add("constituency")
+
+            # Only add MWT if the language supports it.
+            if lang_caps is not None and lang_caps.has_mwt:
                 processors.add("mwt")
+            elif table is None and has_mwt:
+                processors.add("mwt")
+
             configs[alpha2_code] = {
                 "processors": ",".join(sorted(processors)),
                 "tokenize_pretokenized": True,

@@ -23,10 +23,23 @@ pub(crate) async fn dispatch_execute_v2_with_retry(
     lang: &LanguageCode3,
     request: &ExecuteRequestV2,
 ) -> Result<ExecuteResponseV2, ServerError> {
+    dispatch_execute_v2_with_retry_and_progress(pool, lang, request, None).await
+}
+
+/// Dispatch one `execute_v2` request with retries and progress forwarding.
+pub(crate) async fn dispatch_execute_v2_with_retry_and_progress(
+    pool: &WorkerPool,
+    lang: &LanguageCode3,
+    request: &ExecuteRequestV2,
+    progress_tx: Option<&tokio::sync::mpsc::Sender<crate::types::worker_v2::ProgressEventV2>>,
+) -> Result<ExecuteResponseV2, ServerError> {
     let retry_policy = RetryPolicy::default();
 
     for attempt_number in 1..=retry_policy.max_attempts {
-        match pool.dispatch_execute_v2(lang, request).await {
+        match pool
+            .dispatch_execute_v2_with_progress(lang, request, progress_tx)
+            .await
+        {
             Ok(response) => return Ok(response),
             Err(error) => {
                 let category = classify_worker_error(&error);

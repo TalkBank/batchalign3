@@ -28,9 +28,9 @@ fn snapshot_job_submission_minimal() {
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
-        media_mapping: String::new(),
-        media_subdir: String::new(),
-        source_dir: String::new(),
+        media_mapping: Default::default(),
+        media_subdir: Default::default(),
+        source_dir: Default::default(),
         options: CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions::default(),
             retokenize: false,
@@ -90,8 +90,8 @@ fn snapshot_job_submission_paths_mode() {
         num_speakers: NumSpeakers(1),
         files: vec![],
         media_files: vec![],
-        media_mapping: String::new(),
-        media_subdir: String::new(),
+        media_mapping: Default::default(),
+        media_subdir: Default::default(),
         source_dir: "/input".into(),
         options: CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions::default(),
@@ -185,6 +185,7 @@ fn snapshot_job_info() {
         num_workers: Some(4),
         active_lease: None,
         control_plane: None,
+        batch_progress: None,
     };
     insta::assert_json_snapshot!("job_info", info);
 }
@@ -293,12 +294,13 @@ fn snapshot_server_config_default() {
 
 #[test]
 fn snapshot_server_config_full() {
+    use batchalign_types::paths::{MediaMappingKey, ServerPath};
     let mut mappings = std::collections::BTreeMap::new();
-    mappings.insert("childes-data".to_string(), "/nfs/childes".to_string());
-    mappings.insert("aphasia-data".to_string(), "/nfs/aphasia".to_string());
+    mappings.insert(MediaMappingKey::new("childes-data"), ServerPath::new("/nfs/childes"));
+    mappings.insert(MediaMappingKey::new("aphasia-data"), ServerPath::new("/nfs/aphasia"));
 
     let cfg = ServerConfig {
-        media_roots: vec!["/data/media".into(), "/data/media2".into()],
+        media_roots: vec![ServerPath::new("/data/media"), ServerPath::new("/data/media2")],
         media_mappings: mappings,
         default_lang: LanguageCode3::spa(),
         max_concurrent_jobs: 4,
@@ -343,6 +345,7 @@ fn snapshot_worker_capabilities() {
             ("morphosyntax".into(), "stanza-1.9.2".into()),
             ("utseg".into(), "stanza-1.9.2".into()),
         ]),
+        stanza_capabilities: Default::default(),
     };
     insta::assert_json_snapshot!("worker_capabilities", caps);
 }
@@ -429,9 +432,10 @@ warmup_commands: []
 auto_daemon: false
 "#;
 
+    use batchalign_types::paths::{MediaMappingKey, ServerPath};
     let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(cfg.media_roots, vec!["/Volumes/Media/talkbank"]);
-    assert_eq!(cfg.media_mappings["childes-data"], "/Volumes/Media/childes");
+    assert_eq!(cfg.media_roots, vec![ServerPath::new("/Volumes/Media/talkbank")]);
+    assert_eq!(cfg.media_mappings[&MediaMappingKey::new("childes-data")], ServerPath::new("/Volumes/Media/childes"));
     assert_eq!(cfg.port, 8000);
     assert!(cfg.warmup_commands.is_empty());
 }

@@ -125,9 +125,14 @@ async fn process_one_media_analysis_file_v2(
 
     let original_audio_path: PathBuf =
         if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
-            job.filesystem.source_paths[file_index].clone()
+            job.filesystem.source_paths[file_index]
+                .assume_shared_filesystem()
+                .as_path()
+                .to_owned()
         } else {
             job.filesystem.staging_dir.join("input").join(filename)
+                .as_path()
+                .to_owned()
         };
 
     let retry_policy = RetryPolicy::default();

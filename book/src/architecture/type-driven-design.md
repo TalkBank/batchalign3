@@ -1,7 +1,7 @@
 # Type-Driven Design
 
 **Status:** Current
-**Last modified:** 2026-03-24 21:21 EDT
+**Last modified:** 2026-03-28 17:55 EDT
 
 Batchalign uses Rust's type system to encode domain invariants at compile time. This document catalogs the patterns in use, explains when to reach for each one, and records the serde techniques that keep the wire format stable while the internal types evolve.
 
@@ -131,6 +131,8 @@ pub struct ChatCleanedText(String);
 - Simple newtypes, not phantom-type generics.
 
 **When to use:** Any `String` field where two values of different provenance could be confused.
+
+**Path provenance:** The path newtypes (`ClientPath`, `ServerPath`, `RepoRelativePath`, `MediaMappingKey`) extend this pattern to encode machine boundaries -- which side of the client/server divide a value lives on. `ClientPath` deliberately omits `AsRef<Path>` to prevent accidental I/O. See the [typed path provenance page](path-provenance.md) for the full design.
 
 ### 4. Flattened Struct Composition
 
@@ -354,6 +356,7 @@ serde attribute changes the wire format, the snapshot diff will catch it.
 | 2026-03 | `&Path`/`PathBuf` for audio paths | Path types | Replaced `&str`/`String` for file paths; explicit conversion at IPC boundaries |
 | 2026-03 | Boundary conversion patterns | All | Codified convert-once-at-boundary: HTTP→`JobId`, DB→deref, IPC→`to_string_lossy`, CLI→`From<bool>` |
 | 2026-03 | `LanguageSpec` enum + validated `LanguageCode3` | Sentinel enum | `"auto"` sentinel leaked into `@Languages` header (job 696870c7); split into `Auto`/`Resolved` enum with validated construction |
+| 2026-03 | `ClientPath`, `ServerPath`, `RepoRelativePath`, `MediaMappingKey` | Path provenance | Untyped paths allowed mixing client/server filesystems; `ClientPath` omits `AsRef<Path>` to prevent accidental I/O; [details](path-provenance.md) |
 
 ## Guidelines
 

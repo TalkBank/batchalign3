@@ -8,6 +8,8 @@ import { useState } from "react";
 import { Layout } from "./Layout";
 import { ProgressBar } from "./ProgressBar";
 import { ActionButtons } from "./ActionButtons";
+import { TemporalPanel } from "./TemporalPanel";
+import { BatchProgressPanel } from "./BatchProgressPanel";
 import { StatusSummaryStrip } from "./StatusSummaryStrip";
 import { ErrorPanel } from "./ErrorPanel";
 import { FilterTabs } from "./FilterTabs";
@@ -234,6 +236,9 @@ export function JobDetailPageView({
               </pre>
             </div>
           )}
+
+          {/* Temporal workflow metadata (only when backend is temporal). */}
+          <TemporalPanel controlPlane={detail.control_plane} />
         </div>
 
         {/* Progress is only meaningful for active jobs. */}
@@ -244,6 +249,8 @@ export function JobDetailPageView({
               total={detail.total_files}
               animated={isRunning}
             />
+            {/* Per-language batch progress for morphotag/utseg/translate/coref */}
+            <BatchProgressPanel progress={(detail as Record<string, unknown>).batch_progress as never} />
           </div>
         )}
 

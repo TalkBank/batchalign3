@@ -217,6 +217,8 @@ fn result_content_path(
         .staging_dir
         .join("output")
         .join(out_filename.as_ref())
+        .as_path()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -232,7 +234,7 @@ mod tests {
         JobDetail {
             status: JobStatus::Completed,
             paths_mode,
-            staging_dir: PathBuf::from("/tmp/jobs/job-1"),
+            staging_dir: batchalign_types::paths::ServerPath::new("/tmp/jobs/job-1"),
             results: vec![FileResultEntry {
                 filename: DisplayPath::from("nested/sample.cha"),
                 content_type: ContentType::Chat,

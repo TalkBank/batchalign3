@@ -352,7 +352,7 @@ impl LiveTestServer {
 
 pub async fn start_live_server(
     python_path: &str,
-    media_roots: Vec<String>,
+    media_roots: Vec<batchalign_types::paths::ServerPath>,
 ) -> Result<LiveTestServer, String> {
     let tmp = tempfile::TempDir::new().map_err(|error| format!("tempdir failed: {error}"))?;
     let jobs_dir = tmp.path().join("jobs");
@@ -553,9 +553,9 @@ pub async fn run_job_to_completion(
         num_speakers: NumSpeakers(1),
         files,
         media_files: vec![],
-        media_mapping: String::new(),
-        media_subdir: String::new(),
-        source_dir: String::new(),
+        media_mapping: Default::default(),
+        media_subdir: Default::default(),
+        source_dir: Default::default(),
         options,
         paths_mode: false,
         source_paths: vec![],

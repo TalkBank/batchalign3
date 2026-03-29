@@ -1,6 +1,29 @@
 {
   "components": {
     "schemas": {
+      "BatchInferProgress": {
+        "description": "Aggregate progress for a batched infer job across all language groups.",
+        "properties": {
+          "language_groups": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LanguageGroupProgress"
+            },
+            "description": "Per-language-group progress, keyed by language code.\nUses BTreeMap for deterministic JSON serialization.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "language_groups"
+        ],
+        "type": "object"
+      },
+      "ClientPath": {
+        "description": "A path on the submitting client's filesystem.\n\nThe server MUST NOT do filesystem I/O on this directly — it's metadata\nonly.  The only way to convert it to a [`ServerPath`] for I/O is via\n[`assume_shared_filesystem`](Self::assume_shared_filesystem), which\nrequires the caller to verify that the server shares the client's\nfilesystem (paths_mode with a local daemon).\n\nDeliberately does NOT implement `AsRef<Path>` to prevent accidental\nfilesystem operations.",
+        "type": "string"
+      },
       "ContentType": {
         "description": "Engine category that supports backend overrides.\n\nCurrently only ASR and FA have multiple engine backends.\nOther inference tasks (morphosyntax, utseg, translate, coref)\nalways use their single built-in engine.\nMIME-like content discriminator for file results.",
         "enum": [
@@ -509,6 +532,17 @@
               }
             ]
           },
+          "batch_progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BatchInferProgress",
+                "description": "Per-language-group progress for batched text commands (morphotag,\nutseg, translate, coref).  Present only while a batch is in flight."
+              }
+            ]
+          },
           "command": {
             "$ref": "#/components/schemas/ReleasedCommand",
             "description": "Batchalign command that was submitted (e.g. \"morphotag\", \"align\")."
@@ -814,7 +848,7 @@
           "before_paths": {
             "description": "Absolute paths to \"before\" files for incremental processing\n(paths_mode only). When non-empty, the diff engine compares each\nbefore file against its corresponding source_path and only\nreprocesses changed utterances.\n\nMust be the same length as `source_paths` when non-empty.",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ClientPath"
             },
             "type": "array"
           },
@@ -852,12 +886,12 @@
             "type": "array"
           },
           "media_mapping": {
-            "description": "Key into server's media_mappings config (e.g. \"childes-data\").",
-            "type": "string"
+            "$ref": "#/components/schemas/MediaMappingKey",
+            "description": "Key into server's media_mappings config (e.g. \"childes-data\")."
           },
           "media_subdir": {
-            "description": "Subdirectory under the mapped root (e.g. \"Eng-NA/MacWhinney/0young-ASR\").",
-            "type": "string"
+            "$ref": "#/components/schemas/RepoRelativePath",
+            "description": "Subdirectory under the mapped root (e.g. \"Eng-NA/MacWhinney/0young-ASR\")."
           },
           "num_speakers": {
             "$ref": "#/components/schemas/NumSpeakers",
@@ -869,7 +903,7 @@
           "output_paths": {
             "description": "Absolute paths to write output files to (paths_mode only).",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ClientPath"
             },
             "type": "array"
           },
@@ -878,13 +912,13 @@
             "type": "boolean"
           },
           "source_dir": {
-            "description": "Client's input directory path (for dashboard display).",
-            "type": "string"
+            "$ref": "#/components/schemas/ClientPath",
+            "description": "Client's input directory path (for dashboard display)."
           },
           "source_paths": {
             "description": "Absolute paths to read input files from (paths_mode only).",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ClientPath"
             },
             "type": "array"
           }
@@ -898,6 +932,33 @@
       "LanguageCode3": {
         "description": "3-letter ISO 639-3 language code (e.g. `\"eng\"`, `\"spa\"`).\n\nConstruction validates that the value is exactly 3 ASCII alphabetic\ncharacters, lowercased. Sentinel values like `\"auto\"` are rejected — use\n[`LanguageSpec`] at boundaries where auto-detection is meaningful.",
         "type": "string"
+      },
+      "LanguageGroupProgress": {
+        "description": "Progress snapshot for one language group within a batched infer job.",
+        "properties": {
+          "completed_utterances": {
+            "description": "Number of utterances completed so far.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lang": {
+            "description": "ISO 639-3 language code (e.g. \"fra\", \"eng\").",
+            "type": "string"
+          },
+          "total_utterances": {
+            "description": "Total utterances in this language group.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lang",
+          "completed_utterances",
+          "total_utterances"
+        ],
+        "type": "object"
       },
       "LanguageSpec": {
         "description": "Language specification from the CLI or job submission.\n\n`Auto` means the ASR engine should detect the language. This variant must\nbe resolved to a concrete [`LanguageCode3`] before any CHAT construction\nor NLP dispatch that requires a known language.",
@@ -947,6 +1008,10 @@
         ],
         "type": "object"
       },
+      "MediaMappingKey": {
+        "description": "Key into `ServerConfig.media_mappings` (e.g. `\"slabank-data\"`).\n\nNot a filesystem path — it's a logical name that maps to a\n[`ServerPath`] via the server's configuration.",
+        "type": "string"
+      },
       "MemoryMb": {
         "description": "Physical memory quantity in megabytes.\n\nUsed for memory gate thresholds and health-response memory readings.",
         "format": "int64",
@@ -978,6 +1043,10 @@
           "compare",
           "avqi"
         ],
+        "type": "string"
+      },
+      "RepoRelativePath": {
+        "description": "A path relative to a data repo root (e.g. `\"French/Newcastle/Photos/13\"`).\n\nValid on any machine that has the repo cloned, but must be combined\nwith a server root path to produce a [`ServerPath`] for I/O.",
         "type": "string"
       },
       "StatusMessageResponse": {
@@ -1053,7 +1122,7 @@
         "type": "number"
       },
       "WarmupStatus": {
-        "description": "Lifecycle state of background model warmup.",
+        "description": "Lifecycle state of background model warmup.\nBackground warmup lifecycle state for the worker pool.\n\nThe server pre-spawns workers at startup (\"warmup\") so the first job\ndoes not pay cold-start costs. This enum tracks that lifecycle for\nthe health endpoint.",
         "enum": [
           "not_started",
           "in_progress",

@@ -397,7 +397,7 @@ async fn cli_morphotag_real_server() {
     ).expect("write input");
 
     let server =
-        match start_live_server(&python_path, vec![in_dir.to_string_lossy().into_owned()]).await {
+        match start_live_server(&python_path, vec![batchalign_types::paths::ServerPath::new(in_dir.clone())]).await {
             Ok(server) => server,
             Err(message) => {
                 eprintln!("SKIP: {message}");
@@ -497,7 +497,7 @@ async fn cli_align_real_server_live_fa_succeeds() {
     std::fs::write(in_dir.join("test.cha"), stripped_chat).expect("write stripped chat");
 
     let server =
-        match start_live_server(&python_path, vec![in_dir.to_string_lossy().into_owned()]).await {
+        match start_live_server(&python_path, vec![batchalign_types::paths::ServerPath::new(in_dir.clone())]).await {
             Ok(server) => server,
             Err(message) => {
                 eprintln!("SKIP: {message}");

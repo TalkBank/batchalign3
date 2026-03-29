@@ -1,42 +1,32 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AsrBackendV2",
   "description": "ASR backend selected by the Rust control plane.",
   "oneOf": [
     {
       "description": "Local Whisper runtime hosted in Python.",
       "type": "string",
-      "enum": [
-        "local_whisper"
-      ]
+      "const": "local_whisper"
     },
     {
       "description": "Tencent Cantonese ASR provider.",
       "type": "string",
-      "enum": [
-        "hk_tencent"
-      ]
+      "const": "hk_tencent"
     },
     {
       "description": "Aliyun Cantonese ASR provider.",
       "type": "string",
-      "enum": [
-        "hk_aliyun"
-      ]
+      "const": "hk_aliyun"
     },
     {
       "description": "FunASR Cantonese provider.",
       "type": "string",
-      "enum": [
-        "hk_funaudio"
-      ]
+      "const": "hk_funaudio"
     },
     {
       "description": "Rev.AI provider.",
       "type": "string",
-      "enum": [
-        "revai"
-      ]
+      "const": "revai"
     }
   ]
 }

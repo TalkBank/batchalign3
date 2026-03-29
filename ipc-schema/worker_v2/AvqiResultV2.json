@@ -1,20 +1,8 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AvqiResultV2",
   "description": "Raw AVQI output returned by the model host.",
   "type": "object",
-  "required": [
-    "avqi",
-    "cpps",
-    "cs_file",
-    "hnr",
-    "shimmer_local",
-    "shimmer_local_db",
-    "slope",
-    "success",
-    "sv_file",
-    "tilt"
-  ],
   "properties": {
     "avqi": {
       "description": "AVQI score.",
@@ -70,5 +58,17 @@
       "type": "number",
       "format": "double"
     }
-  }
+  },
+  "required": [
+    "avqi",
+    "cpps",
+    "hnr",
+    "shimmer_local",
+    "shimmer_local_db",
+    "slope",
+    "tilt",
+    "cs_file",
+    "sv_file",
+    "success"
+  ]
 }

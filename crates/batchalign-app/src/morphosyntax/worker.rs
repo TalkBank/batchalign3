@@ -3,7 +3,7 @@
 use crate::api::{EngineVersion, LanguageCode3};
 use crate::cache::{CacheBackend, UtteranceCache};
 use crate::error::ServerError;
-use crate::infer_retry::dispatch_execute_v2_with_retry;
+use crate::infer_retry::{dispatch_execute_v2_with_retry, dispatch_execute_v2_with_retry_and_progress};
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
 use crate::worker::pool::WorkerPool;
 use crate::worker::text_request_v2::{PreparedTextRequestIdsV2, build_morphosyntax_request_v2};
@@ -29,12 +29,12 @@ pub(crate) async fn infer_batch(
     lang: &LanguageCode3,
     mwt: &MwtDict,
     retokenize: bool,
+    progress_tx: Option<&tokio::sync::mpsc::Sender<crate::types::worker_v2::ProgressEventV2>>,
 ) -> Result<Vec<UdResponse>, ServerError> {
     let num_chunks = compute_chunk_count(items.len(), pool.max_workers_per_key());
 
     if num_chunks <= 1 {
-        // Fast path: single dispatch (no allocation overhead, no join_all).
-        return infer_batch_single(pool, items, lang, mwt, retokenize).await;
+        return infer_batch_single(pool, items, lang, mwt, retokenize, progress_tx).await;
     }
 
     let chunk_size = (items.len() + num_chunks - 1) / num_chunks;
@@ -50,14 +50,11 @@ pub(crate) async fn infer_batch(
 
     let futures: Vec<_> = chunks
         .iter()
-        .map(|chunk| infer_batch_single(pool, chunk, lang, mwt, retokenize))
+        .map(|chunk| infer_batch_single(pool, chunk, lang, mwt, retokenize, progress_tx))
         .collect();
 
     let outcomes = futures::future::join_all(futures).await;
 
-    // Merge results in order.  Fail on the first chunk error — other chunks
-    // have already completed (join_all awaits all), so their workers return
-    // to the pool cleanly via CheckedOutWorker drop.
     let mut all = Vec::with_capacity(items.len());
     for outcome in outcomes {
         all.extend(outcome?);
@@ -75,6 +72,7 @@ async fn infer_batch_single(
     lang: &LanguageCode3,
     mwt: &MwtDict,
     retokenize: bool,
+    progress_tx: Option<&tokio::sync::mpsc::Sender<crate::types::worker_v2::ProgressEventV2>>,
 ) -> Result<Vec<UdResponse>, ServerError> {
     let payload_items: Vec<_> = items.iter().map(|(_, _, item, _)| item.clone()).collect();
 
@@ -104,7 +102,7 @@ async fn infer_batch_single(
         "Dispatching morphosyntax execute_v2 batch"
     );
 
-    let response = dispatch_execute_v2_with_retry(pool, lang, &request).await?;
+    let response = dispatch_execute_v2_with_retry_and_progress(pool, lang, &request, progress_tx).await?;
     let result = parse_morphosyntax_result_v2(&response).map_err(|error| {
         ServerError::Validation(format!("invalid morphosyntax V2 result: {error}"))
     })?;

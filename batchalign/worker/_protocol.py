@@ -65,6 +65,29 @@ def _write_json(payload: dict[str, WorkerJSONValue]) -> None:
     sys.stdout.flush()
 
 
+def write_progress_event(
+    request_id: str,
+    completed: int,
+    total: int,
+    stage: str = "stanza_processing",
+) -> None:
+    """Emit a progress event line during a long-running V2 task.
+
+    The Rust worker handle reads these intermediate JSON lines before the
+    final response.  Progress events use the ``progress_v2`` op tag so
+    the handle can distinguish them from the final ``execute_v2`` response.
+    """
+    _write_json({
+        "op": "progress_v2",
+        "event": {
+            "request_id": request_id,
+            "completed": completed,
+            "total": total,
+            "stage": stage,
+        },
+    })
+
+
 def _write_error(message: str) -> None:
     """Emit protocol-level error response for malformed requests/ops."""
     _write_json({"op": "error", "error": message})

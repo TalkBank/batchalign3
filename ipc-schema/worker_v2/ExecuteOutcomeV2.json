@@ -1,98 +1,78 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ExecuteOutcomeV2",
   "description": "Top-level execute outcome.",
   "oneOf": [
     {
       "description": "Request completed successfully.",
       "type": "object",
-      "required": [
-        "kind"
-      ],
       "properties": {
         "kind": {
           "type": "string",
-          "enum": [
-            "success"
-          ]
+          "const": "success"
         }
-      }
+      },
+      "required": [
+        "kind"
+      ]
     },
     {
       "description": "Request failed at the protocol/runtime boundary.",
       "type": "object",
-      "required": [
-        "code",
-        "kind",
-        "message"
-      ],
       "properties": {
         "code": {
           "description": "Stable protocol error category.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ProtocolErrorCodeV2"
-            }
-          ]
+          "$ref": "#/$defs/ProtocolErrorCodeV2"
         },
         "kind": {
           "type": "string",
-          "enum": [
-            "error"
-          ]
+          "const": "error"
         },
         "message": {
           "description": "Human-readable detail for logs and tests.",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ]
     }
   ],
-  "definitions": {
+  "$defs": {
     "ProtocolErrorCodeV2": {
       "description": "Error category for protocol-level failures.",
       "oneOf": [
         {
           "description": "Worker/runtime does not understand the requested protocol version.",
           "type": "string",
-          "enum": [
-            "unsupported_protocol"
-          ]
+          "const": "unsupported_protocol"
         },
         {
           "description": "Request payload shape was invalid for the task.",
           "type": "string",
-          "enum": [
-            "invalid_payload"
-          ]
+          "const": "invalid_payload"
         },
         {
           "description": "Required attachment was not supplied.",
           "type": "string",
-          "enum": [
-            "missing_attachment"
-          ]
+          "const": "missing_attachment"
         },
         {
           "description": "Attachment existed logically but could not be read.",
           "type": "string",
-          "enum": [
-            "attachment_unreadable"
-          ]
+          "const": "attachment_unreadable"
         },
         {
           "description": "Model or SDK runtime for the task is unavailable.",
           "type": "string",
-          "enum": [
-            "model_unavailable"
-          ]
+          "const": "model_unavailable"
         },
         {
           "description": "Runtime failed while executing the task.",
           "type": "string",
-          "enum": [
-            "runtime_failure"
-          ]
+          "const": "runtime_failure"
         }
       ]
     }

@@ -11,6 +11,19 @@
 //! environmental problem that requires operator intervention. Each variant's
 //! doc comment notes which category it falls into.
 
+/// Format the `ProcessExited` Display output, including stderr when available.
+fn format_process_exited(code: Option<i32>, stderr: Option<&str>) -> String {
+    let header = format!(
+        "worker process exited unexpectedly (exit code: {code:?})"
+    );
+    match stderr {
+        Some(text) if !text.is_empty() => {
+            format!("{header}\n--- worker stderr ---\n{text}")
+        }
+        _ => header,
+    }
+}
+
 /// Errors arising from Python worker process management.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
@@ -77,10 +90,16 @@ pub enum WorkerError {
     /// **Retryable** -- the pool's health loop will detect the dead process
     /// and spawn a replacement. However, if the crash is deterministic (e.g.
     /// always triggered by a specific input), the replacement will crash too.
-    #[error("worker process exited unexpectedly (exit code: {code:?})")]
+    #[error("{}", format_process_exited(*.code, stderr.as_deref()))]
     ProcessExited {
         /// Exit code of the worker process, if available.
         code: Option<i32>,
+        /// Last lines of the worker's stderr, captured at crash time.
+        ///
+        /// Contains the Python traceback, OOM message, or other diagnostic
+        /// output that explains WHY the worker died. `None` if stderr was
+        /// empty or could not be read before the process fully exited.
+        stderr: Option<String>,
     },
 
     /// The stdio JSON-lines protocol was violated: a request could not be

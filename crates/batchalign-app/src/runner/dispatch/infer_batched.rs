@@ -79,16 +79,22 @@ pub(crate) async fn dispatch_batched_infer(
         // Transition to Reading while doing I/O so the frontend shows activity.
         lifecycle.stage(FileStage::Reading).await;
 
-        let read_path =
+        let read_path: std::path::PathBuf =
             if job.filesystem.paths_mode && file_index < job.filesystem.source_paths.len() {
-                job.filesystem.source_paths[file_index].clone()
+                job.filesystem.source_paths[file_index]
+                    .assume_shared_filesystem()
+                    .as_path()
+                    .to_owned()
             } else {
                 job.filesystem.staging_dir.join("input").join(filename)
+                    .as_path()
+                    .to_owned()
             };
         let before_path = if !job.filesystem.before_paths.is_empty()
             && file_index < job.filesystem.before_paths.len()
         {
-            Some(job.filesystem.before_paths[file_index].clone())
+            Some(job.filesystem.before_paths[file_index]
+                .assume_shared_filesystem())
         } else {
             None
         };
@@ -170,8 +176,62 @@ pub(crate) async fn dispatch_batched_infer(
                 }
                 results
             } else {
-                crate::morphosyntax::process_morphosyntax_batch(&file_texts, services, &mor_params)
-                    .await
+                // Create a progress channel for batch-level monitoring.
+                // The drain task logs progress and publishes via the event sink.
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::channel::<crate::types::worker_v2::ProgressEventV2>(64);
+
+                let progress_job_id = job_id.clone();
+                let _progress_sink = sink.clone();
+                let drain_handle = tokio::spawn(async move {
+                    use crate::runner::util::batch_progress::BatchInferProgress;
+                    let mut progress = BatchInferProgress::new();
+                    let mut last_log = tokio::time::Instant::now();
+
+                    while let Some(event) = progress_rx.recv().await {
+                        // The stage field carries the language code for morphosyntax.
+                        let lang = &event.stage;
+                        if !progress.language_groups.contains_key(lang) {
+                            progress.register_group(lang, event.total as u64);
+                        }
+                        progress.update_group(lang, event.completed as u64);
+
+                        // Rate-limited logging (at most once per 2 seconds).
+                        let now = tokio::time::Instant::now();
+                        if now.duration_since(last_log).as_secs() >= 2 {
+                            last_log = now;
+                            tracing::info!(
+                                job_id = %progress_job_id,
+                                summary = %progress.summary(),
+                                "Batch morphosyntax progress"
+                            );
+                        }
+                    }
+
+                    // Final log when channel closes (all language groups done).
+                    tracing::info!(
+                        job_id = %progress_job_id,
+                        summary = %progress.summary(),
+                        "Batch morphosyntax complete"
+                    );
+                });
+
+                let results = crate::morphosyntax::run_morphosyntax_batch_impl(
+                    &file_texts,
+                    services,
+                    &mor_params,
+                    Some(progress_tx),
+                )
+                .await;
+
+                // The sender was cloned per-language-group in batch.rs and
+                // dropped when each future completed.  The original sender
+                // was moved into run_morphosyntax_batch_impl and dropped
+                // when it returned.  The channel is now closed, so the
+                // drain task will finish after processing remaining events.
+                let _ = drain_handle.await;
+
+                results
             }
         }
         ReleasedCommand::Utseg => {
