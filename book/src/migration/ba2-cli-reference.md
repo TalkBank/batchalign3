@@ -38,7 +38,7 @@ BA3 preserves the Feb 9 globals as hidden no-ops (except `--verbose`,
 | `--mem-guard` / `--no-mem-guard` | flag | off | Feb 9 only | Hidden no-op |
 | `--adaptive-workers` / `--no-adaptive-workers` | bool | `True` | Feb 9 only | Hidden no-op |
 | `--pool` / `--no-pool` | bool | `True` | Feb 9 only | Hidden no-op |
-| `--lazy-audio` / `--no-lazy-audio` | bool | `True` | Feb 9 only | Wired |
+| `--lazy-audio` / `--no-lazy-audio` | bool | `True` | Feb 9 only | Removed (was no-op) |
 | `--adaptive-safety-factor` | float | `1.35` | Feb 9 only | Hidden no-op |
 | `--adaptive-warmup` | int | `2` | Feb 9 only | Hidden no-op |
 | `--force-cpu` / `--no-force-cpu` | bool | `False` | Feb 9 only | Wired (environment var) |
@@ -97,7 +97,7 @@ Morphosyntactic analysis (POS, lemma, dependency parse).
 | `--retokenize` / `--keeptokens` | bool | `False` | Retokenize main line for UD | Wired |
 | `--skipmultilang` / `--multilang` | bool | `False` | Skip multilingual files | Wired |
 | `--lexicon` | path | `None` | Manual lexicon override | Wired |
-| `--override-cache` / `--use-cache` | bool | `False` | Bypass analysis cache **(Feb 9 only)** | Wired |
+| `--override-media-cache` / `--use-cache` | bool | `False` | Bypass analysis cache **(Feb 9 only)** | Wired |
 | `--merge-abbrev` / `--no-merge-abbrev` | bool | `False` | Merge abbreviations **(Feb 9 only)** | Wired |
 
 **Pipeline task:** `"morphosyntax"`.

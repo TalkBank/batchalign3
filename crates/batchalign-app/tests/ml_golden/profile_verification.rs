@@ -132,7 +132,7 @@ async fn gpu_profile_uses_single_worker_for_multi_file_align() {
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         fa_engine: FaEngineName::Wave2Vec,
@@ -232,7 +232,7 @@ async fn stanza_profile_groups_morphotag_and_utseg() {
 
     let morphotag_options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,
@@ -268,7 +268,7 @@ async fn stanza_profile_groups_morphotag_and_utseg() {
 
     let utseg_options = CommandOptions::Utseg(UtsegOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -345,7 +345,7 @@ async fn profile_worker_keys_use_profile_labels() {
 
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,

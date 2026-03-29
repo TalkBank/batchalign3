@@ -1,10 +1,96 @@
 # Caching
 
 **Status:** Current
-**Last updated:** 2026-03-21 15:30
+**Last modified:** 2026-03-28 23:19 EDT
 
 Batchalign uses two distinct cache layers. All caching is managed by the
 Rust server — Python workers are cache-unaware.
+
+## Default Policy: Text Tasks Skip Cache, Audio Tasks Use Cache
+
+As of 2026-03-28, **text NLP tasks (morphosyntax, utseg, translation)
+skip the utterance cache by default.** Audio tasks (FA, UTR ASR, media
+conversion) continue to use the tiered cache.
+
+This decision is based on production benchmarks from a 15,748-file
+morphotag rerun:
+
+| Metric | Value |
+|--------|-------|
+| Cache hit rate (corpus rerun) | 6-16% |
+| Cache lookup time per 25-file window | 2,500ms |
+| Inference time saved by hits | ~100ms |
+| **Net effect** | **Cache 25x slower than re-inference** |
+
+With warm Stanza workers, batched inference runs at ~4ms/sentence
+(benchmarked with `scripts/stanza-batch-bench/`). The SQLite cold cache
+grew to 2.7 GB with 2M entries, causing 1.2s per query. Even the moka
+hot cache's 6% cross-file deduplication saved only ~7ms of inference —
+less than the hash computation overhead.
+
+### Why text caching doesn't help
+
+1. **Most utterances are unique across files.** In a typical corpus,
+   only common phrases ("thank you", "okay") repeat across files.
+   The 6-16% hit rate reflects this.
+
+2. **Stanza inference is fast enough.** At 4ms/sentence batched,
+   re-inferring 500 utterances takes 2 seconds. The cache lookup
+   for those 500 utterances took 2.5 seconds on a 2.7 GB database.
+
+3. **Staleness is a real problem.** Code changes (new MOR/GRA format,
+   pipeline version bumps) invalidate cached entries. Stale entries
+   that pass the version check but fail injection validation waste
+   time and produce confusing warnings.
+
+4. **The cache grows without bounds.** No eviction, no periodic vacuum,
+   no WAL checkpointing. After a corpus rerun, the SQLite database
+   is multi-GB and every query is slow.
+
+### Why audio caching helps
+
+1. **Audio inference is expensive.** Whisper ASR takes 30-120 seconds
+   per file. FA takes 10-60 seconds. Caching saves minutes, not
+   milliseconds.
+
+2. **Audio rarely changes.** The same .mp3 file produces the same
+   transcription every time. The `AudioIdentity` key (path + mtime +
+   size) correctly invalidates on re-encoding.
+
+3. **Hit rates are high for repeated alignment.** Re-running `align`
+   on a corpus where only a few files changed gives near-100% hit
+   rate for unchanged audio.
+
+### Re-enabling text cache
+
+The cache infrastructure is preserved. To re-enable for text tasks,
+change one line in `runner/dispatch/plan.rs`:
+
+```rust
+// Current (skip):
+let cache_policy = CachePolicy::SkipCache;
+
+// To re-enable:
+let cache_policy = if override_media_cache {
+    CachePolicy::SkipCache
+} else {
+    cache_overrides.policy_for(CacheTaskName::Morphosyntax)
+};
+```
+
+`--override-media-cache` bypasses audio caches (`align`, `transcribe`).
+
+`--text-cache` re-enables the utterance cache for text NLP tasks.
+Use this for incremental editing workflows where most utterances are
+unchanged between runs. When both `--text-cache` and
+`--override-media-cache` are set, `--override-media-cache` wins
+(cache skipped for all tasks).
+
+### NoopBackend
+
+`UtteranceCache::noop()` creates a backend that always misses and
+silently discards puts. Available for testing or for tasks where even
+the cache key computation overhead is undesirable.
 
 ## Analysis Cache (Tiered: moka + SQLite)
 
@@ -33,7 +119,7 @@ via `JoinSet` + `Semaphore`).
 | Layer | Implementation | Capacity | Eviction |
 |-------|---------------|----------|----------|
 | **Hot** | `moka::future::Cache` | 10,000 entries (~5-20 MB) | 24h time-to-idle |
-| **Cold** | `SqliteBackend` (WAL, 5-connection pool) | Unbounded (disk) | None (manual or `--override-cache`) |
+| **Cold** | `SqliteBackend` (WAL, 5-connection pool) | Unbounded (disk) | None (manual or `--override-media-cache`) |
 
 The following diagram shows the read, write, and delete paths through
 both tiers. SQLite is always authoritative; moka absorbs repeated
@@ -168,7 +254,7 @@ What user actions cause cache misses (force re-inference) for each task:
 | Change FA engine | Hit | Hit | Hit | Miss | Hit | Hit |
 | Change ASR engine | Hit | Hit | Hit | Hit | Hit\* | Hit\* |
 | Upgrade model version | Miss | Miss | Miss | Miss | Miss | Miss |
-| Use `--override-cache` | Skip | Skip | Skip | Skip | Skip | Skip |
+| Use `--override-media-cache` | Skip | Skip | Skip | Skip | Skip | Skip |
 
 \*UTR cache keys do not include engine name, but engine_version scoping at the
 SQLite/moka layer catches model upgrades (the entry's stored engine_version must
@@ -236,10 +322,10 @@ being served on future runs. Validation failures also trigger bug reports to
 
 ### Override
 
-`--override-cache` bypasses cache lookups, forcing fresh inference for every
+`--override-media-cache` bypasses cache lookups, forcing fresh inference for every
 utterance. Use this when validating behavior changes or after model upgrades.
 
-For a developer-facing guide on when `--override-cache` is actually needed after
+For a developer-facing guide on when `--override-media-cache` is actually needed after
 code changes, see the [Cache Override Guide](cache-override-guide.md).
 
 ## UTR ASR Caching
@@ -287,7 +373,7 @@ cached independently with key
 This avoids processing already-timed regions on the first run. After the first
 run, the full-file cache makes the distinction moot.
 
-Both modes respect `CachePolicy` — `--override-cache` skips lookups but still
+Both modes respect `CachePolicy` — `--override-media-cache` skips lookups but still
 stores results for future use.
 
 ## What is NOT cached

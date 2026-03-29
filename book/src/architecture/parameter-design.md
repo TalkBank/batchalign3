@@ -32,7 +32,7 @@ pub async fn process_fa(
     timing_mode: FaTimingMode,
     max_group_ms: u64,
     engine: FaEngineType,
-    override_cache: bool,    // ← what does "true" mean?
+    override_media_cache: bool,    // ← what does "true" mean?
     write_wor: bool,         // ← what does "false" mean?
     progress: Option<&ProgressSender>,
 ) -> Result<FaResult, ServerError>
@@ -46,7 +46,7 @@ Three audio-related values always passed together. Three infrastructure values
 
 ### `CachePolicy`
 
-Every NLP orchestrator accepts a cache policy. The old `override_cache: bool`
+Every NLP orchestrator accepts a cache policy. The old `override_media_cache: bool`
 parameter inverted the natural reading — `true` meant *skip* the cache, not
 *use* it.
 
@@ -70,7 +70,7 @@ Call sites read naturally:
 
 ```rust
 // Before
-if override_cache { /* skip */ } else { /* use */ }
+if override_media_cache { /* skip */ } else { /* use */ }
 
 // After
 if cache_policy.should_skip() { /* skip */ } else { /* use */ }
@@ -102,8 +102,8 @@ deserialized from CLI flags or JSON:
 
 ```rust
 impl From<bool> for CachePolicy {
-    fn from(override_cache: bool) -> Self {
-        if override_cache { Self::SkipCache } else { Self::UseCache }
+    fn from(override_media_cache: bool) -> Self {
+        if override_media_cache { Self::SkipCache } else { Self::UseCache }
     }
 }
 ```
@@ -223,10 +223,10 @@ control-plane code.
 CLI flags / JSON body           ← bool, String, numbers
     │
     ▼
-CommandOptions (options.rs)     ← deserialized, still bool for override_cache
+CommandOptions (options.rs)     ← deserialized, still bool for override_media_cache
     │
     ▼
-Dispatch layer (infer.rs)       ← CachePolicy::from(opts.override_cache)
+Dispatch layer (infer.rs)       ← CachePolicy::from(opts.override_media_cache)
     │                              FaParams { ... }
     │                              MorphosyntaxParams { lang: &lang, ... }
     │                              PipelineServices { engine_version: &ev, ... }

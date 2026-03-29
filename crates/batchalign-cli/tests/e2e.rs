@@ -254,16 +254,16 @@ async fn e2e_noalign_file_passthrough() {
 // Options propagation
 // ---------------------------------------------------------------------------
 
-/// override_cache option is accepted in the submission.
+/// override_media_cache option is accepted in the submission.
 #[tokio::test]
-async fn e2e_override_cache_option() {
+async fn e2e_override_media_cache_option() {
     let python = require_python!();
     let (base_url, _tmp) = start_test_server(&python).await;
     let client = reqwest::Client::new();
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: batchalign_app::options::AsrEngineName::RevAi,

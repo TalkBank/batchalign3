@@ -542,7 +542,7 @@ fn stage_run_utseg<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> St
             ctx.services.pool,
             ctx.services.cache,
             ctx.services.engine_version,
-            CachePolicy::from(ctx.opts.override_cache),
+            CachePolicy::from(ctx.opts.override_media_cache),
         )
         .await?;
         ctx.dumper.dump_post_utseg_chat(filename, &result);
@@ -570,7 +570,7 @@ fn stage_run_morphosyntax<'a, 'ctx>(
         let mor_params = MorphosyntaxParams {
             lang: &mor_lang,
             tokenization_mode: TokenizationMode::Preserve,
-            cache_policy: CachePolicy::from(ctx.opts.override_cache),
+            cache_policy: CachePolicy::from(ctx.opts.override_media_cache),
             multilingual_policy: MultilingualPolicy::ProcessAll,
             mwt: &empty_mwt,
         };
@@ -642,7 +642,7 @@ mod tests {
             num_speakers: 2,
             with_utseg: false,
             with_morphosyntax: false,
-            override_cache: false,
+            override_media_cache: false,
             write_wor: false,
             media_name: Some("sample".into()),
             rev_job_id: None,

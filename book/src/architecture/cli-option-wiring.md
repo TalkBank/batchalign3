@@ -56,7 +56,7 @@ struct. These are cross-cutting concerns shared by all commands:
 | `--before PATH` | `CommonOpts.before` | `job.before_paths` | `dispatch_fa_infer`, `dispatch_batched_infer` → incremental orchestrators | Wired (morphotag, align) |
 | `--in-place` | `CommonOpts.in_place` | Resolved at CLI dispatch | Path resolution in `dispatch/paths.rs` | Wired |
 | `--file-list FILE` | `CommonOpts.file_list` | Resolved at CLI dispatch | File discovery in `resolve.rs` | Wired |
-| `--override-cache` | `CommonOpts.override_cache` | `CommonOptions.override_cache` | Via `CommandOptions` (Path 1) | Wired |
+| `--override-media-cache` | `CommonOpts.override_media_cache` | `CommonOptions.override_media_cache` | Via `CommandOptions` (Path 1) | Wired |
 | `--engine-overrides JSON` | (global) | `CommonOptions.engine_overrides` | Typed built-in/custom engine selection and worker command overrides | Wired |
 | `--lexicon FILE` | (global) | `CommonOptions.mwt` | MWT dictionary injection | Wired |
 

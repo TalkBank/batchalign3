@@ -130,6 +130,15 @@ impl BatchInferProgress {
         self.language_groups.values().all(|g| g.is_complete())
     }
 
+    /// Returns language codes for groups that have not yet completed.
+    pub fn incomplete_groups(&self) -> Vec<&str> {
+        self.language_groups
+            .iter()
+            .filter(|(_, g)| !g.is_complete())
+            .map(|(lang, _)| lang.as_str())
+            .collect()
+    }
+
     /// Number of language groups that are still in progress.
     pub fn active_groups(&self) -> usize {
         self.language_groups
@@ -260,6 +269,19 @@ mod tests {
         p.register_group("eng", 100);
         p.update_group("xyz", 50); // unknown language
         assert_eq!(p.completed_utterances(), 0);
+    }
+
+    #[test]
+    fn incomplete_groups_returns_unfinished() {
+        let mut p = BatchInferProgress::new();
+        p.register_group("eng", 100);
+        p.register_group("fra", 50);
+        p.register_group("deu", 30);
+        p.complete_group("eng");
+        let incomplete = p.incomplete_groups();
+        assert_eq!(incomplete.len(), 2);
+        assert!(incomplete.contains(&"fra"));
+        assert!(incomplete.contains(&"deu"));
     }
 
     #[test]

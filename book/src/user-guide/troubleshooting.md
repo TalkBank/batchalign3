@@ -75,7 +75,7 @@ batchalign3 morphotag corpus/ -o output/
 Bypass the cache for one run:
 
 ```bash
-batchalign3 --override-cache morphotag corpus/ -o output/
+batchalign3 --override-media-cache morphotag corpus/ -o output/
 ```
 
 Clear cached data:
@@ -185,7 +185,7 @@ flowchart TD
     parse -->|yes| trace_fix["Re-run with --debug-dir\nand inspect traces / fallback_events"]
     parse -->|no| generic
 
-    generic -->|yes| cache_fix["Bypass FA cache with\n--override-cache-tasks forced_alignment\nthen inspect traces again"]
+    generic -->|yes| cache_fix["Bypass FA cache with\n--override-media-cache-tasks forced_alignment\nthen inspect traces again"]
     generic -->|no| done["Use normal output / bug report path"]
 ```
 
@@ -194,7 +194,7 @@ The two most useful commands are:
 ```bash
 batchalign3 -vvvv align \
   --debug-dir /tmp/ba-debug \
-  --override-cache-tasks forced_alignment \
+  --override-media-cache-tasks forced_alignment \
   -o output/ \
   file.cha
 ```
@@ -292,15 +292,6 @@ problem.  For heavily restructured transcripts with dense overlap, a more
 fundamental change (per-speaker alignment) is needed.  See
 [Monotonicity Invariant](../reference/forced-alignment.md#monotonicity-invariant)
 for the technical details and roadmap.
-
-## Audio memory spikes
-
-Batchalign uses lazy audio loading by default for alignment and ASR. To compare
-behavior against full loads:
-
-```bash
-batchalign3 --no-lazy-audio align corpus/ -o output/
-```
 
 ## "Command not supported" or missing commands
 

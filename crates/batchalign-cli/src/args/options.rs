@@ -70,14 +70,14 @@ fn parse_cache_task(name: &str) -> Option<CacheTaskName> {
 
 /// Resolve the cache override policy from CLI flags.
 pub fn resolve_cache_overrides(global: &GlobalOpts) -> CacheOverrides {
-    if !global.override_cache_tasks.is_empty() {
+    if !global.override_media_cache_tasks.is_empty() {
         let tasks = global
-            .override_cache_tasks
+            .override_media_cache_tasks
             .iter()
             .filter_map(|s| parse_cache_task(s))
             .collect();
         CacheOverrides::Tasks(tasks)
-    } else if global.override_cache {
+    } else if global.override_media_cache {
         CacheOverrides::All
     } else {
         CacheOverrides::None
@@ -89,14 +89,15 @@ pub fn resolve_cache_overrides(global: &GlobalOpts) -> CacheOverrides {
 /// Returns `None` for non-processing commands (serve, jobs, version, etc.).
 pub fn build_typed_options(cmd: &Commands, global: &GlobalOpts) -> Option<CommandOptions> {
     let common = CommonOptions {
-        override_cache: global.override_cache,
-        lazy_audio: resolve_flag_pair(global.lazy_audio, global.no_lazy_audio),
+        override_media_cache: global.override_media_cache,
         engine_overrides: parse_engine_overrides(&global.engine_overrides),
         debug_dir: global
             .debug_dir
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        override_cache_tasks: global.override_cache_tasks.clone(),
+        override_media_cache_tasks: global.override_media_cache_tasks.clone(),
+        batch_window: global.batch_window,
+        text_cache: global.text_cache,
         ..Default::default()
     };
 

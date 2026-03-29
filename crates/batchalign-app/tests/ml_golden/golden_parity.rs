@@ -72,7 +72,7 @@ async fn run_parity_test(
 fn morphotag_opts(retokenize: bool) -> CommandOptions {
     CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize,
@@ -84,7 +84,7 @@ fn morphotag_opts(retokenize: bool) -> CommandOptions {
 fn utseg_opts() -> CommandOptions {
     CommandOptions::Utseg(UtsegOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -94,7 +94,7 @@ fn utseg_opts() -> CommandOptions {
 fn translate_opts() -> CommandOptions {
     CommandOptions::Translate(TranslateOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -104,7 +104,7 @@ fn translate_opts() -> CommandOptions {
 fn coref_opts() -> CommandOptions {
     CommandOptions::Coref(CorefOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),

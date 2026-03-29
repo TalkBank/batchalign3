@@ -149,7 +149,6 @@ function makeJob(jobId, status, { completed, total, submittedAt, fileStatuses, e
       skipmultilang: false,
       merge_abbrev: false,
       override_cache: false,
-      lazy_audio: true,
     },
     lang: "eng",
     source_dir: sourceDir ?? "/tmp/source",
@@ -531,7 +530,6 @@ test("dashboard list/detail/actions work against the mock harness", async ({ pag
     await expect(page).toHaveURL(new RegExp(`${harness.baseUrl}/dashboard/jobs/runjob$`));
     await expect(page.getByText("Command Args")).toBeVisible();
     await expect(page.getByText('"command": "morphotag"')).toBeVisible();
-    await expect(page.getByText('"lazy_audio": true')).toBeVisible();
     await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
     await page.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("button", { name: "Restart" })).toBeVisible();

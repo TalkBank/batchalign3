@@ -132,7 +132,7 @@ async fn golden_morphotag_eng_simple() {
 
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,
@@ -174,7 +174,7 @@ async fn golden_morphotag_eng_multi_utt() {
 
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,
@@ -212,7 +212,7 @@ async fn golden_utseg_eng_multi_utt() {
 
     let options = CommandOptions::Utseg(UtsegOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -247,7 +247,7 @@ async fn golden_translate_eng_simple() {
 
     let options = CommandOptions::Translate(TranslateOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -373,7 +373,7 @@ async fn golden_compare_eng() {
 
     let options = CommandOptions::Compare(CompareOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -442,7 +442,7 @@ async fn golden_coref_eng() {
 
     let options = CommandOptions::Coref(CorefOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -494,7 +494,7 @@ async fn golden_morphotag_spa_simple() {
 
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,
@@ -561,7 +561,7 @@ async fn golden_morphotag_retokenize_eng() {
 
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: true,
@@ -617,7 +617,7 @@ async fn golden_utseg_spa() {
 
     let options = CommandOptions::Utseg(UtsegOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -656,7 +656,7 @@ async fn golden_translate_spa_to_eng() {
 
     let options = CommandOptions::Translate(TranslateOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),

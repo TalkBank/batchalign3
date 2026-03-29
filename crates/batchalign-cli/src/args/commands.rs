@@ -595,10 +595,6 @@ pub struct BenchArgs {
     #[arg(long)]
     pub dataset: Option<String>,
 
-    /// Disable lazy audio loading for this benchmark run.
-    #[arg(long)]
-    pub no_lazy_audio: bool,
-
     /// Number of workers to use.
     #[arg(long)]
     pub workers: Option<usize>,

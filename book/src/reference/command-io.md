@@ -70,11 +70,11 @@ CHAT transcripts by running forced alignment against the corresponding audio.
 | Aspect | Local CLI | Server (`--server`) |
 |--------|-----------|---------------------|
 | **Input files** | `.cha` files in `IN_DIR` | Shared-filesystem `.cha` paths in `IN_DIR`; server reads them directly |
-| **Input media** | Audio referenced by `@Media:` header, found adjacent to `.cha` or via `--lazy-audio` | Audio referenced by `@Media:` header and found on the same shared filesystem (adjacent, via shared source path, via local `media_mappings`, or via `--media-dir`) |
+| **Input media** | Audio referenced by `@Media:` header, found adjacent to `.cha` or via `--media-dir` | Audio referenced by `@Media:` header and found on the same shared filesystem (adjacent, via shared source path, via local `media_mappings`, or via `--media-dir`) |
 | **Extensions filter** | `["cha"]` | Same |
 | **Output** | `.cha` with `%wor` timing line, word `time` fields populated | Same `.cha` written directly to the requested output path |
 | **Mutation** | If `OUT_DIR = IN_DIR`: overwrites original `.cha` in place. Media files untouched. | Same |
-| **Key options** | `--utr-engine`, `--utr-engine-custom`, `--utr-strategy`, `--fa-engine`, `--fa-engine-custom`, `--pauses`, `--wor/--nowor`, `--override-cache` | All passed through typed command options |
+| **Key options** | `--utr-engine`, `--utr-engine-custom`, `--utr-strategy`, `--fa-engine`, `--fa-engine-custom`, `--pauses`, `--wor/--nowor`, `--override-media-cache` | All passed through typed command options |
 
 **What changes in the `.cha`:** `%wor` tier added/updated with word-level
 timestamps. Utterance-level bullet times (`\x15start_end\x15`) updated.
@@ -146,7 +146,7 @@ existing CHAT transcripts.
 | **Extensions filter** | `["cha"]` | Same |
 | **Output** | `.cha` with `%mor` and `%gra` tiers added/replaced | Same `.cha` returned as text |
 | **Mutation** | If `OUT_DIR = IN_DIR`: **overwrites original `.cha` in place**. | Same |
-| **Key options** | `--retokenize`, `--skipmultilang`, `--lexicon <CSV>`, `--override-cache`, `--merge-abbrev` | All passed. Lexicon CSV is read on the client and injected into typed command options before submission. |
+| **Key options** | `--retokenize`, `--skipmultilang`, `--lexicon <CSV>`, `--override-media-cache`, `--merge-abbrev` | All passed. Lexicon CSV is read on the client and injected into typed command options before submission. |
 
 **What changes in the `.cha`:** `%mor` tier added/replaced with POS tags and
 lemmas. `%gra` tier added/replaced with dependency relations. Main tier text
@@ -223,7 +223,7 @@ word error rate (WER) and inject per-utterance comparison annotations.
 | **Extensions filter** | `["cha"]` | Same |
 | **Output** | `.cha` with `%xsrep` / `%xsmor` tiers + `.compare.csv` metrics | Same — client writes both files to `OUT_DIR` |
 | **Mutation** | If `OUT_DIR = IN_DIR`: **overwrites original `.cha` in place**. Gold files are never modified. | Same |
-| **Key options** | `--lang`, `--merge-abbrev`, `--override-cache` | All passed through typed command options |
+| **Key options** | `--lang`, `--merge-abbrev`, `--override-media-cache` | All passed through typed command options |
 
 **What changes in the `.cha`:** The released output is the projected
 gold/reference transcript written at the main file's output path. BA3

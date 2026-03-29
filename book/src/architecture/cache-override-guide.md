@@ -4,7 +4,7 @@
 **Last updated:** 2026-03-16
 
 When fixing a bug or changing behavior, the first question is: **do deployed
-users need `--override-cache`?** This guide provides the mental model and
+users need `--override-media-cache`?** This guide provides the mental model and
 decision matrix to answer that question quickly.
 
 For what's cached and how keys work, see [Caching](caching.md). This page is
@@ -18,7 +18,7 @@ the cache (raw ML output) and what's computed fresh on every run (Rust
 post-processing). The rule is simple:
 
 - **Change inside the boundary** (the cached value itself is wrong) →
-  `--override-cache` needed
+  `--override-media-cache` needed
 - **Change outside the boundary** (post-processing that runs after retrieval) →
   fix applies automatically, no override needed
 
@@ -120,7 +120,7 @@ pauses, and gestures (which FA cannot align) lost their timing coverage.
 3. Are the cached timings wrong? No — the word-level timings are correct. The
    bug was in how we used them to update the utterance bullet.
 
-**Verdict: No `--override-cache` needed.** The fix (union with original bullet
+**Verdict: No `--override-media-cache` needed.** The fix (union with original bullet
 instead of replace) applies automatically to cached FA results.
 
 ## Self-Correcting Cache Purges
@@ -143,7 +143,7 @@ auto-deletes the cache entry that produced it and writes a bug report to
 If a cached entry fails to deserialize (e.g., because the stored format changed
 between versions), the cache layer logs a warning and falls back to
 re-inference. The stale entry is **not** automatically deleted — it becomes a
-permanent miss that re-infers every time until `--override-cache` forces a fresh
+permanent miss that re-infers every time until `--override-media-cache` forces a fresh
 store. This is conservative: it avoids data loss from format migration bugs.
 
 ## Deployment Checklist
@@ -154,10 +154,10 @@ When deploying a fix to the fleet (net, bilbo, etc.):
 2. **If override is NOT needed:** Deploy the new binary. Cached results are
    reprocessed through the fixed post-processing automatically.
 3. **If override IS needed:** Deploy the new binary, then re-run affected
-   commands with `--override-cache` on the target corpora. For large corpora,
+   commands with `--override-media-cache` on the target corpora. For large corpora,
    consider running only on affected files rather than the full dataset.
 4. **If engine version changed:** No action needed — version scoping
    automatically invalidates stale entries. Verify by checking cache stats in
    server logs (should show misses on first run).
-5. **If unsure:** `--override-cache` is always safe. The cost is re-inference
+5. **If unsure:** `--override-media-cache` is always safe. The cost is re-inference
    time, not correctness. When in doubt, override.

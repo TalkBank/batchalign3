@@ -724,6 +724,32 @@ impl JobRegistry {
         .unwrap_or(false)
     }
 
+    /// Set the batch-level progress for a batched infer job and return the
+    /// updated `JobListItem` for WebSocket notification.
+    pub(crate) async fn set_batch_progress(
+        &self,
+        job_id: &JobId,
+        progress: crate::runner::util::batch_progress::BatchInferProgress,
+    ) -> Option<JobListItem> {
+        self.update_job(job_id.clone(), move |job| {
+            job.execution.batch_progress = Some(progress);
+            job.to_list_item()
+        })
+        .await
+    }
+
+    /// Clear the batch-level progress (e.g. on job finalization).
+    pub(crate) async fn clear_batch_progress(
+        &self,
+        job_id: &JobId,
+    ) -> Option<JobListItem> {
+        self.update_job(job_id.clone(), move |job| {
+            job.execution.batch_progress = None;
+            job.to_list_item()
+        })
+        .await
+    }
+
     /// Take and clear the currently active attempt id for one file.
     pub(crate) async fn take_attempt_id(&self, job_id: &JobId, filename: &str) -> Option<String> {
         let filename = filename.to_string();

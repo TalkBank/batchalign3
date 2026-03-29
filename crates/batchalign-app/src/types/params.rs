@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// Cache lookup policy for NLP processing.
 ///
-/// Replaces the `override_cache: bool` parameter throughout the codebase.
+/// Replaces the `override_media_cache: bool` parameter throughout the codebase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CachePolicy {
     /// Use the cache normally (check for hits, store new results).
@@ -36,9 +36,9 @@ impl CachePolicy {
 }
 
 impl From<bool> for CachePolicy {
-    /// Converts from legacy `override_cache: bool` — `true` means skip cache.
-    fn from(override_cache: bool) -> Self {
-        if override_cache {
+    /// Converts from legacy `override_media_cache: bool` — `true` means skip cache.
+    fn from(override_media_cache: bool) -> Self {
+        if override_media_cache {
             Self::SkipCache
         } else {
             Self::UseCache
@@ -125,16 +125,16 @@ impl From<MergeAbbrevPolicy> for bool {
 
 /// Typed cache override policy supporting per-task granularity.
 ///
-/// Replaces the binary `override_cache: bool` with a richer model
+/// Replaces the binary `override_media_cache: bool` with a richer model
 /// that avoids boolean blindness and enables experiment-grade control.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum CacheOverrides {
     /// Use cache normally for all tasks (default).
     #[default]
     None,
-    /// Skip cache for all tasks (`--override-cache`).
+    /// Skip cache for all tasks (`--override-media-cache`).
     All,
-    /// Skip cache only for listed tasks (`--override-cache-tasks`).
+    /// Skip cache only for listed tasks (`--override-media-cache-tasks`).
     Tasks(BTreeSet<CacheTaskName>),
 }
 

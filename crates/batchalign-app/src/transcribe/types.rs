@@ -134,7 +134,7 @@ pub struct TranscribeOptions {
     /// Whether to run morphosyntax after CHAT assembly.
     pub with_morphosyntax: bool,
     /// Whether to override the cache for utseg/morphosyntax.
-    pub override_cache: bool,
+    pub override_media_cache: bool,
     /// Whether to generate `%wor` tiers in the transcribe output.
     ///
     /// Defaults to `false` (BA2 parity: `--wor` was opt-in for transcribe).

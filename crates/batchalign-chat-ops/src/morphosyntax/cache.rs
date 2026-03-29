@@ -154,7 +154,7 @@ pub fn inject_from_cache(
             if mor_chunks != gra_count {
                 return Err(format!(
                     "Cached MOR/GRA mismatch at line {}: %mor has {} chunks but %gra has {} relations. \
-                     Cache may be stale — re-run with --override-cache.",
+                     Cache may be stale — re-run with --override-media-cache.",
                     entry.line_idx, mor_chunks, gra_count
                 ));
             }

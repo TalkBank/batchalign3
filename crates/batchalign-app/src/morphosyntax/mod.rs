@@ -99,7 +99,10 @@ pub(crate) async fn process_morphosyntax_batch(
     services: PipelineServices<'_>,
     params: &MorphosyntaxParams<'_>,
 ) -> TextBatchFileResults {
-    run_morphosyntax_batch_impl(files, services, params, None).await
+    // Default timeout for batch morphosyntax when called outside the
+    // dispatch pipeline (e.g. from transcribe pipeline or tests).
+    let default_group_timeout = std::time::Duration::from_secs(1800);
+    run_morphosyntax_batch_impl(files, services, params, None, default_group_timeout).await
 }
 
 // ---------------------------------------------------------------------------

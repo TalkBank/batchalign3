@@ -203,6 +203,10 @@ pub enum FileProgressStage {
     Finalizing,
     /// Final write-to-disk or write-to-result stage.
     Writing,
+    /// Parsing CHAT files before dispatch.
+    Parsing,
+    /// Collecting NLP payloads from parsed files.
+    CollectingPayloads,
     /// Batched morphosyntax analysis.
     Analyzing,
     /// Batched utterance segmentation.
@@ -241,6 +245,8 @@ impl FileProgressStage {
             Self::AnalyzingMorphosyntax => "Analyzing morphosyntax",
             Self::Finalizing => "Finalizing",
             Self::Writing => "Writing",
+            Self::Parsing => "Parsing",
+            Self::CollectingPayloads => "Collecting payloads",
             Self::Analyzing => "Analyzing",
             Self::Segmenting => "Segmenting",
             Self::Translating => "Translating",

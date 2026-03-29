@@ -113,17 +113,17 @@ jq . /tmp/ba3-debug/sample_utr_tokens.json
 
 ## Fine-Grained Cache Overrides
 
-BA3 also introduces `--override-cache-tasks` for per-task cache control:
+BA3 also introduces `--override-media-cache-tasks` for per-task cache control:
 
 ```bash
 # Skip only UTR ASR cache (keep morphosyntax, FA caches)
-batchalign3 align input/ output/ --override-cache-tasks utr_asr
+batchalign3 align input/ output/ --override-media-cache-tasks utr_asr
 
 # Skip UTR + FA caches
-batchalign3 align input/ output/ --override-cache-tasks utr_asr,forced_alignment
+batchalign3 align input/ output/ --override-media-cache-tasks utr_asr,forced_alignment
 ```
 
 Valid task names: `morphosyntax`, `utr_asr`, `forced_alignment`,
 `utterance_segmentation`, `translation`.
 
-The existing `--override-cache` flag continues to skip all caches.
+The existing `--override-media-cache` flag continues to skip all caches.

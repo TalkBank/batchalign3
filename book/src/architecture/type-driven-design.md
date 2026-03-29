@@ -316,7 +316,7 @@ Boolean CLI flags convert to domain enums once at the dispatch layer:
 
 ```rust
 // dispatch layer
-let cache_policy = CachePolicy::from(opts.override_cache);  // bool → enum
+let cache_policy = CachePolicy::from(opts.override_media_cache);  // bool → enum
 let wor_tier = WorTierPolicy::from(opts.write_wor);
 
 // orchestrator — never sees booleans
@@ -351,7 +351,7 @@ serde attribute changes the wire format, the snapshot diff will catch it.
 | 2026-02 | `JobStatus` / `FileStatusKind` enums | State machine | Replaced stringly-typed status fields; commit `cbe0f873` |
 | 2026-02 | Flattened command option groups | Struct composition | Reduced duplication while keeping flat JSON across command request types |
 | 2026-03 | `string_id!` / `numeric_id!` macros | Domain identifier | Eliminated primitive obsession across server codebase; 13 newtypes |
-| 2026-03 | `CachePolicy`, `WorTierPolicy` enums | Boolean blindness | Replaced ambiguous `override_cache: bool`, `write_wor: bool` |
+| 2026-03 | `CachePolicy`, `WorTierPolicy` enums | Boolean blindness | Replaced ambiguous `override_media_cache: bool`, `write_wor: bool` |
 | 2026-03 | `MorphosyntaxParams`, `FaParams`, `AudioContext`, `PipelineServices` | Parameter grouping | Reduced orchestrator signatures from 14–16 params to 3–6 |
 | 2026-03 | `&Path`/`PathBuf` for audio paths | Path types | Replaced `&str`/`String` for file paths; explicit conversion at IPC boundaries |
 | 2026-03 | Boundary conversion patterns | All | Codified convert-once-at-boundary: HTTP→`JobId`, DB→deref, IPC→`to_string_lossy`, CLI→`From<bool>` |

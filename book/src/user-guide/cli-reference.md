@@ -25,8 +25,9 @@ Global options go before the command name.
 | `--workers N` | Maximum concurrent files per job (default: auto-tune based on RAM and CPU; capped at 8 for GPU commands) |
 | `--force-cpu` | Disable MPS/CUDA and force CPU-only models |
 | `--server URL` | Explicit server URL for server-backed dispatch |
-| `--override-cache` | Bypass the utterance analysis cache |
-| `--lazy-audio` / `--no-lazy-audio` | Toggle lazy audio loading for ASR/alignment |
+| `--override-media-cache` | Bypass the media analysis cache (audio tasks only; text tasks skip cache by default) |
+| `--text-cache` | Enable caching for text NLP tasks (off by default; useful for incremental editing) |
+| `--batch-window N` | Files per batch window for text NLP commands (default: 25, 0 = all-in-one) |
 | `--tui` / `--no-tui` | Toggle full-screen TUI for server-backed jobs (`DirectHost` local runs stay on terminal progress bars) |
 | `--open-dashboard` / `--no-open-dashboard` | Toggle browser auto-open for submitted server job pages (macOS only, interactive TTY only) |
 | `--engine-overrides JSON` | Select built-in alternative engines with a flat `{string:string}` JSON object; invalid JSON is rejected |
@@ -436,7 +437,7 @@ Key options:
 | `-n`, `--num-speakers N` | Number of speakers (default: `2`) |
 | `--merge-abbrev` | Merge abbreviations in output |
 
-Use global `--override-cache` when you need to force fresh main-side
+Use global `--override-media-cache` when you need to force fresh main-side
 morphosyntax before scoring.
 
 ### `avqi`

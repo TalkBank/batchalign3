@@ -49,6 +49,8 @@ const PROGRESS_STAGE_LABELS: Record<FileProgressStage, string> = {
   analyzing_morphosyntax: "Analyzing morphosyntax",
   finalizing: "Finalizing",
   writing: "Writing",
+  parsing: "Parsing",
+  collecting_payloads: "Collecting payloads",
   analyzing: "Analyzing",
   segmenting: "Segmenting",
   translating: "Translating",

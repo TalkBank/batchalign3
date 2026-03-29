@@ -507,7 +507,7 @@ The server reads per-command options from the job's `options` map (populated by 
 CLI args.rs                    runner.rs                    orchestrator
   --retokenize    →  options["retokenize"]    →  process_morphosyntax_batch(retokenize)
   --skipmultilang →  options["skipmultilang"] →  process_morphosyntax_batch(skipmultilang)
-  --override-cache→  options["override_cache"]→  all orchestrators
+  --override-media-cache→  options["override_media_cache"]→  all orchestrators
   --pauses        →  options["pauses"]        →  dispatch_fa_infer(pauses)
 ```
 
@@ -565,7 +565,7 @@ When `skipmultilang=true`, morphosyntax `collect_payloads()` skips utterances th
 |--------|----------|--------|
 | `retokenize` | `morphotag` | Retokenize main tier to match UD tokenization; bypasses cache |
 | `skipmultilang` | `morphotag` | Skip code-switched utterances (utterances with `[- lang]` markers) |
-| `override_cache` | `morphotag`, `utseg`, `translate`, `align` | Bypass cache, recompute everything |
+| `override_media_cache` | `morphotag`, `utseg`, `translate`, `align` | Bypass cache, recompute everything |
 | `pauses` | `align` | Group words into pause-separated chunks |
 | `lang` | all | Default language (overridden per-file by `@Languages` header) |
 

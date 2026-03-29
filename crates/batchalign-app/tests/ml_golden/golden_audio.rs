@@ -141,7 +141,7 @@ async fn golden_align_eng_wav2vec() {
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         fa_engine: FaEngineName::Wave2Vec,
@@ -191,7 +191,7 @@ async fn golden_align_eng_whisper_fa() {
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         fa_engine: FaEngineName::Whisper,
@@ -241,7 +241,7 @@ async fn golden_align_eng_no_wor() {
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         fa_engine: FaEngineName::Wave2Vec,
@@ -296,7 +296,7 @@ async fn golden_transcribe_eng_whisper() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -355,7 +355,7 @@ async fn golden_transcribe_eng_revai() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::RevAi,
@@ -405,7 +405,7 @@ async fn golden_transcribe_eng_whisper_wor() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -466,7 +466,7 @@ async fn golden_opensmile_eng() {
 
     let options = CommandOptions::Opensmile(OpensmileOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         feature_set: "eGeMAPSv02".into(),
@@ -520,7 +520,7 @@ async fn golden_benchmark_eng() {
 
     let options = CommandOptions::Benchmark(BenchmarkOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -586,7 +586,7 @@ async fn transcribe_audio_clip(audio_name: &str, lang: &str, label: &str) {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -642,7 +642,7 @@ async fn align_audio_clip(audio_name: &str, chat_name: &str, lang: &str, label: 
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         wor: WorTierPolicy::Include,
@@ -762,7 +762,7 @@ async fn transcribe_eng_acr_clip_whisper_produces_multiple_utterances() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -819,7 +819,7 @@ async fn transcribe_eng_acr_clip_revai_avoids_giant_first_utterance() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::RevAi,
@@ -891,7 +891,7 @@ async fn transcribe_eng_diarize() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -942,7 +942,7 @@ async fn parity_transcribe_disfluency_markup() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,
@@ -998,7 +998,7 @@ async fn parity_transcribe_retrace_markup() {
 
     let options = CommandOptions::Transcribe(TranscribeOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         asr_engine: AsrEngineName::Whisper,

@@ -46,7 +46,7 @@ async fn error_align_missing_audio() {
 
     let options = CommandOptions::Align(AlignOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         ..AlignOptions::default()
@@ -92,7 +92,7 @@ async fn error_morphotag_empty_file() {
 
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,
@@ -169,7 +169,7 @@ async fn error_invalid_command_name() {
         "source_dir": "",
         "options": {
             "command": "nonexistent_command",
-            "override_cache": false
+            "override_media_cache": false
         },
         "paths_mode": false,
         "source_paths": [],
@@ -232,7 +232,7 @@ async fn edge_morphotag_xxx_utterance() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,
@@ -288,7 +288,7 @@ async fn edge_morphotag_www_utterance() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,
@@ -341,7 +341,7 @@ async fn error_morphotag_invalid_chat() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,

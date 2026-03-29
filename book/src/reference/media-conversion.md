@@ -248,14 +248,14 @@ Total: **16,739 MP4 files** across all volumes.
 - **First run on MP4 files**: includes WAV conversion time (~seconds per
   file depending on duration)
 - **Subsequent runs**: WAV is cached, no conversion overhead
-- **For fair benchmarks**: either use `--override-cache` or ensure both
+- **For fair benchmarks**: either use `--override-media-cache` or ensure both
   old/new runs have the same cache state (warm or cold)
 - **For %wor-only fixes**: conversion cache is irrelevant since the audio
   doesn't change. FA cache keys include audio identity, so same audio =
   same cached alignment.
 - **Re-alignment scenario**: if re-aligning files that already had
   alignment, both the FA cache and the media conversion cache will be
-  warm. Use `--override-cache` for cold-start numbers.
+  warm. Use `--override-media-cache` for cold-start numbers.
 
 ## Dependencies
 

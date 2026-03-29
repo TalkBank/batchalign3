@@ -55,8 +55,7 @@ fn dataset_label(args: &BenchArgs) -> String {
 
 fn build_options(global: &GlobalOpts, args: &BenchArgs) -> CommandOptions {
     let common = CommonOptions {
-        override_cache: !args.use_cache,
-        lazy_audio: global.lazy_audio && !args.no_lazy_audio,
+        override_media_cache: !args.use_cache,
         ..Default::default()
     };
 
@@ -196,17 +195,17 @@ mod tests {
             workers: None,
             force_cpu: false,
             server: None,
-            override_cache: false,
-            lazy_audio: false,
-            no_lazy_audio: false,
+            override_media_cache: false,
             tui: false,
             no_tui: false,
             open_dashboard: true,
             no_open_dashboard: false,
             debug_dir: None,
-            override_cache_tasks: Vec::new(),
+            override_media_cache_tasks: Vec::new(),
             engine_overrides: None,
             timeout: None,
+            batch_window: 25,
+            text_cache: false,
         }
     }
 
@@ -217,7 +216,6 @@ mod tests {
             out_dir: PathBuf::from("/tmp/out"),
             runs: 1,
             dataset: None,
-            no_lazy_audio: false,
             workers: None,
             use_cache: false,
         }
@@ -243,8 +241,8 @@ mod tests {
         let g = global();
         let a = args(BenchTarget::Morphotag);
         let opts = build_options(&g, &a);
-        // use_cache=false → override_cache=true
-        assert!(opts.common().override_cache);
+        // use_cache=false → override_media_cache=true
+        assert!(opts.common().override_media_cache);
         assert_eq!(opts.command_name(), "morphotag");
     }
 }

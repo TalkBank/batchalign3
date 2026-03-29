@@ -237,6 +237,25 @@ impl JobStore {
         }
     }
 
+    /// Set the batch-level progress for a batched infer job and broadcast
+    /// a WebSocket event so dashboards can display per-language-group progress.
+    pub(crate) async fn set_batch_progress(
+        &self,
+        job_id: &JobId,
+        progress: crate::runner::util::batch_progress::BatchInferProgress,
+    ) {
+        if let Some(job_update) = self.registry.set_batch_progress(job_id, progress).await {
+            self.notify_job_item(job_update);
+        }
+    }
+
+    /// Clear the batch-level progress (called on job finalization).
+    pub(crate) async fn clear_batch_progress(&self, job_id: &JobId) {
+        if let Some(job_update) = self.registry.clear_batch_progress(job_id).await {
+            self.notify_job_item(job_update);
+        }
+    }
+
     /// Return the filenames of files that have not yet reached a terminal state.
     pub(crate) async fn unfinished_files(&self, job_id: &JobId) -> Vec<DisplayPath> {
         self.registry.unfinished_files(job_id).await

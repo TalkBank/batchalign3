@@ -107,7 +107,7 @@ mod tests {
             num_speakers: 1,
             with_utseg: false,
             with_morphosyntax: false,
-            override_cache: false,
+            override_media_cache: false,
             write_wor: false,
             media_name: Some("sample".into()),
             rev_job_id: None,

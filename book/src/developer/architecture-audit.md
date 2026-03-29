@@ -430,7 +430,6 @@ needs to monkeypatch `config_read()`. `read_asr_config()` now accepts an
 explicit `ConfigParser` for tests and higher-level helper code that already has
 configuration in hand.
 
-The lazy-audio tests also no longer monkeypatch the module-level audio loader.
 `ASRAudioFile` now accepts an explicit loader dependency for focused unit tests
 that need deterministic chunk reads.
 
@@ -743,11 +742,10 @@ subsystems:
 
 - file I/O compatibility layer
 - audio metadata model
-- lazy audio container
 - caching policy
 - token timestamp extraction glue
 
-It is a reasonable candidate for a split into `io`, `lazy_audio`, and
+It is a reasonable candidate for a split into `io`, audio loading, and
 Whisper-specific helpers.
 
 ### React and TypeScript

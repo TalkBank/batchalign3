@@ -71,6 +71,7 @@ opentelemetry_sdk = { version = "0.31", features = ["trace", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 dashmap = "6"
+rayon = "1"
 walkdir = "2"
 sysinfo = "0.38"
 tokio-util = "0.7"

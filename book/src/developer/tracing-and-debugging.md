@@ -357,23 +357,23 @@ jq . /tmp/ba3-debug/sample_utr_tokens.json
 4. Passes the dumper into the pipeline context struct
 5. Stage functions call dump methods at transition points
 
-## Fine-Grained Cache Overrides (`--override-cache-tasks`)
+## Fine-Grained Cache Overrides (`--override-media-cache-tasks`)
 
-For experiment-grade control, `--override-cache-tasks` bypasses cache only for
+For experiment-grade control, `--override-media-cache-tasks` bypasses cache only for
 specific NLP tasks:
 
 ```bash
 # Skip UTR ASR cache but keep morphosyntax and FA caches
-batchalign3 align input/ output/ --override-cache-tasks utr_asr
+batchalign3 align input/ output/ --override-media-cache-tasks utr_asr
 
 # Skip multiple tasks (comma-separated)
-batchalign3 morphotag input/ output/ --override-cache-tasks morphosyntax,translation
+batchalign3 morphotag input/ output/ --override-media-cache-tasks morphosyntax,translation
 ```
 
 Valid task names: `morphosyntax`, `utr_asr`, `forced_alignment`,
 `utterance_segmentation`, `translation`.
 
-The existing `--override-cache` continues to skip all cache domains.
+The existing `--override-media-cache` continues to skip all cache domains.
 Internally, `CacheOverrides::Tasks(BTreeSet<CacheTaskName>)` resolves per-task
 at each cache call site via `policy_for(CacheTaskName)`.
 

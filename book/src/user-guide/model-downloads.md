@@ -49,7 +49,7 @@ needed.
 To force re-computation manually (e.g., after updating models):
 
 ```bash
-batchalign3 morphotag --override-cache corpus/ -o output/ --lang eng
+batchalign3 morphotag --override-media-cache corpus/ -o output/ --lang eng
 ```
 
 ## Offline Use

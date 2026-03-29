@@ -47,10 +47,10 @@ automatically invalidates old results without manual intervention.
 
 ## How to force fresh results
 
-Use the `--override-cache` global flag:
+Use the `--override-media-cache` global flag:
 
 ```bash
-batchalign3 --override-cache morphotag corpus/ -o output/
+batchalign3 --override-media-cache morphotag corpus/ -o output/
 ```
 
 This skips all cache lookups, forcing every utterance through fresh
@@ -91,5 +91,5 @@ media conversion cache.
 
 Or delete the `cache.db` file and/or the media-cache directory directly.
 
-To selectively refresh without clearing everything, use `--override-cache`
+To selectively refresh without clearing everything, use `--override-media-cache`
 on specific runs instead — old entries for other corpora remain available.

@@ -93,7 +93,7 @@ duration_ms = int(round(f.tensor.shape[0] / f.rate * 1000))
 
 Pass it to `batchalign_core.add_forced_alignment(..., total_audio_ms=duration_ms)`.
 
-For lazy audio files, use `torchaudio.info()` to get duration without loading
+For audio files, use `torchaudio.info()` to get duration without loading
 the full file.
 
 ### Relationship to UTR

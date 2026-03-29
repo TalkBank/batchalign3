@@ -18,7 +18,7 @@ use batchalign_app::worker::InferTask;
 fn compare_opts() -> CommandOptions {
     CommandOptions::Compare(CompareOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),

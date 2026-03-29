@@ -364,6 +364,7 @@ impl Job {
     /// Finalize the job after all file tasks have stopped mutating its state.
     pub(crate) fn finalize(&mut self, final_status: JobStatus, completed_at: UnixTimestamp) {
         self.execution.status = final_status;
+        self.execution.batch_progress = None;
         self.schedule.completed_at = Some(completed_at);
         self.schedule.next_eligible_at = None;
         self.execution.completed_files = self
@@ -506,7 +507,7 @@ impl Job {
             next_eligible_at: self.schedule.next_eligible_at,
             num_workers: self.schedule.num_workers,
             active_lease: self.active_lease(),
-            batch_progress: None,
+            batch_progress: self.execution.batch_progress.clone(),
             control_plane: None,
         }
     }
@@ -738,6 +739,7 @@ mod tests {
                 results: Vec::new(),
                 error: None,
                 completed_files: 0,
+                batch_progress: None,
             },
             schedule: JobScheduleState {
                 submitted_at: UnixTimestamp(100.0),

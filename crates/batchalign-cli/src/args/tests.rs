@@ -388,19 +388,6 @@ fn parse_server_env() {
 }
 
 #[test]
-fn parse_lazy_audio() {
-    let cli = Cli::parse_from(["batchalign3", "--lazy-audio", "align", "corpus/"]);
-    assert!(cli.global.lazy_audio);
-    assert!(!cli.global.no_lazy_audio);
-}
-
-#[test]
-fn parse_no_lazy_audio() {
-    let cli = Cli::parse_from(["batchalign3", "--no-lazy-audio", "align", "corpus/"]);
-    assert!(cli.global.no_lazy_audio);
-}
-
-#[test]
 fn parse_open_dashboard() {
     let cli = Cli::parse_from(["batchalign3", "--open-dashboard", "align", "corpus/"]);
     assert!(cli.global.open_dashboard);
@@ -422,20 +409,6 @@ fn parse_no_open_dashboard() {
 #[case(&["batchalign3", "morphotag", "--skipmultilang", "--multilang", "corpus/"], &["--skipmultilang", "--multilang"])]
 fn conflicting_flags_are_rejected(#[case] args: &[&str], #[case] expected_fragments: &[&str]) {
     assert_parse_error_contains(args, expected_fragments);
-}
-
-#[test]
-fn build_options_lazy_audio() {
-    let cli = Cli::parse_from(["batchalign3", "--lazy-audio", "morphotag", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    assert!(opts.common().lazy_audio);
-}
-
-#[test]
-fn build_options_no_lazy_audio() {
-    let cli = Cli::parse_from(["batchalign3", "--no-lazy-audio", "morphotag", "corpus/"]);
-    let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    assert!(!opts.common().lazy_audio);
 }
 
 #[test]
@@ -622,13 +595,13 @@ fn parse_cache_legacy_clear_all_yes() {
 fn build_options_morphotag() {
     let cli = Cli::parse_from([
         "batchalign3",
-        "--override-cache",
+        "--override-media-cache",
         "morphotag",
         "--retokenize",
         "corpus/",
     ]);
     let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    assert!(opts.common().override_cache);
+    assert!(opts.common().override_media_cache);
     match opts {
         CommandOptions::Morphotag(m) => assert!(m.retokenize),
         _ => panic!("expected Morphotag"),
@@ -650,7 +623,7 @@ fn build_options_align_defaults() {
             assert!(!a.pauses);
             assert!(a.wor.should_write());
             assert!(!a.merge_abbrev.should_merge());
-            assert!(!a.common.override_cache);
+            assert!(!a.common.override_media_cache);
         }
         _ => panic!("expected Align"),
     }
@@ -1017,7 +990,6 @@ fn build_options_translate() {
     match opts {
         CommandOptions::Translate(t) => {
             assert!(!t.merge_abbrev.should_merge());
-            assert!(t.common.lazy_audio);
         }
         _ => panic!("expected Translate"),
     }
@@ -1222,7 +1194,6 @@ fn build_options_utseg() {
     match opts {
         CommandOptions::Utseg(u) => {
             assert!(!u.merge_abbrev.should_merge());
-            assert!(u.common.lazy_audio);
         }
         _ => panic!("expected Utseg"),
     }
@@ -1357,30 +1328,17 @@ fn build_options_avqi_defaults() {
     let opts = typed_options_for(&["batchalign3", "avqi", "input/", "output/"]);
     match opts {
         CommandOptions::Avqi(a) => {
-            assert!(!a.common.override_cache);
-            assert!(a.common.lazy_audio);
+            assert!(!a.common.override_media_cache);
         }
         _ => panic!("expected Avqi"),
     }
 }
 
 #[test]
-fn build_options_override_cache_global() {
-    let cli = Cli::parse_from(["batchalign3", "--override-cache", "align", "corpus/"]);
+fn build_options_override_media_cache_global() {
+    let cli = Cli::parse_from(["batchalign3", "--override-media-cache", "align", "corpus/"]);
     let opts = build_typed_options(&cli.command, &cli.global).unwrap();
-    assert!(opts.common().override_cache);
-}
-
-#[test]
-fn build_options_no_lazy_audio_wins_when_both_flags_present() {
-    let opts = typed_options_for(&[
-        "batchalign3",
-        "--lazy-audio",
-        "--no-lazy-audio",
-        "translate",
-        "corpus/",
-    ]);
-    assert!(!opts.common().lazy_audio);
+    assert!(opts.common().override_media_cache);
 }
 
 // -----------------------------------------------------------------------

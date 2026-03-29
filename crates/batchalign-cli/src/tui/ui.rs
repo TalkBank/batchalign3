@@ -26,7 +26,9 @@ fn phase_index(stage: FileProgressStage) -> Option<usize> {
         // Phase 0: Read
         FileProgressStage::Reading
         | FileProgressStage::ResolvingAudio
-        | FileProgressStage::CheckingCache => Some(0),
+        | FileProgressStage::CheckingCache
+        | FileProgressStage::Parsing
+        | FileProgressStage::CollectingPayloads => Some(0),
         // Phase 1: Transcribe
         FileProgressStage::Transcribing
         | FileProgressStage::RecoveringUtteranceTiming

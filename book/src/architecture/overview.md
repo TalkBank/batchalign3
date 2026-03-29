@@ -404,7 +404,7 @@ Each NLP task has a separate cache namespace:
 | `asr` (UTR) | audio identity + lang + speakers | ASR engine version |
 
 Cache entries are invalidated when the engine version changes. The
-`--override-cache` flag bypasses cache lookups.
+`--override-media-cache` flag bypasses cache lookups.
 
 ### Media Format Cache
 

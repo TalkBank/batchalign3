@@ -109,6 +109,7 @@
 //! ```
 
 mod backend;
+mod noop;
 mod sqlite;
 mod tiered;
 
@@ -152,6 +153,18 @@ impl UtteranceCache {
         Ok(Self {
             backend: Box::new(tiered),
         })
+    }
+
+    /// Create a no-op cache that always misses.
+    ///
+    /// Use this for tasks where caching adds overhead without meaningful
+    /// benefit (e.g., text NLP tasks where re-inference with warm workers
+    /// is faster than SQLite lookups on a large cache). Puts are silently
+    /// discarded; gets always return `None`.
+    pub fn noop() -> Self {
+        Self {
+            backend: Box::new(noop::NoopBackend),
+        }
     }
 
     /// Create a cache from an existing backend (for testing or custom backends).

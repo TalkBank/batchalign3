@@ -391,6 +391,7 @@ mod tests {
                 results: Vec::new(),
                 error: None,
                 completed_files: 0,
+                batch_progress: None,
             },
             schedule: JobScheduleState {
                 submitted_at: UnixTimestamp(1.0),
@@ -458,7 +459,7 @@ mod tests {
             num_speakers: 1,
             with_utseg: true,
             with_morphosyntax: false,
-            override_cache: false,
+            override_media_cache: false,
             write_wor: false,
             media_name: None,
             rev_job_id: None,

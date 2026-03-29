@@ -85,20 +85,17 @@ pub(super) async fn dispatch_single_server(
     let health = match client.health_check(server_url).await {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("error: cannot reach server at {server_url}: {e}");
-            return Ok(());
+            return Err(e);
         }
     };
     warn_stale_server(server_url, &health);
 
     // Check capabilities
     if !server_supports_command(&health.capabilities, command) {
-        eprintln!(
-            "error: server {} does not support '{command}'. Supported: {}",
-            server_label(server_url),
-            health.capabilities.join(", ")
-        );
-        return Ok(());
+        return Err(CliError::UnsupportedCommand {
+            server: server_label(server_url).to_string(),
+            command,
+        });
     }
 
     // Paths mode is only valid when client and server share a filesystem.

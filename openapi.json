@@ -109,6 +109,8 @@
           "analyzing_morphosyntax",
           "finalizing",
           "writing",
+          "parsing",
+          "collecting_payloads",
           "analyzing",
           "segmenting",
           "translating",

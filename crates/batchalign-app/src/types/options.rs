@@ -15,8 +15,7 @@
 //!   "retokenize": true,
 //!   "skipmultilang": false,
 //!   "merge_abbrev": false,
-//!   "override_cache": false,
-//!   "lazy_audio": true,
+//!   "override_media_cache": false,
 //!   "engine_overrides": {}
 //! }
 //! ```
@@ -33,9 +32,8 @@ pub use super::params::{MergeAbbrevPolicy, WorTierPolicy};
 // Default helpers
 // ---------------------------------------------------------------------------
 
-/// Default helper for boolean flags that opt in by default.
-fn default_true() -> bool {
-    true
+fn default_batch_window() -> usize {
+    25
 }
 
 /// Default forced-alignment engine for serialized command options.
@@ -77,13 +75,9 @@ pub use super::engines::*;
 /// Options shared by all processing commands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommonOptions {
-    /// Bypass the utterance analysis cache.
+    /// Bypass the media analysis cache.
     #[serde(default)]
-    pub override_cache: bool,
-
-    /// Lazy audio loading for alignment/ASR.
-    #[serde(default = "default_true")]
-    pub lazy_audio: bool,
+    pub override_media_cache: bool,
 
     /// Engine overrides selected for this job (e.g., ASR=tencent, FA=cantonese_fa).
     /// Typed struct with `Option<AsrEngineName>` and `Option<FaEngineName>`.
@@ -103,7 +97,21 @@ pub struct CommonOptions {
     /// Per-task cache override specifications (comma-separated task names).
     /// When non-empty, only the listed tasks skip cache; others use cache normally.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub override_cache_tasks: Vec<String>,
+    pub override_media_cache_tasks: Vec<String>,
+
+    /// Number of files per batch window for text NLP commands.
+    /// Smaller windows show progress sooner; larger windows batch more
+    /// efficiently (Stanza batching is 7.4x faster than per-sentence).
+    /// Default: 25. Set to 0 for all-in-one (no windowing).
+    #[serde(default = "default_batch_window")]
+    pub batch_window: usize,
+
+    /// Enable caching for text NLP tasks (morphotag, utseg, translation).
+    /// Off by default — re-inference with warm workers is faster than
+    /// SQLite lookups. Enable for incremental editing workflows where
+    /// most utterances are unchanged between runs.
+    #[serde(default)]
+    pub text_cache: bool,
 }
 
 impl CommonOptions {
@@ -123,12 +131,13 @@ impl CommonOptions {
 impl Default for CommonOptions {
     fn default() -> Self {
         Self {
-            override_cache: false,
-            lazy_audio: true,
+            override_media_cache: false,
             engine_overrides: EngineOverrides::default(),
             mwt: BTreeMap::new(),
             debug_dir: None,
-            override_cache_tasks: Vec::new(),
+            override_media_cache_tasks: Vec::new(),
+            batch_window: default_batch_window(),
+            text_cache: false,
         }
     }
 }
@@ -633,8 +642,7 @@ mod tests {
     fn common_accessor() {
         let opts = CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
-                lazy_audio: false,
+                override_media_cache: true,
                 engine_overrides: EngineOverrides::default(),
                 mwt: BTreeMap::new(),
                 ..Default::default()
@@ -643,8 +651,7 @@ mod tests {
             skipmultilang: false,
             merge_abbrev: false.into(),
         });
-        assert!(opts.common().override_cache);
-        assert!(!opts.common().lazy_audio);
+        assert!(opts.common().override_media_cache);
     }
 
     #[test]
@@ -656,8 +663,7 @@ mod tests {
 
         let opts = CommandOptions::Align(AlignOptions {
             common: CommonOptions {
-                override_cache: false,
-                lazy_audio: true,
+                override_media_cache: false,
                 engine_overrides: overrides.clone(),
                 mwt: BTreeMap::new(),
                 ..Default::default()
@@ -720,7 +726,6 @@ mod tests {
             assert!(!m.retokenize);
             assert!(!m.skipmultilang);
             assert!(!m.merge_abbrev.should_merge());
-            assert!(m.common.lazy_audio);
         } else {
             panic!("expected Morphotag");
         }

@@ -125,6 +125,9 @@ pub struct JobExecutionState {
     pub error: Option<String>,
     /// Count of files that have reached a terminal status.
     pub completed_files: i64,
+    /// Per-language-group progress for batched infer jobs.
+    /// Updated by the drain task during morphotag/utseg/translate/coref.
+    pub batch_progress: Option<crate::runner::util::batch_progress::BatchInferProgress>,
 }
 
 /// Current queue lease for one job.

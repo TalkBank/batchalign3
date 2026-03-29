@@ -479,13 +479,13 @@ interface chapters instead of here.
 ## Cross-Cutting: Cache Behavior
 
 All processing commands (except coref) follow this cache interaction
-pattern. The cache policy is controlled by `--override-cache`.
+pattern. The cache policy is controlled by `--override-media-cache`.
 
 ```mermaid
 flowchart TD
-    start([Cache check]) --> policy{--override-cache?}
+    start([Cache check]) --> policy{--override-media-cache?}
     policy -->|No| lookup[BLAKE3 hash → cache lookup\nHot: moka in-memory\nCold: SQLite]
-    policy -->|Yes: --override-cache| skip_cache[Skip cache — force recompute]
+    policy -->|Yes: --override-media-cache| skip_cache[Skip cache — force recompute]
 
     lookup --> hit{Cache hit?}
     hit -->|Yes| inject_cached[Inject cached result\nNo worker IPC needed]

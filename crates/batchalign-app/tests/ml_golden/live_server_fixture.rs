@@ -117,7 +117,7 @@ async fn live_fixture_isolates_runtime_state_between_sessions() {
     }];
     let options = CommandOptions::Morphotag(MorphotagOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         retokenize: false,
@@ -187,7 +187,7 @@ async fn live_fixture_runs_utseg_job_when_available() {
     }];
     let options = CommandOptions::Utseg(UtsegOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -229,7 +229,7 @@ async fn live_fixture_runs_translate_job_when_available() {
     }];
     let options = CommandOptions::Translate(TranslateOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),
@@ -273,7 +273,7 @@ async fn live_fixture_runs_coref_job_when_available() {
     }];
     let options = CommandOptions::Coref(CorefOptions {
         common: CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..CommonOptions::default()
         },
         merge_abbrev: false.into(),

@@ -72,6 +72,7 @@ fn make_media_job(job_id: &str, source_path: &str) -> Job {
             results: Vec::new(),
             error: None,
             completed_files: 0,
+            batch_progress: None,
         },
         schedule: JobScheduleState {
             submitted_at: UnixTimestamp(1.0),

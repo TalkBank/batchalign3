@@ -14,7 +14,6 @@ expression: sub
   "options": {
     "command": "morphotag",
     "override_cache": false,
-    "lazy_audio": true,
     "retokenize": false,
     "skipmultilang": false,
     "merge_abbrev": false

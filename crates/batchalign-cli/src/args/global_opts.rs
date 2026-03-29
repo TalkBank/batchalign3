@@ -32,17 +32,22 @@ pub struct GlobalOpts {
     #[arg(long, env = "BATCHALIGN_SERVER", global = true)]
     pub server: Option<String>,
 
-    /// Bypass the utterance analysis cache.
+    /// Bypass the media analysis cache.
     #[arg(long, global = true)]
-    pub override_cache: bool,
+    pub override_media_cache: bool,
 
-    /// Lazy audio loading for alignment/ASR.
-    #[arg(long, action = ArgAction::SetTrue, default_value_t = true, global = true)]
-    pub lazy_audio: bool,
+    /// Enable caching for text NLP tasks (morphotag, utseg, translation).
+    /// Text caching is OFF by default because re-inference with warm workers
+    /// (~4ms/sentence) is faster than SQLite lookups on large caches.
+    /// Enable this if you repeatedly process the same files with minor edits.
+    #[arg(long, global = true)]
+    pub text_cache: bool,
 
-    /// Disable lazy audio loading for alignment/ASR.
-    #[arg(long = "no-lazy-audio", action = ArgAction::SetTrue, global = true)]
-    pub no_lazy_audio: bool,
+    /// Number of files per batch window for text NLP commands (morphotag,
+    /// utseg, translate, coref). Smaller windows show progress sooner;
+    /// larger windows batch more efficiently. Default: 25.
+    #[arg(long, global = true, default_value_t = 25)]
+    pub batch_window: usize,
 
     /// Use full-screen TUI dashboard instead of progress bars (default for
     /// interactive terminals).
@@ -73,7 +78,7 @@ pub struct GlobalOpts {
     /// Bypass cache only for specific tasks (comma-separated).
     /// Valid: morphosyntax, utr_asr, forced_alignment, utterance_segmentation, translation.
     #[arg(long, value_name = "TASKS", global = true, value_delimiter = ',')]
-    pub override_cache_tasks: Vec<String>,
+    pub override_media_cache_tasks: Vec<String>,
 
     /// Engine overrides as JSON (e.g. '{"asr": "tencent", "fa": "cantonese_fa"}').
     #[arg(

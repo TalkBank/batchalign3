@@ -130,7 +130,7 @@ always been identical (this was true in BA2 as well). Use whichever you prefer.
 
 Important practical change: some BA2-era compatibility flags remain accepted as
 explicit no-ops in Rust CLI compatibility mode, while others (`--force-cpu`,
-`--override-cache`, `--no-lazy-audio`) still affect current runtime behavior.
+`--override-media-cache`) still affect current runtime behavior.
 This keeps BA2-era scripts from breaking without pretending every legacy flag still
 does real work.
 

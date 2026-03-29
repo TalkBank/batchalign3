@@ -209,6 +209,10 @@ pub(crate) enum FileStage {
     Finalizing,
     /// Final serialization/write stage.
     Writing,
+    /// Parsing CHAT files before dispatch.
+    Parsing,
+    /// Collecting NLP payloads from parsed files.
+    CollectingPayloads,
     /// Batched morphosyntax analysis.
     Analyzing,
     /// Batched utterance segmentation.
@@ -253,6 +257,8 @@ impl FileStage {
             Self::AnalyzingMorphosyntax => FileProgressStage::AnalyzingMorphosyntax,
             Self::Finalizing => FileProgressStage::Finalizing,
             Self::Writing => FileProgressStage::Writing,
+            Self::Parsing => FileProgressStage::Parsing,
+            Self::CollectingPayloads => FileProgressStage::CollectingPayloads,
             Self::Analyzing => FileProgressStage::Analyzing,
             Self::Segmenting => FileProgressStage::Segmenting,
             Self::Translating => FileProgressStage::Translating,
@@ -317,6 +323,11 @@ pub(crate) trait RunnerEventSink: Send + Sync {
         stage: FileStage,
         current: Option<i64>,
         total: Option<i64>,
+    );
+    async fn set_batch_progress(
+        &self,
+        job_id: &JobId,
+        progress: &crate::runner::util::batch_progress::BatchInferProgress,
     );
     async fn unfinished_files(&self, job_id: &JobId) -> Vec<DisplayPath>;
     async fn file_status_label(&self, job_id: &JobId, filename: &str) -> Option<String>;
@@ -474,6 +485,16 @@ impl RunnerEventSink for StoreRunnerEventSink {
                     total,
                 },
             )
+            .await;
+    }
+
+    async fn set_batch_progress(
+        &self,
+        job_id: &JobId,
+        progress: &crate::runner::util::batch_progress::BatchInferProgress,
+    ) {
+        self.store
+            .set_batch_progress(job_id, progress.clone())
             .await;
     }
 
@@ -1003,6 +1024,13 @@ mod tests {
                 });
         }
 
+        async fn set_batch_progress(
+            &self,
+            _job_id: &JobId,
+            _progress: &crate::runner::util::batch_progress::BatchInferProgress,
+        ) {
+        }
+
         async fn unfinished_files(&self, _job_id: &JobId) -> Vec<DisplayPath> {
             Vec::new()
         }
@@ -1089,6 +1117,7 @@ mod tests {
                 results: Vec::new(),
                 error: None,
                 completed_files: 0,
+                batch_progress: None,
             },
             schedule: JobScheduleState {
                 submitted_at: unix_now(),

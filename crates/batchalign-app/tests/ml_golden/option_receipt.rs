@@ -61,7 +61,7 @@ async fn option_morphotag_retokenize_changes_tokens() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,
@@ -83,7 +83,7 @@ async fn option_morphotag_retokenize_changes_tokens() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: true,
@@ -137,7 +137,7 @@ async fn option_align_wor_controls_tier_presence() {
         vec![out_include.to_string_lossy().into()],
         CommandOptions::Align(AlignOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             fa_engine: FaEngineName::Wave2Vec,
@@ -158,7 +158,7 @@ async fn option_align_wor_controls_tier_presence() {
         vec![out_omit.to_string_lossy().into()],
         CommandOptions::Align(AlignOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             fa_engine: FaEngineName::Wave2Vec,
@@ -208,7 +208,7 @@ async fn option_align_fa_engine_produces_different_timing() {
         vec![out_w2v.to_string_lossy().into()],
         CommandOptions::Align(AlignOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             fa_engine: FaEngineName::Wave2Vec,
@@ -229,7 +229,7 @@ async fn option_align_fa_engine_produces_different_timing() {
         vec![out_wh.to_string_lossy().into()],
         CommandOptions::Align(AlignOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             fa_engine: FaEngineName::Whisper,
@@ -249,7 +249,7 @@ async fn option_align_fa_engine_produces_different_timing() {
 
 /// Cache override forces recomputation — both runs should succeed.
 #[tokio::test]
-async fn option_override_cache_forces_recompute() {
+async fn option_override_media_cache_forces_recompute() {
     let Some(session) = require_live_direct(
         InferTask::Morphosyntax,
         "Direct session does not support morphosyntax infer",
@@ -288,7 +288,7 @@ async fn option_override_cache_forces_recompute() {
     .await;
     assert_completed_without_errors("cache_normal", &info1, &results1);
 
-    // Second run — override_cache=true (should recompute).
+    // Second run — override_media_cache=true (should recompute).
     let (info2, results2) = submit_and_complete_direct(
         &session,
         ReleasedCommand::Morphotag,
@@ -299,7 +299,7 @@ async fn option_override_cache_forces_recompute() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,
@@ -354,7 +354,7 @@ async fn option_morphotag_skipmultilang() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,
@@ -376,7 +376,7 @@ async fn option_morphotag_skipmultilang() {
         }],
         CommandOptions::Morphotag(MorphotagOptions {
             common: CommonOptions {
-                override_cache: true,
+                override_media_cache: true,
                 ..CommonOptions::default()
             },
             retokenize: false,

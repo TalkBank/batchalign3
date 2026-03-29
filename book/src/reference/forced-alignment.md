@@ -450,12 +450,12 @@ partial-window mode activates (>50% timed, audio >60s). Once the full-file
 result is cached (after the first run), subsequent runs always hit the cache
 regardless of which mode was used initially.
 
-`--override-cache` bypasses lookups but still stores results for future use.
+`--override-media-cache` bypasses lookups but still stores results for future use.
 
 ### FA cache
 
 FA caches raw model responses per-group (keyed by audio chunk fingerprint + text
-\+ pauses flag). The `--override-cache` flag bypasses this cache.
+\+ pauses flag). The `--override-media-cache` flag bypasses this cache.
 
 Both caches use the same SQLite database (the analysis cache — see [Filesystem Paths](../reference/filesystem-paths.md#analysis-cache-sqlite)).
 
@@ -486,7 +486,7 @@ FA cache for that run:
 
 ```bash
 batchalign3 align \
-  --override-cache-tasks forced_alignment \
+  --override-media-cache-tasks forced_alignment \
   --debug-dir /tmp/ba-debug \
   -o output/ \
   file.cha

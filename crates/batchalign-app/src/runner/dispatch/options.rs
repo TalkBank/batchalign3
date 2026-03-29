@@ -94,7 +94,7 @@ pub(crate) struct TranscribeDispatchParams {
     pub wor_tier: WorTierPolicy,
     pub batch_size: i32,
     pub merge_abbrev: MergeAbbrevPolicy,
-    pub override_cache: bool,
+    pub override_media_cache: bool,
 }
 
 /// Extract transcribe dispatch parameters from [`CommandOptions`].
@@ -112,7 +112,7 @@ pub(crate) fn extract_transcribe_dispatch_params(
                 wor_tier: t.wor,
                 batch_size: t.batch_size,
                 merge_abbrev: t.merge_abbrev,
-                override_cache: t.common.override_cache,
+                override_media_cache: t.common.override_media_cache,
             })
         }
         _ => None,
@@ -128,7 +128,7 @@ pub(crate) fn extract_transcribe_dispatch_params(
 pub(crate) struct MorphotagDispatchParams {
     pub tokenization_mode: TokenizationMode,
     pub multilingual_policy: MultilingualPolicy,
-    pub override_cache: bool,
+    pub override_media_cache: bool,
     pub merge_abbrev: MergeAbbrevPolicy,
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn extract_morphotag_dispatch_params(
         CommandOptions::Morphotag(m) => Some(MorphotagDispatchParams {
             tokenization_mode: TokenizationMode::from(m.retokenize),
             multilingual_policy: MultilingualPolicy::from_skip_flag(m.skipmultilang),
-            override_cache: m.common.override_cache,
+            override_media_cache: m.common.override_media_cache,
             merge_abbrev: m.merge_abbrev,
         }),
         _ => None,
@@ -157,7 +157,7 @@ pub(crate) struct BenchmarkDispatchParams {
     pub asr_engine: AsrEngineName,
     pub wor_tier: WorTierPolicy,
     pub merge_abbrev: MergeAbbrevPolicy,
-    pub override_cache: bool,
+    pub override_media_cache: bool,
 }
 
 /// Extract benchmark dispatch parameters from [`CommandOptions`].
@@ -169,7 +169,7 @@ pub(crate) fn extract_benchmark_dispatch_params(
             asr_engine: b.effective_asr_engine(),
             wor_tier: b.wor,
             merge_abbrev: b.merge_abbrev,
-            override_cache: b.common.override_cache,
+            override_media_cache: b.common.override_media_cache,
         }),
         _ => None,
     }
@@ -213,7 +213,7 @@ mod tests {
 
     fn common_with_cache_override() -> CommonOptions {
         CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..Default::default()
         }
     }
@@ -372,7 +372,7 @@ mod tests {
         assert!(params.wor_tier.should_write());
         assert!(params.merge_abbrev.should_merge());
         assert_eq!(params.batch_size, 32);
-        assert!(params.override_cache);
+        assert!(params.override_media_cache);
     }
 
     #[test]
@@ -391,7 +391,7 @@ mod tests {
         assert!(!params.wor_tier.should_write());
         assert!(!params.merge_abbrev.should_merge());
         assert_eq!(params.batch_size, 8);
-        assert!(!params.override_cache);
+        assert!(!params.override_media_cache);
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
             params.multilingual_policy,
             MultilingualPolicy::SkipNonPrimary
         );
-        assert!(params.override_cache);
+        assert!(params.override_media_cache);
         assert!(params.merge_abbrev.should_merge());
     }
 
@@ -444,7 +444,7 @@ mod tests {
         let params = extract_morphotag_dispatch_params(&opts).unwrap();
         assert_eq!(params.tokenization_mode, TokenizationMode::Preserve);
         assert_eq!(params.multilingual_policy, MultilingualPolicy::ProcessAll);
-        assert!(!params.override_cache);
+        assert!(!params.override_media_cache);
         assert!(!params.merge_abbrev.should_merge());
     }
 
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(params.asr_engine, AsrEngineName::WhisperOai);
         assert!(params.wor_tier.should_write());
         assert!(params.merge_abbrev.should_merge());
-        assert!(params.override_cache);
+        assert!(params.override_media_cache);
     }
 
     #[test]
@@ -541,8 +541,7 @@ mod tests {
             fa: None,
         };
         let common = CommonOptions {
-            override_cache: true,
-            lazy_audio: false,
+            override_media_cache: true,
             engine_overrides: overrides.clone(),
             mwt: BTreeMap::new(),
             ..Default::default()
@@ -578,8 +577,7 @@ mod tests {
         ];
 
         for v in &variants {
-            assert!(v.common().override_cache);
-            assert!(!v.common().lazy_audio);
+            assert!(v.common().override_media_cache);
             assert_eq!(v.common().engine_overrides, overrides);
         }
     }

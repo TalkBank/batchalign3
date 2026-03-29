@@ -52,12 +52,12 @@ impl BatchedInferDispatchPlan {
         let MorphotagDispatchParams {
             tokenization_mode,
             multilingual_policy,
-            override_cache,
+            override_media_cache,
             merge_abbrev,
         } = morphotag_params.unwrap_or(MorphotagDispatchParams {
             tokenization_mode: TokenizationMode::Preserve,
             multilingual_policy: MultilingualPolicy::ProcessAll,
-            override_cache: job.dispatch.options.common().override_cache,
+            override_media_cache: job.dispatch.options.common().override_media_cache,
             merge_abbrev: job.dispatch.options.merge_abbrev_policy(),
         });
 
@@ -66,7 +66,12 @@ impl BatchedInferDispatchPlan {
         // but utseg/translate dispatch also reads cache_policy from the plan.
         // Morphosyntax is the dominant task; other tasks override at their own
         // call sites in dispatch_batched_infer.
-        let cache_policy = if override_cache {
+        // Text NLP tasks skip the cache by default — re-inference with warm
+        // Stanza workers (~4ms/sentence) is faster than SQLite lookups.
+        // --text-cache re-enables it for incremental editing workflows.
+        // --override-media-cache forces skip regardless of --text-cache.
+        let text_cache_enabled = job.dispatch.options.common().text_cache;
+        let cache_policy = if override_media_cache || !text_cache_enabled {
             CachePolicy::SkipCache
         } else {
             cache_overrides.policy_for(CacheTaskName::Morphosyntax)
@@ -95,7 +100,7 @@ impl FaDispatchPlan {
     /// Build the FA option plan from the persisted job snapshot.
     pub(crate) fn from_job(job: &RunnerJobSnapshot, config: &ServerConfig) -> Option<Self> {
         let overrides = resolve_cache_overrides(job);
-        let cache_policy = if job.dispatch.options.common().override_cache {
+        let cache_policy = if job.dispatch.options.common().override_media_cache {
             CachePolicy::SkipCache
         } else {
             overrides.policy_for(CacheTaskName::ForcedAlignment)
@@ -131,7 +136,7 @@ impl TranscribeDispatchPlan {
             asr_engine,
             diarize,
             merge_abbrev,
-            override_cache,
+            override_media_cache,
             wor_tier,
             batch_size: _,
         } = extract_transcribe_dispatch_params(&job.dispatch.options)?;
@@ -151,7 +156,7 @@ impl TranscribeDispatchPlan {
                 num_speakers: job.dispatch.num_speakers.0 as usize,
                 with_utseg,
                 with_morphosyntax,
-                override_cache,
+                override_media_cache,
                 write_wor: wor_tier.should_write(),
                 media_name: None,
                 rev_job_id: None,
@@ -183,7 +188,7 @@ impl BenchmarkDispatchPlan {
             asr_engine,
             wor_tier,
             merge_abbrev,
-            override_cache,
+            override_media_cache,
         } = extract_benchmark_dispatch_params(&job.dispatch.options)?;
 
         Some(Self {
@@ -196,12 +201,12 @@ impl BenchmarkDispatchPlan {
                 num_speakers: job.dispatch.num_speakers.0 as usize,
                 with_utseg: false,
                 with_morphosyntax: false,
-                override_cache,
+                override_media_cache,
                 write_wor: wor_tier.should_write(),
                 media_name: None,
                 rev_job_id: None,
             },
-            cache_policy: CachePolicy::from(override_cache),
+            cache_policy: CachePolicy::from(override_media_cache),
             mwt: MwtDict::default(),
             should_merge_abbrev: merge_abbrev.should_merge(),
         })
@@ -247,18 +252,18 @@ impl MediaAnalysisDispatchPlan {
 
 /// Resolve [`CacheOverrides`] from the common options on a job snapshot.
 ///
-/// Reads `override_cache_tasks` (per-task) and `override_cache` (all-or-nothing)
+/// Reads `override_media_cache_tasks` (per-task) and `override_media_cache` (all-or-nothing)
 /// from `CommonOptions` and produces a typed `CacheOverrides` value.
 fn resolve_cache_overrides(job: &RunnerJobSnapshot) -> CacheOverrides {
     let common = job.dispatch.options.common();
-    if !common.override_cache_tasks.is_empty() {
+    if !common.override_media_cache_tasks.is_empty() {
         let tasks = common
-            .override_cache_tasks
+            .override_media_cache_tasks
             .iter()
             .filter_map(|s| parse_cache_task_name(s))
             .collect();
         CacheOverrides::Tasks(tasks)
-    } else if common.override_cache {
+    } else if common.override_media_cache {
         CacheOverrides::All
     } else {
         CacheOverrides::None
@@ -358,7 +363,7 @@ mod tests {
     #[test]
     fn batched_plan_uses_morphotag_translation() {
         let mut common = CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..Default::default()
         };
         common
@@ -390,7 +395,7 @@ mod tests {
     #[test]
     fn transcribe_plan_reads_runtime_flags_and_speaker_override() {
         let common = CommonOptions {
-            override_cache: true,
+            override_media_cache: true,
             ..Default::default()
         };
         // TODO: speaker engine override needs SpeakerEngineName in EngineOverrides
@@ -430,7 +435,7 @@ mod tests {
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(!plan.base_options.with_utseg);
         assert!(plan.base_options.with_morphosyntax);
-        assert!(plan.base_options.override_cache);
+        assert!(plan.base_options.override_media_cache);
         assert!(plan.should_merge_abbrev);
     }
 
@@ -465,7 +470,7 @@ mod tests {
         assert_eq!(plan.base_options.num_speakers, 3);
         assert!(plan.base_options.with_utseg);
         assert!(!plan.base_options.with_morphosyntax);
-        assert!(!plan.base_options.override_cache);
+        assert!(!plan.base_options.override_media_cache);
         assert!(!plan.should_merge_abbrev);
     }
 
@@ -475,7 +480,7 @@ mod tests {
             ReleasedCommand::Benchmark,
             CommandOptions::Benchmark(BenchmarkOptions {
                 common: CommonOptions {
-                    override_cache: true,
+                    override_media_cache: true,
                     ..Default::default()
                 },
                 asr_engine: AsrEngineName::RevAi,

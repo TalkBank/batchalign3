@@ -112,7 +112,7 @@ This is the ideal state, but no command requires it as a precondition.
 - `@Languages` header (determines Stanza model language)
 - Per-utterance language markers (`[- spa]`) for multilingual filtering
 - Special form markers (`@s`, `@c`, `@b`) on words for POS override
-- Existing `%mor` tiers (to skip already-tagged utterances, unless `--override-cache`)
+- Existing `%mor` tiers (to skip already-tagged utterances, unless `--override-media-cache`)
 
 **Writes:**
 - `%mor` tier: morphological analysis (POS, lemma, features) per utterance
