@@ -135,5 +135,17 @@ pub(crate) async fn run_cached_text_pipeline<Item, State, Response>(
         warn!(command = hooks.command, errors = ?msgs, "post-validation warnings (non-fatal)");
     }
 
+    // Inject processing provenance comment.
+    let ev = services.engine_version.as_ref();
+    let lang_str = lang.as_ref();
+    let provenance = match hooks.command {
+        "utseg" => Some(crate::provenance::utseg_provenance(lang_str, ev)),
+        "translate" => Some(crate::provenance::translate_provenance(lang_str, ev)),
+        _ => None,
+    };
+    if let Some(comment) = provenance {
+        crate::provenance::inject_provenance(&mut chat_file, &comment);
+    }
+
     Ok(to_chat_string(&chat_file))
 }

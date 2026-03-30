@@ -190,7 +190,9 @@ async fn run_coref_impl(
         warn!(errors = ?msgs, "coref post-validation warnings (non-fatal)");
     }
 
-    // 8. Serialize
+    // 8. Inject provenance + serialize
+    let provenance = crate::provenance::coref_provenance(lang.as_ref(), "stanza");
+    crate::provenance::inject_provenance(&mut chat_file, &provenance);
     Ok(to_chat_string(&chat_file))
 }
 

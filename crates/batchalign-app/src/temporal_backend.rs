@@ -29,7 +29,7 @@ use crate::api::{
     JobControlPlaneInfo, JobId, JobInfo, JobListItem, JobStatus, NumWorkers,
     TemporalWorkflowExecutionInfo, UnixTimestamp,
 };
-use crate::config::{ServerBackendKind, ServerConfig};
+use crate::config::ServerConfig;
 use crate::db::JobDB;
 use crate::error::ServerError;
 use crate::host_memory::HostMemoryError;
@@ -40,7 +40,10 @@ use crate::runner::{
 };
 use crate::runtime_supervisor::{ShutdownError, ShutdownSummary};
 use crate::scheduling::{DurationMs, RetryPolicy};
-use crate::server_backend::{ServerBackend, ServerBackendBootstrap, ServerControlPlaneSnapshot};
+use crate::server_backend::{
+    ServerBackend, ServerBackendBootstrap, ServerControlPlaneSnapshot,
+    store_backed_control_plane_snapshot,
+};
 use crate::store::{Job, JobDetail, JobStore, unix_now};
 use crate::types::traces::JobTraces;
 use crate::ws::{BROADCAST_CAPACITY, WsEvent};
@@ -559,10 +562,18 @@ impl ServerBackend for TemporalServerBackend {
     }
 
     async fn is_job_running(&self, job_id: &JobId) -> Option<bool> {
-        let store_running = self.store.is_running(job_id).await?;
-        if store_running {
+        // Check the store first. If the store says the job is in a terminal
+        // state (completed, cancelled, failed), return false immediately
+        // without querying Temporal — the store is the source of truth for
+        // job lifecycle.
+        let store_status = self.store.job_status(job_id).await?;
+        if store_status.is_terminal() {
+            return Some(false);
+        }
+        if store_status == JobStatus::Running {
             return Some(true);
         }
+        // Job is queued — check Temporal to see if a workflow is active.
         match self.describe_temporal_workflow(job_id).await {
             Ok(description) => Some(
                 description
@@ -667,14 +678,17 @@ pub(crate) async fn bootstrap_temporal_server_backend(
                 config.temporal_server_url
             ))
         })?)
-        .identity(format!(
-            "batchalign3-server-{:?}",
-            ServerBackendKind::Temporal
-        ))
+        .identity("batchalign3-server-temporal".to_string())
         .build(),
     )
     .await
-    .map_err(|error| ServerError::Persistence(format!("failed to connect to Temporal: {error}")))?;
+    .map_err(|error| {
+        ServerError::Persistence(format!(
+            "failed to connect to Temporal server at '{}': {error}. \
+         Ensure the Temporal server is running and reachable.",
+            config.temporal_server_url
+        ))
+    })?;
     let client = Client::new(
         connection,
         ClientOptions::new(config.temporal_namespace.clone()).build(),
@@ -708,30 +722,6 @@ pub(crate) async fn bootstrap_temporal_server_backend(
         loaded_jobs,
         queued_jobs,
     })
-}
-
-async fn store_backed_control_plane_snapshot(store: &JobStore) -> ServerControlPlaneSnapshot {
-    let (
-        worker_crashes,
-        attempts_started,
-        attempts_retried,
-        deferred_work_units,
-        forced_terminal_errors,
-        memory_gate_aborts,
-    ) = store.operational_counters().await;
-    let workers_available = store.workers_available().await;
-    let active_jobs = store.active_jobs().await;
-    ServerControlPlaneSnapshot {
-        node_id: store.node_id().clone(),
-        workers_available,
-        active_jobs,
-        worker_crashes,
-        attempts_started,
-        attempts_retried,
-        deferred_work_units,
-        forced_terminal_errors,
-        memory_gate_aborts,
-    }
 }
 
 fn retry_after_ms_from_retry_at(retry_at: UnixTimestamp) -> u64 {

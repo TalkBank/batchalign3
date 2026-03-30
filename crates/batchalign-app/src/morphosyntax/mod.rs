@@ -10,7 +10,7 @@
 //!
 //! `batchalign-cli`/API submission
 //! → `runner::dispatch_batched_infer(command="morphotag")`
-//! → [`process_morphosyntax_batch`] (or [`process_morphosyntax`] for single-file)
+//! → [`process_morphosyntax`] for single-file processing
 //! → `batchalign_chat_ops::morphosyntax::{collect_payloads, inject_results}`
 //! → worker `batch_infer(task="morphosyntax")`
 //! → validation + serialization.
@@ -35,7 +35,6 @@ use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
 use crate::pipeline::PipelineServices;
 use crate::pipeline::morphosyntax::run_morphosyntax_pipeline;
-use crate::text_batch::{TextBatchFileInput, TextBatchFileResults};
 use batchalign_chat_ops::morphosyntax::{
     BatchItemWithPosition, TokenizationMode, cache_key, clear_morphosyntax_selective,
     collect_payloads, declared_languages, extract_strings, inject_results, validate_mor_alignment,
@@ -91,18 +90,6 @@ pub(crate) async fn run_morphosyntax_impl(
         params.mwt,
     )
     .await
-}
-
-/// Process multiple CHAT files through the cross-file batch morphosyntax workflow.
-pub(crate) async fn process_morphosyntax_batch(
-    files: &[TextBatchFileInput],
-    services: PipelineServices<'_>,
-    params: &MorphosyntaxParams<'_>,
-) -> TextBatchFileResults {
-    // Default timeout for batch morphosyntax when called outside the
-    // dispatch pipeline (e.g. from transcribe pipeline or tests).
-    let default_group_timeout = std::time::Duration::from_secs(1800);
-    run_morphosyntax_batch_impl(files, services, params, None, default_group_timeout).await
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +304,16 @@ pub(crate) async fn process_morphosyntax_incremental(
     if !misses.is_empty() {
         let miss_line_indices: Vec<usize> = misses.iter().map(|(idx, ..)| *idx).collect();
 
-        match infer_batch(services.pool, &misses, params.lang, params.mwt, retokenize, None).await {
+        match infer_batch(
+            services.pool,
+            &misses,
+            params.lang,
+            params.mwt,
+            retokenize,
+            None,
+        )
+        .await
+        {
             Ok(responses) => {
                 match inject_results(
                     &parser,

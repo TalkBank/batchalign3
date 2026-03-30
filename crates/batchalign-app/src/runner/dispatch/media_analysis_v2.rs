@@ -130,7 +130,10 @@ async fn process_one_media_analysis_file_v2(
                 .as_path()
                 .to_owned()
         } else {
-            job.filesystem.staging_dir.join("input").join(filename)
+            job.filesystem
+                .staging_dir
+                .join("input")
+                .join(filename)
                 .as_path()
                 .to_owned()
         };

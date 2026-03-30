@@ -155,7 +155,8 @@ pub mod media;
 pub mod morphosyntax;
 pub mod openapi;
 mod pipeline;
-mod queue;
+pub mod provenance;
+pub(crate) mod queue;
 pub(crate) mod recipe_runner;
 pub(crate) mod revai;
 pub mod routes;
@@ -163,8 +164,8 @@ pub mod runner;
 pub mod runtime_paths;
 pub(crate) mod runtime_supervisor;
 pub mod server;
-pub mod stanza_registry;
 pub mod server_backend;
+pub mod stanza_registry;
 pub mod state;
 pub mod store;
 pub(crate) mod submission;
@@ -182,7 +183,7 @@ pub mod ws;
 pub use direct::{DirectHost, DirectRunOutcome};
 pub use server::{
     PreparedWorkers, create_app, create_app_with_prepared_workers, create_app_with_runtime,
-    prepare_direct_workers, prepare_workers, serve, serve_with_runtime,
+    create_test_app, prepare_direct_workers, prepare_workers, serve, serve_with_runtime,
 };
 pub use state::AppState;
 pub(crate) use websocket::ws_route;

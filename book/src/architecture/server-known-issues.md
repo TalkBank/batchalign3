@@ -1,8 +1,64 @@
 # Server Known Issues
 
 **Status:** Current open issues only
-**Last modified:** 2026-03-21 08:20 EDT
-**Last verified:** 2026-03-21
+**Last modified:** 2026-03-29 09:30 EDT
+**Last verified:** 2026-03-29
+
+## Zombie job resurrection on server restart
+
+**Severity:** High — blocks new job submissions via 409 conflict.
+
+**Symptom:** Cancelled or stuck jobs reappear as "running" after every
+server restart. They consume workers and block new submissions for the
+same files (409 conflict detection).
+
+**Root cause:** SQLite job store persists jobs with `status=running`.
+On startup, recovery re-queues any job that was running when the server
+stopped. Cancelled jobs that were stuck in synchronous code (e.g., the
+injection loop) never transitioned to `cancelled` in SQLite because the
+cancellation token is only checked at async yield points.
+
+**Workaround:** Cancel zombie jobs after restart:
+```bash
+curl -s http://localhost:8001/jobs | python3 -c "
+import json,sys
+for j in json.load(sys.stdin):
+    if j['status'] in ('running','queued'):
+        print(j['job_id'])" | while read jid; do
+  curl -s -X POST "http://localhost:8001/jobs/$jid/cancel"
+done
+```
+Or delete `~/.batchalign3/jobs.db` before restart (loses all job history).
+
+**Fix needed:**
+1. Recovery should not re-queue jobs that were cancelled
+2. Consider `max_recovery_age` — don't recover jobs older than N minutes
+3. Cooperative cancellation in synchronous loops
+
+**Observed:** 2026-03-29, Net + Bilbo with both Temporal and embedded
+backends. Jobs resurrected across 3+ server restarts.
+
+## Tracing output lost in daemon mode (fixed 2026-03-29)
+
+**Fixed in:** commit `faaaa31b`
+
+`serve_cmd.rs` background path used `File::create()` which truncated
+the server log on every restart. Changed to `OpenOptions::append()`.
+
+## Ansible deploy kills running jobs
+
+**Severity:** High — production jobs interrupted by routine deploys.
+
+The `batchalign` Ansible role runs `batchalign3 serve stop` and
+`pkill -9 batchalign-worker` on ALL targeted machines. It does not
+check for active jobs before stopping.
+
+**Workaround:** Check dashboard before deploying. Use `--limit` to
+target specific machines. Never deploy to machines with active jobs.
+
+**Fix needed:** The Ansible role should check for active jobs before
+stopping (the `server` role does this, but the `batchalign` client
+role does not).
 
 This page contains current open operational issues only.
 

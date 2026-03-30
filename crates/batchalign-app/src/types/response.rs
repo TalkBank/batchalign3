@@ -38,6 +38,12 @@ pub struct FileResult {
     /// `None` for successfully processed files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Processing provenance extracted from the output CHAT file.
+    /// Each entry records one batchalign3 command that was applied
+    /// (command name, engine version, timestamp). Empty for non-CHAT
+    /// output or files that failed processing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<crate::provenance::ProvenanceEntry>,
 }
 
 /// Per-file status within a job.
@@ -110,17 +116,17 @@ pub struct FileStatusEntry {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum JobControlPlaneBackendKind {
-    /// The legacy in-process queue/store/runtime control plane.
-    Embedded,
-    /// The experimental Temporal-backed control plane.
+    /// The Temporal-backed control plane (production).
     Temporal,
+    /// Lightweight in-process backend for integration tests.
+    Test,
 }
 
 impl std::fmt::Display for JobControlPlaneBackendKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Embedded => f.write_str("embedded"),
             Self::Temporal => f.write_str("temporal"),
+            Self::Test => f.write_str("test"),
         }
     }
 }
@@ -158,14 +164,6 @@ pub struct JobControlPlaneInfo {
 }
 
 impl JobControlPlaneInfo {
-    /// Minimal embedded control-plane marker.
-    pub fn embedded() -> Self {
-        Self {
-            backend: JobControlPlaneBackendKind::Embedded,
-            temporal: None,
-        }
-    }
-
     /// Minimal Temporal control-plane marker without an execution describe.
     pub fn temporal() -> Self {
         Self {

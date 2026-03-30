@@ -93,22 +93,6 @@ impl RuntimeLayout {
     }
 }
 
-/// Server control-plane backend implementation to bootstrap.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ServerBackendKind {
-    /// Existing in-process queue/store/runtime stack.
-    Embedded,
-    /// Temporal-backed control plane and workflow orchestration.
-    Temporal,
-}
-
-impl Default for ServerBackendKind {
-    fn default() -> Self {
-        Self::Embedded
-    }
-}
-
 /// Default config file path.
 pub fn default_config_path() -> PathBuf {
     RuntimeLayout::from_env().config_path().to_path_buf()
@@ -149,7 +133,14 @@ pub struct ServerConfig {
     /// resolves it to the filesystem root.  Allows stable logical names even
     /// when mount paths change.
     #[serde(default)]
-    pub media_mappings: BTreeMap<batchalign_types::paths::MediaMappingKey, batchalign_types::paths::ServerPath>,
+    pub media_mappings:
+        BTreeMap<batchalign_types::paths::MediaMappingKey, batchalign_types::paths::ServerPath>,
+    /// Server log verbosity level: 0=warn (default), 1=info, 2=debug.
+    /// Controls the tracing filter when the server starts in daemon mode.
+    /// Equivalent to the number of `-v` flags on the CLI.
+    /// Set to 1 in fleet server.yaml for production observability.
+    #[serde(default)]
+    pub verbose: u8,
     /// 3-letter ISO language code used when the client omits `lang`.
     /// Defaults to `"eng"`.
     #[serde(default = "default_lang")]
@@ -166,9 +157,12 @@ pub struct ServerConfig {
     /// Bind address for the HTTP server.  Default: `"0.0.0.0"` (all interfaces).
     #[serde(default = "default_host")]
     pub host: String,
-    /// Control-plane backend implementation for `serve start`.
-    #[serde(default)]
-    pub backend: ServerBackendKind,
+    /// Deprecated: the embedded backend has been removed. Temporal is the only
+    /// server backend. This field is retained solely for backward compatibility
+    /// with existing `server.yaml` files that specify `backend: embedded` or
+    /// `backend: temporal`. The value is ignored at runtime.
+    #[serde(default, rename = "backend")]
+    pub deprecated_backend: Option<String>,
     /// Maximum Python worker processes per job.  `0` (default) means
     /// auto-tune based on RAM and GPU availability.
     #[serde(default)]
@@ -398,13 +392,14 @@ fn default_local_lease_ttl_s() -> u64 {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            verbose: 0,
             media_roots: Vec::new(),
             media_mappings: BTreeMap::new(),
             default_lang: LanguageCode3::eng(),
             max_concurrent_jobs: 0,
             port: 8000,
             host: "0.0.0.0".to_string(),
-            backend: ServerBackendKind::Embedded,
+            deprecated_backend: None,
             max_workers_per_job: 0,
             job_ttl_days: 7,
             redis_url: String::new(),
@@ -658,7 +653,6 @@ mod tests {
         let cfg = ServerConfig::default();
         assert_eq!(cfg.port, 8000);
         assert_eq!(cfg.host, "0.0.0.0");
-        assert_eq!(cfg.backend, ServerBackendKind::Embedded);
         assert_eq!(cfg.default_lang, "eng"); // PartialEq<&str>
         assert_eq!(cfg.job_ttl_days, 7);
         assert!(cfg.auto_daemon);
@@ -703,11 +697,15 @@ warmup_commands:
 auto_daemon: true
 "#;
         let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(cfg.media_roots.len(), 2); assert_eq!(cfg.media_roots[0].as_str(), "/data/media");
-        assert_eq!(cfg.media_mappings[&batchalign_types::paths::MediaMappingKey::new("childes-data")].as_str(), "/nfs/childes");
+        assert_eq!(cfg.media_roots.len(), 2);
+        assert_eq!(cfg.media_roots[0].as_str(), "/data/media");
+        assert_eq!(
+            cfg.media_mappings[&batchalign_types::paths::MediaMappingKey::new("childes-data")]
+                .as_str(),
+            "/nfs/childes"
+        );
         assert_eq!(cfg.default_lang, "spa");
         assert_eq!(cfg.port, 9000);
-        assert_eq!(cfg.backend, ServerBackendKind::Temporal);
         assert_eq!(cfg.max_concurrent_jobs, 4);
         assert_eq!(cfg.warmup_commands, vec!["morphotag", "align"]);
         assert!(cfg.auto_daemon);

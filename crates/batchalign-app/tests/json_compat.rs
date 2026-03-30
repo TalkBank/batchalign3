@@ -201,12 +201,14 @@ fn snapshot_job_result_response() {
                 content: "@UTF8\n@Begin\n*CHI:\thello .\n@End".into(),
                 content_type: ContentType::Chat,
                 error: None,
+                provenance: Vec::new(),
             },
             FileResult {
                 filename: "02DM.cha".into(),
                 content: String::new(),
                 content_type: ContentType::Chat,
                 error: Some("Pipeline error: unknown language".into()),
+                provenance: Vec::new(),
             },
         ],
     };
@@ -296,11 +298,20 @@ fn snapshot_server_config_default() {
 fn snapshot_server_config_full() {
     use batchalign_types::paths::{MediaMappingKey, ServerPath};
     let mut mappings = std::collections::BTreeMap::new();
-    mappings.insert(MediaMappingKey::new("childes-data"), ServerPath::new("/nfs/childes"));
-    mappings.insert(MediaMappingKey::new("aphasia-data"), ServerPath::new("/nfs/aphasia"));
+    mappings.insert(
+        MediaMappingKey::new("childes-data"),
+        ServerPath::new("/nfs/childes"),
+    );
+    mappings.insert(
+        MediaMappingKey::new("aphasia-data"),
+        ServerPath::new("/nfs/aphasia"),
+    );
 
     let cfg = ServerConfig {
-        media_roots: vec![ServerPath::new("/data/media"), ServerPath::new("/data/media2")],
+        media_roots: vec![
+            ServerPath::new("/data/media"),
+            ServerPath::new("/data/media2"),
+        ],
         media_mappings: mappings,
         default_lang: LanguageCode3::spa(),
         max_concurrent_jobs: 4,
@@ -434,8 +445,14 @@ auto_daemon: false
 
     use batchalign_types::paths::{MediaMappingKey, ServerPath};
     let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(cfg.media_roots, vec![ServerPath::new("/Volumes/Media/talkbank")]);
-    assert_eq!(cfg.media_mappings[&MediaMappingKey::new("childes-data")], ServerPath::new("/Volumes/Media/childes"));
+    assert_eq!(
+        cfg.media_roots,
+        vec![ServerPath::new("/Volumes/Media/talkbank")]
+    );
+    assert_eq!(
+        cfg.media_mappings[&MediaMappingKey::new("childes-data")],
+        ServerPath::new("/Volumes/Media/childes")
+    );
     assert_eq!(cfg.port, 8000);
     assert!(cfg.warmup_commands.is_empty());
 }

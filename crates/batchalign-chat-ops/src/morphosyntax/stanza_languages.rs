@@ -30,20 +30,14 @@ static SUPPORTED_STANZA_CODES: LazyLock<HashSet<&'static str>> = LazyLock::new(|
         // Central / Eastern European
         "pol", "ces", "ron", "hun", "bul", "hrv", "slk", "slv", "ukr", "rus",
         // Greek, Celtic, Maltese
-        "ell", "cym", "gle", "gla", "eus", "mlt",
-        // Middle Eastern / South Asian
-        "ara", "heb", "fas", "hin", "urd", "tur",
-        // South / Southeast Asian
+        "ell", "cym", "gle", "gla", "eus", "mlt", // Middle Eastern / South Asian
+        "ara", "heb", "fas", "hin", "urd", "tur", // South / Southeast Asian
         "ben", "tam", "tel", "kan", "mal", "tha", "vie", "ind", "msa", "tgl",
         // East Asian
-        "zho", "cmn", "yue", "jpn", "kor",
-        // Caucasian / Armenian
-        "kat", "hye",
-        // African
-        "afr",
-        // Classical
-        "lat",
-        // Luxembourgish
+        "zho", "cmn", "yue", "jpn", "kor", // Caucasian / Armenian
+        "kat", "hye", // African
+        "afr", // Classical
+        "lat", // Luxembourgish
         "ltz",
     ]
     .into_iter()

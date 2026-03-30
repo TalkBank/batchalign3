@@ -14,7 +14,7 @@ use batchalign_app::api::{
     MemoryMb, NumSpeakers, ReleasedCommand,
 };
 use batchalign_app::config::ServerConfig;
-use batchalign_app::create_app;
+use batchalign_app::create_test_app;
 use batchalign_app::options::{CommandOptions, CommonOptions, TranscribeOptions};
 use batchalign_app::worker::pool::PoolConfig;
 use common::resolve_python;
@@ -122,7 +122,7 @@ async fn start_test_server_with_config(
     let db_dir = tmp.path().join("db");
     std::fs::create_dir_all(&db_dir).expect("mkdir db");
 
-    let (router, state) = create_app(
+    let (router, state) = create_test_app(
         config,
         pool_config,
         Some(jobs_dir.to_string_lossy().into()),
@@ -130,7 +130,7 @@ async fn start_test_server_with_config(
         Some("test-build-hash".into()),
     )
     .await
-    .expect("create_app");
+    .expect("create_test_app");
 
     // Bind to port 0 to get a random available port
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -240,7 +240,7 @@ async fn submit_and_get_job() {
     assert_eq!(info.completed_files, 1);
     assert_eq!(
         info.control_plane.as_ref().map(|control| control.backend),
-        Some(JobControlPlaneBackendKind::Embedded)
+        Some(JobControlPlaneBackendKind::Test)
     );
 }
 
@@ -865,7 +865,7 @@ async fn paths_mode_job() {
             .control_plane
             .as_ref()
             .map(|control| control.backend),
-        Some(JobControlPlaneBackendKind::Embedded)
+        Some(JobControlPlaneBackendKind::Test)
     );
     assert!(
         !requested_output_path.exists(),
@@ -981,7 +981,7 @@ async fn multi_file_job_uses_parallel_workers() {
 // Capability gate: real worker (not test-echo)
 // ---------------------------------------------------------------------------
 
-/// Verify that create_app succeeds with a real Python worker whose import
+/// Verify that create_test_app succeeds with a real Python worker whose import
 /// probes (commands) are broader than its loaded infer tasks. Before the fix,
 /// this would crash with "worker capability gate failed".
 #[tokio::test]
@@ -1017,7 +1017,7 @@ async fn server_starts_with_real_worker_capability_gate() {
         ..Default::default()
     };
 
-    let result = create_app(
+    let result = create_test_app(
         config,
         pool_config,
         Some(jobs_dir.to_string_lossy().into()),
@@ -1066,7 +1066,7 @@ async fn server_starts_with_real_worker_capability_gate() {
         }
         Err(e) => {
             panic!(
-                "create_app should succeed with real worker after capability gate fix, \
+                "create_test_app should succeed with real worker after capability gate fix, \
                  but failed: {e}"
             );
         }

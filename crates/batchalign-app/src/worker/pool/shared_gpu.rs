@@ -134,6 +134,15 @@ impl SharedGpuWorker {
             return Err(WorkerError::Protocol("GPU worker is shutting down".into()));
         }
 
+        // Check if the reader loop is still alive. If it finished (worker
+        // crashed or exited), fail fast instead of writing to a dead pipe.
+        if self.reader_task.is_finished() {
+            return Err(WorkerError::ProcessExited {
+                code: None,
+                stderr: Some("GPU worker reader loop exited — worker process is dead".into()),
+            });
+        }
+
         let request_id = request.request_id.to_string();
         let (tx, rx) = oneshot::channel();
 
@@ -174,10 +183,13 @@ impl SharedGpuWorker {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => {
-                // Sender dropped — reader task died or worker exited.
-                Err(WorkerError::Protocol(
-                    "GPU worker response channel closed (worker may have exited)".into(),
-                ))
+                // Sender dropped — reader loop died or worker process exited.
+                // The reader loop drains pending requests on both EOF and I/O
+                // errors, so this means the worker crashed.
+                Err(WorkerError::ProcessExited {
+                    code: None,
+                    stderr: Some("GPU worker response channel closed — worker process crashed during inference".into()),
+                })
             }
             Err(_) => {
                 // Timeout — remove the pending entry.
@@ -460,6 +472,24 @@ impl SharedGpuWorker {
                 }
                 Err(e) => {
                     error!(pid = %pid, error = %e, "GPU worker: stream read error");
+                    // Explicitly fail all pending requests — same as the EOF
+                    // path. Without this, pending oneshot senders are implicitly
+                    // dropped when the task exits, causing receivers to see
+                    // "channel closed" with no useful error context.
+                    let mut pending = lock_recovered(&pending);
+                    let n = pending.len();
+                    for (id, tx) in pending.drain() {
+                        debug!(pid = %pid, request_id = %id, "Failing pending request (I/O error)");
+                        drop(tx);
+                    }
+                    if n > 0 {
+                        error!(
+                            pid = %pid,
+                            failed_requests = n,
+                            error = %e,
+                            "GPU worker crashed — failed {n} pending requests"
+                        );
+                    }
                     break;
                 }
             }

@@ -137,7 +137,10 @@ mod tests {
     #[test]
     fn worker_error_classification_is_stable() {
         assert_eq!(
-            classify_worker_error(&WorkerError::ProcessExited { code: Some(9), stderr: None }),
+            classify_worker_error(&WorkerError::ProcessExited {
+                code: Some(9),
+                stderr: None
+            }),
             FailureCategory::WorkerCrash
         );
         assert_eq!(
@@ -176,9 +179,18 @@ mod tests {
             stderr: Some("Traceback (most recent call last):\n  File \"worker.py\", line 42\ntorch.cuda.OutOfMemoryError: CUDA out of memory".into()),
         };
         let msg = error.to_string();
-        assert!(msg.contains("exit code: Some(1)"), "should show exit code: {msg}");
-        assert!(msg.contains("OutOfMemoryError"), "should include stderr tail: {msg}");
-        assert!(msg.contains("--- worker stderr ---"), "should have stderr header: {msg}");
+        assert!(
+            msg.contains("exit code: Some(1)"),
+            "should show exit code: {msg}"
+        );
+        assert!(
+            msg.contains("OutOfMemoryError"),
+            "should include stderr tail: {msg}"
+        );
+        assert!(
+            msg.contains("--- worker stderr ---"),
+            "should have stderr header: {msg}"
+        );
     }
 
     #[test]
@@ -188,20 +200,21 @@ mod tests {
             stderr: None,
         };
         let msg = error.to_string();
-        assert!(msg.contains("exit code: Some(9)"), "should show exit code: {msg}");
+        assert!(
+            msg.contains("exit code: Some(9)"),
+            "should show exit code: {msg}"
+        );
         assert!(!msg.contains("stderr"), "should not mention stderr: {msg}");
     }
 
     #[test]
     fn worker_crash_user_facing_error_includes_raw_detail() {
         let raw = "FA processing failed: worker process exited unexpectedly (exit code: Some(-9))\n--- worker stderr ---\nKilled: 9";
-        let msg = user_facing_error(
-            FailureCategory::WorkerCrash,
-            "Alignment",
-            "test.cha",
-            raw,
+        let msg = user_facing_error(FailureCategory::WorkerCrash, "Alignment", "test.cha", raw);
+        assert!(
+            msg.contains("Killed: 9"),
+            "should include stderr detail: {msg}"
         );
-        assert!(msg.contains("Killed: 9"), "should include stderr detail: {msg}");
         assert!(msg.contains("test.cha"), "should include filename: {msg}");
     }
 
@@ -277,7 +290,9 @@ mod tests {
             filename: "audio.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![batchalign_types::paths::ClientPath::new("/nonexistent/audio.wav")];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new(
+            "/nonexistent/audio.wav",
+        )];
         let failures = preflight_validate_media(&file_list, &source_paths, false).await;
         assert!(
             failures.is_empty(),
@@ -292,7 +307,9 @@ mod tests {
             filename: "test.cha".into(),
             has_chat: true,
         }];
-        let source_paths = vec![batchalign_types::paths::ClientPath::new("/nonexistent/test.cha")];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new(
+            "/nonexistent/test.cha",
+        )];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert!(failures.is_empty(), "Should skip CHAT files");
     }
@@ -304,7 +321,9 @@ mod tests {
             filename: "missing.wav".into(),
             has_chat: false,
         }];
-        let source_paths = vec![batchalign_types::paths::ClientPath::new("/nonexistent/path/missing.wav")];
+        let source_paths = vec![batchalign_types::paths::ClientPath::new(
+            "/nonexistent/path/missing.wav",
+        )];
         let failures = preflight_validate_media(&file_list, &source_paths, true).await;
         assert_eq!(failures.len(), 1);
         assert!(failures[&0].contains("not found"));
@@ -441,7 +460,9 @@ mod tests {
             },
             filesystem: RunnerFilesystemConfig {
                 paths_mode: true,
-                source_paths: vec![batchalign_types::paths::ClientPath::new(chat_path.to_string_lossy().to_string())],
+                source_paths: vec![batchalign_types::paths::ClientPath::new(
+                    chat_path.to_string_lossy().to_string(),
+                )],
                 output_paths: vec![],
                 before_paths: vec![],
                 staging_dir: Default::default(),

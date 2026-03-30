@@ -90,12 +90,10 @@ fn normalize_word_dict(mut value: serde_json::Value) -> serde_json::Value {
             // Default lemma to text if empty, missing, or null.
             // Stanza can emit any of: no key, "", or null when the lemmatizer
             // fails silently for a token.
-            let lemma_empty = obj.get("lemma").is_none_or(|v| {
-                v.is_null() || v.as_str().is_some_and(|s| s.is_empty())
-            });
-            if lemma_empty
-                && let Some(text) = obj.get("text").and_then(|v| v.as_str())
-            {
+            let lemma_empty = obj
+                .get("lemma")
+                .is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.is_empty()));
+            if lemma_empty && let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
                 obj.insert("lemma".to_string(), serde_json::json!(text));
             }
         }
@@ -460,9 +458,8 @@ mod tests {
             }
         ])];
 
-        let resp = parse_raw_stanza_output(&raw).expect(
-            "MWT range token with absent annotation fields should parse successfully"
-        );
+        let resp = parse_raw_stanza_output(&raw)
+            .expect("MWT range token with absent annotation fields should parse successfully");
         assert_eq!(resp.sentences[0].words.len(), 3);
         assert_eq!(resp.sentences[0].words[0].id, UdId::Range(4, 5));
         assert_eq!(resp.sentences[0].words[0].text, "au");
@@ -629,7 +626,11 @@ mod tests {
         ])];
         let diags = diagnose_parse_failure(&raw);
         assert!(!diags.is_empty(), "Should detect missing lemma");
-        assert!(diags.iter().any(|d| d.field == "lemma" && d.issue.contains("absent")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.field == "lemma" && d.issue.contains("absent"))
+        );
     }
 
     #[test]
@@ -646,7 +647,11 @@ mod tests {
         ])];
         let diags = diagnose_parse_failure(&raw);
         assert!(!diags.is_empty(), "Should detect null lemma");
-        assert!(diags.iter().any(|d| d.field == "lemma" && d.issue.contains("null")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.field == "lemma" && d.issue.contains("null"))
+        );
     }
 
     #[test]
@@ -662,7 +667,11 @@ mod tests {
             }
         ])];
         let diags = diagnose_parse_failure(&raw);
-        assert!(diags.iter().any(|d| d.field == "deprel" && d.issue.contains("pad")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.field == "deprel" && d.issue.contains("pad"))
+        );
     }
 
     #[test]
@@ -678,7 +687,10 @@ mod tests {
             }
         ])];
         let diags = diagnose_parse_failure(&raw);
-        assert!(diags.is_empty(), "Clean output should produce no diagnostics: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "Clean output should produce no diagnostics: {diags:?}"
+        );
     }
 
     #[test]

@@ -127,6 +127,11 @@ impl ProgressSink for TuiProgress {
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "unknown".into());
 
+        let pressure_label = serde_json::to_value(&health.host_memory_pressure)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "unknown".into());
+
         self.send_update(TuiUpdate::HealthSnapshot(ServerHealth {
             live_workers: health.live_workers,
             live_worker_keys: health.live_worker_keys.clone(),
@@ -135,6 +140,9 @@ impl ProgressSink for TuiProgress {
             system_memory_used_mb: health.system_memory_used_mb,
             memory_gate_threshold_mb: health.memory_gate_threshold_mb,
             warmup_status: warmup_label,
+            host_memory_pressure: pressure_label,
+            worker_crashes: health.worker_crashes,
+            attempts_started: health.attempts_started,
         }));
     }
 }

@@ -29,7 +29,6 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
 dirs = { workspace = true }
-rayon = { workspace = true }
 walkdir = { workspace = true }
 sysinfo = { workspace = true }
 serde = { workspace = true }

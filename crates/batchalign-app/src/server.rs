@@ -15,7 +15,7 @@ use crate::error;
 use crate::host_policy::HostExecutionPolicy;
 use crate::media::MediaResolver;
 use crate::runner::{ExecutionEngine, RunnerExecutionContext};
-use crate::server_backend::{ServerBackendBootstrap, bootstrap_embedded_server_backend};
+use crate::server_backend::{ServerBackendBootstrap, bootstrap_test_server_backend};
 use crate::state::{
     AppBuildInfo, AppControlPlane, AppEnvironment, AppPaths, AppState, WorkerCapabilitySnapshot,
     WorkerSubsystem, resolve_worker_capability_snapshot, validate_infer_capability_gate,
@@ -268,12 +268,22 @@ async fn probe_workers(
             detected.engine_versions.clone(),
         )
     } else {
+        // Optimistic mode: advertise all released commands and their infer
+        // tasks. Real capabilities are refined lazily when the first worker
+        // spawns and reports its actual engine versions. This avoids a
+        // 10-30 second startup delay from spawning a probe worker.
+        let all_tasks: Vec<InferTask> = released_command_definitions()
+            .iter()
+            .map(|definition| definition.descriptor.infer_task)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let caps = optimistic_capabilities();
         info!(
             capabilities = ?caps,
             "Using optimistic capabilities (lazy detection on first worker spawn)"
         );
-        (caps, Vec::new(), BTreeMap::new())
+        (caps, all_tasks, BTreeMap::new())
     };
 
     // No warmup targets — workers spawn on demand.
@@ -332,6 +342,26 @@ fn optimistic_capabilities() -> Vec<String> {
         .collect()
 }
 
+/// Create the application with test-echo workers and the lightweight
+/// [`TestServerBackend`](crate::server_backend::TestServerBackend).
+///
+/// This bypasses Temporal entirely. Use for integration tests that need a
+/// real HTTP server with working job dispatch but no external dependencies.
+pub async fn create_test_app(
+    config: ServerConfig,
+    pool_config: PoolConfig,
+    jobs_dir: Option<String>,
+    db_dir: Option<std::path::PathBuf>,
+    build_hash: Option<String>,
+) -> Result<(Router, Arc<AppState>), error::ServerError> {
+    let layout = RuntimeLayout::from_env();
+    let workers = prepare_workers_background(&config, pool_config).await?;
+    create_test_app_with_prepared_workers(
+        config, layout, jobs_dir, db_dir, None, build_hash, workers,
+    )
+    .await
+}
+
 /// Create the application with an already-prepared worker subsystem.
 ///
 /// This keeps the expensive worker pool hot across repeated app lifecycles
@@ -373,14 +403,8 @@ pub async fn create_app_with_prepared_workers(
     );
     let db = Arc::new(db);
     let execution_runtime = workers.resolve_execution_runtime(cache.clone())?;
-    let backend_bootstrap: ServerBackendBootstrap = match config.backend {
-        crate::config::ServerBackendKind::Embedded => {
-            bootstrap_embedded_server_backend(config.clone(), db, execution_runtime.engine).await?
-        }
-        crate::config::ServerBackendKind::Temporal => {
-            bootstrap_temporal_server_backend(config.clone(), db, execution_runtime.engine).await?
-        }
-    };
+    let backend_bootstrap: ServerBackendBootstrap =
+        bootstrap_temporal_server_backend(config.clone(), db, execution_runtime.engine).await?;
     if backend_bootstrap.loaded_jobs > 0 {
         info!(
             loaded = backend_bootstrap.loaded_jobs,
@@ -398,6 +422,88 @@ pub async fn create_app_with_prepared_workers(
             "Queued jobs will be resumed by the configured backend"
         );
     }
+
+    let bug_reports_dir = layout.bug_reports_dir().to_string_lossy().into_owned();
+    let dashboard_dir = crate::routes::dashboard::find_dashboard_dir_for(
+        &layout,
+        std::env::var("BATCHALIGN_DASHBOARD_DIR").ok().as_deref(),
+    );
+
+    let state = Arc::new(AppState {
+        control: AppControlPlane {
+            backend: backend_bootstrap.backend,
+        },
+        workers: WorkerSubsystem {
+            pool,
+            capabilities,
+            infer_tasks,
+        },
+        environment: AppEnvironment {
+            config,
+            media: MediaResolver::new(),
+            paths: AppPaths {
+                jobs_dir,
+                bug_reports_dir,
+                dashboard_dir,
+            },
+        },
+        build: AppBuildInfo {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            build_hash: build_hash.unwrap_or_default(),
+        },
+    });
+
+    let router = crate::routes::router(state.clone());
+    Ok((router, state))
+}
+
+/// Create the application with prepared workers and the lightweight
+/// [`TestServerBackend`](crate::server_backend::TestServerBackend).
+///
+/// Same lifecycle as [`create_app_with_prepared_workers`] but uses the
+/// in-process test backend instead of Temporal.
+pub async fn create_test_app_with_prepared_workers(
+    config: ServerConfig,
+    layout: RuntimeLayout,
+    jobs_dir: Option<String>,
+    db_dir: Option<std::path::PathBuf>,
+    cache_dir: Option<std::path::PathBuf>,
+    build_hash: Option<String>,
+    workers: PreparedWorkers,
+) -> Result<(Router, Arc<AppState>), error::ServerError> {
+    let jobs_dir = jobs_dir.unwrap_or_else(|| layout.jobs_dir().to_string_lossy().into_owned());
+    let _ = tokio::fs::create_dir_all(&jobs_dir).await;
+
+    let db = JobDB::open_with_layout(&layout, db_dir.as_deref()).await?;
+    let interrupted = db.recover_interrupted().await?;
+    if !interrupted.is_empty() {
+        info!(count = interrupted.len(), "Recovered interrupted jobs");
+    }
+    let expired_dirs = db.prune_expired(config.job_ttl_days).await?;
+    for d in &expired_dirs {
+        let _ = tokio::fs::remove_dir_all(d).await;
+    }
+
+    let cache = Arc::new(
+        UtteranceCache::tiered(cache_dir, None)
+            .await
+            .map_err(|e| error::ServerError::Validation(format!("cache init failed: {e}")))?,
+    );
+    let db = Arc::new(db);
+    let execution_runtime = workers.resolve_execution_runtime(cache.clone())?;
+    let backend_bootstrap: ServerBackendBootstrap =
+        bootstrap_test_server_backend(config.clone(), db, execution_runtime.engine).await?;
+
+    if backend_bootstrap.loaded_jobs > 0 {
+        info!(
+            loaded = backend_bootstrap.loaded_jobs,
+            "Jobs loaded from DB (test backend)"
+        );
+    }
+    let capability_snapshot = execution_runtime.capability_snapshot;
+    let capabilities = capability_snapshot.capabilities;
+    let infer_tasks = capability_snapshot.infer_tasks;
+    let pool = workers.pool.clone();
 
     let bug_reports_dir = layout.bug_reports_dir().to_string_lossy().into_owned();
     let dashboard_dir = crate::routes::dashboard::find_dashboard_dir_for(

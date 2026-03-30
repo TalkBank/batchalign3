@@ -14,6 +14,7 @@ mod common;
 // worker pool. Now they share one process-global LazyLock<LiveFixtureBackend>.
 mod ml_golden {
     pub mod compare_master_parity;
+    pub mod direct_mode_verification;
     pub mod error_paths;
     pub mod golden;
     pub mod golden_audio;

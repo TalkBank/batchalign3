@@ -66,6 +66,12 @@ pub struct ServerHealth {
     pub memory_gate_threshold_mb: MemoryMb,
     /// Background warmup lifecycle label.
     pub warmup_status: String,
+    /// Host-wide memory pressure classification (healthy/guarded/constrained/critical).
+    pub host_memory_pressure: String,
+    /// Number of worker crashes since server start.
+    pub worker_crashes: i64,
+    /// Number of work-unit attempts started since server start.
+    pub attempts_started: i64,
 }
 
 /// Overall TUI state, updated from poll results.
@@ -630,6 +636,9 @@ mod tests {
             system_memory_used_mb: MemoryMb(162144),
             memory_gate_threshold_mb: MemoryMb(2048),
             warmup_status: "complete".into(),
+            host_memory_pressure: "healthy".into(),
+            worker_crashes: 0,
+            attempts_started: 5,
         }));
 
         let h = state.health.as_ref().unwrap();

@@ -85,7 +85,12 @@ mod tests {
             StanzaLanguageProcessors {
                 alpha2: "en".to_string(),
                 processors: vec![
-                    "tokenize", "pos", "lemma", "depparse", "mwt", "constituency",
+                    "tokenize",
+                    "pos",
+                    "lemma",
+                    "depparse",
+                    "mwt",
+                    "constituency",
                 ]
                 .into_iter()
                 .map(String::from)

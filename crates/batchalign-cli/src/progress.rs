@@ -31,11 +31,7 @@ pub trait ProgressSink: Send + Sync {
     /// Update server health snapshot. Default no-op for non-TUI sinks.
     fn update_health(&self, _health: &HealthResponse) {}
     /// Update batch-level language-group progress. Default no-op.
-    fn update_batch_progress(
-        &self,
-        _progress: &batchalign_app::api::BatchInferProgress,
-    ) {
-    }
+    fn update_batch_progress(&self, _progress: &batchalign_app::api::BatchInferProgress) {}
 }
 
 /// Progress display for batch processing — overall bar + activity spinner.
@@ -139,10 +135,7 @@ impl ProgressSink for BatchProgress {
         self.finish();
     }
 
-    fn update_batch_progress(
-        &self,
-        progress: &batchalign_app::api::BatchInferProgress,
-    ) {
+    fn update_batch_progress(&self, progress: &batchalign_app::api::BatchInferProgress) {
         self.update_batch_progress(progress);
     }
 }
@@ -154,10 +147,7 @@ impl BatchProgress {
     /// Called when the polled job response includes `batch_progress` from a
     /// running batched text command. Shows a summary like:
     /// `morphotag: 2/4 languages done, 1200/1800 utterances (67%)`
-    pub fn update_batch_progress(
-        &self,
-        progress: &batchalign_app::api::BatchInferProgress,
-    ) {
+    pub fn update_batch_progress(&self, progress: &batchalign_app::api::BatchInferProgress) {
         self.activity
             .set_message(format!("{}: {}", self.command, progress.summary()));
     }

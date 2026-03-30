@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Deliberately does NOT implement `AsRef<Path>` to prevent accidental
 /// filesystem operations.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(transparent)]
 pub struct ClientPath(String);
 
@@ -176,7 +176,7 @@ impl From<String> for ServerPath {
 ///
 /// Valid on any machine that has the repo cloned, but must be combined
 /// with a server root path to produce a [`ServerPath`] for I/O.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(transparent)]
 pub struct RepoRelativePath(String);
 
@@ -220,11 +220,6 @@ impl std::fmt::Display for RepoRelativePath {
     }
 }
 
-impl Default for RepoRelativePath {
-    fn default() -> Self {
-        Self(String::new())
-    }
-}
 
 impl From<String> for RepoRelativePath {
     fn from(s: String) -> Self {
@@ -246,7 +241,9 @@ impl From<&str> for RepoRelativePath {
 ///
 /// Not a filesystem path — it's a logical name that maps to a
 /// [`ServerPath`] via the server's configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct MediaMappingKey(String);
 
@@ -298,11 +295,7 @@ pub fn infer_media_mapping<'a>(
 ) -> Option<(MediaMappingKey, ServerPath, RepoRelativePath)> {
     for (key, root) in mappings {
         if let Some(suffix) = client_dir.suffix_after_component(key.as_str()) {
-            return Some((
-                key.clone(),
-                root.clone(),
-                RepoRelativePath::new(suffix),
-            ));
+            return Some((key.clone(), root.clone(), RepoRelativePath::new(suffix)));
         }
     }
     None
@@ -397,8 +390,7 @@ mod tests {
 
     #[test]
     fn infer_media_mapping_from_client_path() {
-        let client_dir =
-            ClientPath::new("/Users/macw/0data/slabank-data/French/Newcastle/Photos");
+        let client_dir = ClientPath::new("/Users/macw/0data/slabank-data/French/Newcastle/Photos");
         let mut mappings = BTreeMap::new();
         mappings.insert(
             MediaMappingKey::new("slabank-data"),
@@ -428,8 +420,7 @@ mod tests {
 
     #[test]
     fn infer_media_mapping_multiple_keys() {
-        let client_dir =
-            ClientPath::new("/Users/macw/0data/childes-eng-na-data/MacWhinney/01");
+        let client_dir = ClientPath::new("/Users/macw/0data/childes-eng-na-data/MacWhinney/01");
         let mut mappings = BTreeMap::new();
         mappings.insert(
             MediaMappingKey::new("slabank-data"),
@@ -453,8 +444,7 @@ mod tests {
         // media mapping: slabank-data → /Volumes/Other/slabank
         // Expected search: /Volumes/Other/slabank/French/Newcastle/Photos/13/p08aul13.mp3
 
-        let client_dir =
-            ClientPath::new("/Users/macw/0data/slabank-data/French/Newcastle/Photos");
+        let client_dir = ClientPath::new("/Users/macw/0data/slabank-data/French/Newcastle/Photos");
 
         let mut mappings = BTreeMap::new();
         mappings.insert(
@@ -478,20 +468,18 @@ mod tests {
 }
 
 // Additional impls needed for serde(default) and validation
-impl Default for ClientPath {
-    fn default() -> Self { Self(String::new()) }
-}
 
 impl ClientPath {
     /// Whether the path is empty (not set).
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
-impl Default for MediaMappingKey {
-    fn default() -> Self { Self(String::new()) }
-}
 
 impl MediaMappingKey {
     /// Whether the key is empty (not set).
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }

@@ -1,6 +1,7 @@
 //! Queue dispatch and lease management.
 
 use crate::api::JobId;
+#[cfg(test)]
 use crate::queue::QueuePoll;
 use tracing::warn;
 
@@ -22,6 +23,9 @@ impl JobStore {
     }
 
     /// Claim queued jobs that are eligible to run now.
+    ///
+    /// Currently exercised only by the local queue-claim tests.
+    #[cfg(test)]
     pub(crate) async fn claim_ready_queued_jobs(&self) -> QueuePoll {
         let now = unix_now();
         let claimed = self

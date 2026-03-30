@@ -167,9 +167,9 @@ pub mod bench_cmd;
 pub mod cache_cmd;
 pub mod client;
 pub mod daemon;
-pub mod doctor_cmd;
 pub mod discover;
 pub mod dispatch;
+pub mod doctor_cmd;
 pub mod error;
 pub mod ipc_schema;
 pub mod jobs_cmd;
@@ -390,6 +390,7 @@ pub async fn run_command(cli: args::Cli) -> Result<(), error::CliError> {
                 use_tui: cli.global.tui && !cli.global.no_tui,
                 open_dashboard: cli.global.open_dashboard && !cli.global.no_open_dashboard,
                 force_cpu: cli.global.force_cpu,
+                no_server: cli.global.no_server,
                 before,
                 workers: cli.global.workers,
                 timeout: cli.global.timeout,

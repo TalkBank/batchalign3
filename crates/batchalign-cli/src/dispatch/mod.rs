@@ -64,6 +64,8 @@ pub struct DispatchRequest<'a> {
     pub open_dashboard: bool,
     /// Whether to force CPU execution for local worker processes.
     pub force_cpu: bool,
+    /// Skip auto-detection of a local server (force direct mode).
+    pub no_server: bool,
     /// Optional before-path input for incremental workflows.
     pub before: Option<&'a std::path::Path>,
     /// Optional explicit worker count.
@@ -110,6 +112,7 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
         use_tui,
         open_dashboard,
         force_cpu,
+        no_server,
         before,
         workers,
         timeout,
@@ -159,11 +162,40 @@ pub async fn dispatch(request: DispatchRequest<'_>) -> Result<(), CliError> {
         return Ok(());
     }
 
-    // 2. Direct local execution
+    // 2. Auto-detect local server
+    //
+    // If a batchalign3 server is running locally (e.g., as a launchd service
+    // connected to the Temporal fleet), route work through it automatically.
+    // This gives the user fleet benefits (distributed processing, crash
+    // recovery, warm models) without requiring `--server`.
     let (cfg, warnings) = load_validated_config_from_layout(&layout, None)?;
     for warning in warnings {
         eprintln!("warning: {warning}");
     }
+
+    let local_url = format!("http://127.0.0.1:{}", cfg.port);
+    if !no_server && let Some(health) = probe_local_server(&local_url).await {
+        eprintln!("Using local server at {} ({})\n", local_url, health,);
+        let client = BatchalignClient::new();
+        return dispatch_single_server(
+            &client,
+            &local_url,
+            command,
+            lang,
+            num_speakers,
+            extensions,
+            inputs,
+            out_dir,
+            options.as_ref(),
+            lexicon,
+            before,
+            use_tui,
+            open_dashboard,
+        )
+        .await;
+    }
+
+    // 3. Direct local execution (no server available)
     dispatch_direct_mode(
         cfg,
         layout,
@@ -207,7 +239,11 @@ async fn dispatch_direct_mode(
         cfg.audio_task_timeout_s = timeout;
     }
 
-    let mapping_keys: Vec<String> = cfg.media_mappings.keys().map(|k| k.as_str().to_owned()).collect();
+    let mapping_keys: Vec<String> = cfg
+        .media_mappings
+        .keys()
+        .map(|k| k.as_str().to_owned())
+        .collect();
     let Some(prepared) = prepare_paths_submission(
         command,
         lang,
@@ -381,6 +417,33 @@ fn warn_stale_server(server_url: &str, health: &batchalign_app::api::HealthRespo
             crate::build_hash(),
         );
     }
+}
+
+/// Probe the local server with a short timeout.
+///
+/// Returns a human-readable status string if the server is healthy,
+/// `None` if unreachable or unhealthy. Uses a 500ms timeout so direct
+/// mode startup is not noticeably delayed when no server is running.
+async fn probe_local_server(url: &str) -> Option<String> {
+    let health_url = format!("{url}/health");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .build()
+        .ok()?;
+    let resp = client.get(&health_url).send().await.ok()?;
+    let health: batchalign_app::api::HealthResponse = resp.json().await.ok()?;
+    if health.status != batchalign_app::api::HealthStatus::Ok {
+        return None;
+    }
+    let label = if health.active_jobs > 0 {
+        format!(
+            "{} workers, {} active job(s)",
+            health.workers_available, health.active_jobs
+        )
+    } else {
+        format!("{} workers available", health.workers_available)
+    };
+    Some(label)
 }
 
 #[cfg(test)]

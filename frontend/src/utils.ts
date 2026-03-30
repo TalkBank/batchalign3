@@ -50,7 +50,6 @@ const PROGRESS_STAGE_LABELS: Record<FileProgressStage, string> = {
   finalizing: "Finalizing",
   writing: "Writing",
   parsing: "Parsing",
-  collecting_payloads: "Collecting payloads",
   analyzing: "Analyzing",
   segmenting: "Segmenting",
   translating: "Translating",

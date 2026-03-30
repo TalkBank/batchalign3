@@ -122,7 +122,7 @@ def execute_morphosyntax_request_v2(
         # progress callback from worker state (thread-local-safe because
         # the sequential stdio loop is single-threaded).
         from batchalign.worker._protocol import write_progress_event
-        from batchalign.worker._main import _state
+        from batchalign.worker._types import _state
 
         _last_progress_time = [0.0]
 

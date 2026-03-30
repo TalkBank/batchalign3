@@ -52,11 +52,6 @@ pub struct RuntimeSupervisor {
 
 /// Command sent to the runtime supervisor actor.
 enum SupervisorCommand {
-    /// Start or replace the queue-dispatch loop task.
-    StartQueueTask {
-        /// Future that owns the queue-dispatch loop.
-        task: BackgroundTask,
-    },
     /// Spawn one tracked per-job background task.
     SpawnJob {
         /// Future that owns the complete job lifecycle.
@@ -77,16 +72,6 @@ impl RuntimeSupervisor {
         let (commands, receiver) = unbounded_channel();
         tokio::spawn(run_supervisor(receiver));
         Self { commands }
-    }
-
-    /// Start the queue-dispatch loop under supervisor ownership.
-    pub fn start_queue_task<F>(&self, task: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let _ = self.commands.send(SupervisorCommand::StartQueueTask {
-            task: Box::pin(task),
-        });
     }
 
     /// Spawn one tracked per-job background task.
@@ -121,12 +106,6 @@ async fn run_supervisor(mut receiver: UnboundedReceiver<SupervisorCommand>) {
 
     while let Some(command) = receiver.recv().await {
         match command {
-            SupervisorCommand::StartQueueTask { task } => {
-                if let Some(handle) = queue_task.take() {
-                    handle.abort();
-                }
-                queue_task = Some(tokio::spawn(task));
-            }
             SupervisorCommand::SpawnJob { task } => {
                 job_tasks.spawn(task);
             }

@@ -115,14 +115,14 @@ mod tests {
     }
 
     #[test]
-    fn build_empty_chat_text_includes_transcribe_comment() {
+    fn build_empty_chat_text_is_valid_chat() {
         let text =
             build_empty_chat_text(&sample_transcribe_options(AsrBackend::RustRevAi)).unwrap();
 
-        assert!(text.contains(&format!(
-            "@Comment:\tBatchalign {}, ASR Engine rev.",
-            env!("CARGO_PKG_VERSION")
-        )));
+        // Legacy comment format removed; provenance is injected at pipeline
+        // level (not in build_empty_chat_text). Verify the output is valid CHAT.
+        assert!(text.contains("@Begin"));
+        assert!(text.contains("@End"));
     }
 
     #[test]

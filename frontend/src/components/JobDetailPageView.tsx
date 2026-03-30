@@ -63,6 +63,158 @@ import {
   isDefaultLang,
 } from "../utils";
 
+// ---------------------------------------------------------------------------
+// CommandOptionsPanel — readable display for the job's typed options
+// ---------------------------------------------------------------------------
+
+/** Human-readable labels for option fields that matter operationally.
+ *
+ * Fields not listed here are omitted from the readable view (they are
+ * either internal, always-default, or not helpful for debugging).
+ */
+const OPTION_LABELS: Record<string, string> = {
+  fa_engine: "FA engine",
+  asr_engine: "ASR engine",
+  utr_engine: "UTR engine",
+  utr_overlap_strategy: "UTR overlap",
+  retokenize: "Retokenize",
+  skipmultilang: "Skip multi-lang",
+  diarize: "Diarize",
+  pauses: "Pauses",
+  wor: "Wor tier",
+  merge_abbrev: "Merge abbreviations",
+  batch_size: "Batch size",
+  batch_window: "Batch window",
+  feature_set: "Feature set",
+  text_cache: "Text cache",
+  override_media_cache: "Override media cache",
+  media_dir: "Media directory",
+};
+
+/** Fields to skip in the readable display because they are either always
+ * present as a discriminator, always default, or opaque data blobs. */
+const SKIP_FIELDS = new Set([
+  "command",
+  "engine_overrides",
+  "mwt",
+  "debug_dir",
+  "override_media_cache_tasks",
+  "utr_two_pass",
+]);
+
+/** Render a single option value as a readable string. */
+function formatOptionValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  if (value == null) return "none";
+  return JSON.stringify(value);
+}
+
+/** Readable command options panel.
+ *
+ * Renders interesting (non-default, non-internal) option fields as a
+ * two-column label/value list. Falls back to raw JSON for unrecognized
+ * option shapes.
+ */
+function CommandOptionsPanel({ options }: { options: unknown }) {
+  if (options == null) return null;
+  if (typeof options !== "object" || Array.isArray(options)) {
+    const raw = formatJsonDisplay(options);
+    if (!raw) return null;
+    return (
+      <pre className="overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px] leading-5 text-zinc-700">
+        {raw}
+      </pre>
+    );
+  }
+
+  const obj = options as Record<string, unknown>;
+  const entries: Array<{ label: string; value: string }> = [];
+
+  // Engine overrides get special treatment: show each override inline
+  const overrides = obj.engine_overrides;
+  if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
+    for (const [key, val] of Object.entries(overrides as Record<string, unknown>)) {
+      if (val != null && val !== "") {
+        entries.push({
+          label: `Engine override (${key})`,
+          value: formatOptionValue(val),
+        });
+      }
+    }
+  }
+
+  // Show all non-skipped fields with human labels
+  for (const [key, val] of Object.entries(obj)) {
+    if (SKIP_FIELDS.has(key)) continue;
+    // Skip false booleans, zero-like defaults, and empty strings for cleaner display
+    if (val === false || val === "" || val === null || val === undefined) continue;
+    // Skip default-ish values that clutter the display
+    if (key === "batch_window" && val === 25) continue;
+    if (key === "batch_size" && val === 8) continue;
+
+    const label = OPTION_LABELS[key] ?? key.replace(/_/g, " ");
+    entries.push({ label, value: formatOptionValue(val) });
+  }
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+      {entries.map((e) => (
+        <div key={e.label} className="contents">
+          <span className="text-zinc-400 whitespace-nowrap">{e.label}</span>
+          <span className="font-mono text-zinc-700 truncate" title={e.value}>
+            {e.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Collapsible options section with readable and raw JSON views.
+ *
+ * Shows the labeled readable view by default, with a toggle to switch
+ * to the raw JSON for full-fidelity debugging and copy-paste.
+ */
+function OptionsSection({ options, rawJson }: { options: unknown; rawJson: string }) {
+  const [showRaw, setShowRaw] = useState(false);
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[11px] text-zinc-400 uppercase tracking-wider">
+          Options
+        </span>
+        {rawJson && (
+          <>
+            <button
+              type="button"
+              onClick={() => setShowRaw(!showRaw)}
+              className="text-[11px] text-zinc-400 hover:text-zinc-600 transition-colors underline decoration-dotted"
+            >
+              {showRaw ? "readable" : "raw JSON"}
+            </button>
+            <CopyButton text={rawJson} label="options JSON" />
+          </>
+        )}
+      </div>
+
+      {showRaw ? (
+        <pre className="overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px] leading-5 text-zinc-700">
+          {rawJson}
+        </pre>
+      ) : (
+        <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2.5">
+          <CommandOptionsPanel options={options} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Inputs required to render a fully resolved job detail page. */
 type JobDetailPageViewProps = {
   detail: JobInfo;
@@ -106,6 +258,7 @@ export function JobDetailPageView({
   const [cmdBg, cmdText] = commandStyle(detail.command);
   const host = submitterName(detail.submitted_by_name, detail.submitted_by);
   const commandArgsJson = formatJsonDisplay(detail.options);
+  const hasOptions = detail.options != null && (typeof detail.options !== "object" || Object.keys(detail.options as Record<string, unknown>).length > 0);
 
   return (
     <Layout>
@@ -223,18 +376,12 @@ export function JobDetailPageView({
             </div>
           )}
 
-          {/* Original submission args are critical for debugging reruns and
-              understanding exactly which engine/flags produced the job. */}
-          {commandArgsJson && (
-            <div className="mt-4">
-              <div className="flex items-center gap-1 text-[11px] text-zinc-400 uppercase tracking-wider mb-1.5">
-                Command Args
-                <CopyButton text={commandArgsJson} label="command args" />
-              </div>
-              <pre className="overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px] leading-5 text-zinc-700">
-                {commandArgsJson}
-              </pre>
-            </div>
+          {/* Original submission options are critical for debugging reruns and
+              understanding exactly which engine/flags produced the job.
+              The readable view extracts labeled option fields; the raw JSON
+              toggle preserves full fidelity for copy-paste debugging. */}
+          {hasOptions && (
+            <OptionsSection options={detail.options} rawJson={commandArgsJson} />
           )}
 
           {/* Temporal workflow metadata (only when backend is temporal). */}

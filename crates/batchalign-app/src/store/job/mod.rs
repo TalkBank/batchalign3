@@ -38,6 +38,9 @@ impl Job {
     }
 
     /// Return whether a live queue lease currently blocks local dispatch.
+    ///
+    /// Currently exercised only by the test-only local queue-claim path.
+    #[cfg(test)]
     pub(crate) fn lease_blocks_local_dispatch(&self, now: UnixTimestamp) -> bool {
         self.schedule.lease.leased_by_node.is_some()
             && self
@@ -48,6 +51,9 @@ impl Job {
     }
 
     /// Return the earliest time when the job should be reconsidered for dispatch.
+    ///
+    /// Currently exercised only by the test-only local queue-claim path.
+    #[cfg(test)]
     pub(crate) fn next_local_dispatch_wake_at(&self, now: UnixTimestamp) -> Option<UnixTimestamp> {
         let mut wake_at = self
             .schedule
@@ -70,6 +76,9 @@ impl Job {
     }
 
     /// Return whether the job can be claimed by the local queue dispatcher now.
+    ///
+    /// Currently exercised only by the test-only local queue-claim path.
+    #[cfg(test)]
     pub(crate) fn ready_for_local_dispatch(&self, now: UnixTimestamp) -> bool {
         self.execution.status == JobStatus::Queued
             && !self.runtime.runner_active
@@ -81,6 +90,9 @@ impl Job {
     }
 
     /// Claim the job for local dispatch and return the resulting lease record.
+    ///
+    /// Currently exercised only by the test-only local queue-claim path.
+    #[cfg(test)]
     pub(crate) fn claim_for_local_dispatch(
         &mut self,
         node_id: &NodeId,

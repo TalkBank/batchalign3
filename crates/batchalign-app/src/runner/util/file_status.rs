@@ -211,8 +211,6 @@ pub(crate) enum FileStage {
     Writing,
     /// Parsing CHAT files before dispatch.
     Parsing,
-    /// Collecting NLP payloads from parsed files.
-    CollectingPayloads,
     /// Batched morphosyntax analysis.
     Analyzing,
     /// Batched utterance segmentation.
@@ -258,7 +256,6 @@ impl FileStage {
             Self::Finalizing => FileProgressStage::Finalizing,
             Self::Writing => FileProgressStage::Writing,
             Self::Parsing => FileProgressStage::Parsing,
-            Self::CollectingPayloads => FileProgressStage::CollectingPayloads,
             Self::Analyzing => FileProgressStage::Analyzing,
             Self::Segmenting => FileProgressStage::Segmenting,
             Self::Translating => FileProgressStage::Translating,

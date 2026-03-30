@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use batchalign_types::paths::ClientPath;
 use crate::api::ReleasedCommand;
 use crate::options::{CommandOptions, UtrEngine};
 use crate::store::{PendingJobFile, RunnerJobSnapshot};
+use batchalign_types::paths::ClientPath;
 
 use super::auto_tune::KNOWN_MEDIA_EXTENSIONS;
 
@@ -72,24 +72,19 @@ pub(in crate::runner) async fn preflight_validate_media(
         // Check file exists and non-empty via metadata (one syscall)
         match tokio::fs::metadata(&path).await {
             Err(_) => {
-                failures.insert(
-                    file.file_index,
-                    format!("File not found: {}", path),
-                );
+                failures.insert(file.file_index, format!("File not found: {}", path));
                 continue;
             }
             Ok(meta) if meta.len() == 0 => {
-                failures.insert(
-                    file.file_index,
-                    format!("File is empty: {}", path),
-                );
+                failures.insert(file.file_index, format!("File is empty: {}", path));
                 continue;
             }
             Ok(_) => {}
         }
 
         // Check known extension
-        let ext = path.as_path()
+        let ext = path
+            .as_path()
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase());
@@ -101,10 +96,7 @@ pub(in crate::runner) async fn preflight_validate_media(
                 );
             }
         } else {
-            failures.insert(
-                file.file_index,
-                format!("File has no extension: {}", path),
-            );
+            failures.insert(file.file_index, format!("File has no extension: {}", path));
         }
     }
 
@@ -130,10 +122,12 @@ pub(in crate::runner) async fn collect_preflight_audio_paths(
             .filter_map(|file| {
                 if job.filesystem.paths_mode && file.file_index < job.filesystem.source_paths.len()
                 {
-                    Some(job.filesystem.source_paths[file.file_index]
-                        .assume_shared_filesystem()
-                        .as_path()
-                        .to_owned())
+                    Some(
+                        job.filesystem.source_paths[file.file_index]
+                            .assume_shared_filesystem()
+                            .as_path()
+                            .to_owned(),
+                    )
                 } else {
                     None
                 }

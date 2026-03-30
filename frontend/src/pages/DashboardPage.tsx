@@ -12,6 +12,7 @@ import { ServerFilterTabs } from "../components/ServerFilterTabs";
 import { WorkerProfilePanel } from "../components/WorkerProfilePanel";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { VitalsRow } from "../components/VitalsRow";
+import { CacheStatusPanel } from "../components/CacheStatusPanel";
 import { useStore } from "../state";
 import type { HealthResponse } from "../types";
 
@@ -51,6 +52,7 @@ export function DashboardPage() {
           <WorkerProfilePanel health={health} />
           <MemoryPanel health={health} />
           <VitalsRow health={health} />
+          <CacheStatusPanel health={health} />
         </div>
       </div>
     </div>

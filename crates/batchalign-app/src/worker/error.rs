@@ -13,9 +13,7 @@
 
 /// Format the `ProcessExited` Display output, including stderr when available.
 fn format_process_exited(code: Option<i32>, stderr: Option<&str>) -> String {
-    let header = format!(
-        "worker process exited unexpectedly (exit code: {code:?})"
-    );
+    let header = format!("worker process exited unexpectedly (exit code: {code:?})");
     match stderr {
         Some(text) if !text.is_empty() => {
             format!("{header}\n--- worker stderr ---\n{text}")

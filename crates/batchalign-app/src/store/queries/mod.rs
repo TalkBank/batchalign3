@@ -41,25 +41,34 @@ impl JobStore {
 
     /// Signal a job to cancel.
     pub async fn cancel(&self, job_id: &JobId) -> Result<(), ServerError> {
+        let now = unix_now();
         let cancelled_at = self
             .registry
-            .request_cancellation(job_id, unix_now())
+            .request_cancellation(job_id, now)
             .await
             .ok_or_else(|| ServerError::JobNotFound(job_id.clone()))?;
 
-        if let Some(completed_at) = cancelled_at {
-            self.db_update_job(
-                job_id,
-                PersistedJobUpdate {
-                    status: JobStatus::Cancelled,
-                    error: None,
-                    completed_at: Some(completed_at),
-                    num_workers: None,
-                    next_eligible_at: None,
-                },
-            )
-            .await;
-        }
+        // Always persist cancelled status to SQLite, even if the runner
+        // hasn't noticed the cancellation token yet. Without this, a
+        // server restart re-queues the "running" job from SQLite because
+        // the cancel was only in-memory.
+        //
+        // Bug: before this fix, if the runner was stuck in synchronous
+        // code (e.g., injection loop), request_cancellation returned
+        // None because the job was still "running" in-memory. The
+        // SQLite update was skipped, and the job resurrected on restart.
+        let completed_at = cancelled_at.unwrap_or(now);
+        self.db_update_job(
+            job_id,
+            PersistedJobUpdate {
+                status: JobStatus::Cancelled,
+                error: None,
+                completed_at: Some(completed_at),
+                num_workers: None,
+                next_eligible_at: None,
+            },
+        )
+        .await;
         Ok(())
     }
 

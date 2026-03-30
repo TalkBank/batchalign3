@@ -74,8 +74,10 @@ struct FaFileContext<'a> {
     utr_overlap_strategy: crate::options::UtrOverlapStrategy,
     /// Rev.AI preflight job ids keyed by original provider audio path.
     rev_job_ids: &'a HashMap<PathBuf, RevAiJobId>,
-    /// Job language used for UTR and worker-side FA/ASR requests.
-    lang: &'a LanguageCode3,
+    /// Fallback language from job submission. The per-file language from
+    /// @Languages takes priority — this is only used when @Languages is
+    /// absent.
+    lang_fallback: &'a LanguageCode3,
     /// Debug artifact writer for offline replay.
     dumper: DebugDumper,
     /// Custom media directory from `--media-dir`.
@@ -156,8 +158,11 @@ pub(crate) async fn dispatch_fa_infer(
     plan: FaDispatchPlan,
 ) {
     let job_id = &job.identity.job_id;
-    let fallback_lang = LanguageCode3::eng();
-    let job_lang = job.dispatch.lang.resolve_or(&fallback_lang);
+    // The job-level lang field is NOT authoritative for align — each file
+    // declares its own language via @Languages. The per-file language is
+    // extracted inside process_one_fa_file after parsing.
+    // job.dispatch.lang is kept only as a fallback if @Languages is empty.
+    let job_lang_fallback = job.dispatch.lang.resolve_or(&LanguageCode3::eng());
     let sink = host.sink().clone();
     let fa_params = plan.options.fa_params;
     let should_merge_abbrev = plan.options.merge_abbrev.should_merge();
@@ -200,7 +205,7 @@ pub(crate) async fn dispatch_fa_infer(
             None
         };
         let utr_engine = utr_engine.clone();
-        let job_lang = job_lang.clone();
+        let job_lang_fallback = job_lang_fallback.clone();
         let rev_job_ids = runtime.rev_job_ids.clone();
         let filename = file.filename.clone();
 
@@ -236,7 +241,7 @@ pub(crate) async fn dispatch_fa_infer(
                     utr_engine: utr_engine.as_ref(),
                     utr_overlap_strategy,
                     rev_job_ids: rev_job_ids.as_ref(),
-                    lang: &job_lang,
+                    lang_fallback: &job_lang_fallback,
                     dumper,
                     media_dir: media_dir_ref,
                 };
@@ -272,7 +277,7 @@ async fn process_one_fa_file(
         utr_engine,
         utr_overlap_strategy: _,
         rev_job_ids,
-        lang,
+        lang_fallback,
         ref dumper,
         media_dir,
     } = context;
@@ -299,7 +304,10 @@ async fn process_one_fa_file(
                 .as_path()
                 .to_owned()
         } else {
-            job.filesystem.staging_dir.join("input").join(filename)
+            job.filesystem
+                .staging_dir
+                .join("input")
+                .join(filename)
                 .as_path()
                 .to_owned()
         };
@@ -373,8 +381,7 @@ async fn process_one_fa_file(
 
     if original_audio_path.is_none() && !media_mapping.is_empty() {
         if let Some(root) = host.media_mapping_root(media_mapping.as_str()) {
-            if let Some(candidate) =
-                find_media_in_root(root.as_path(), &mapped_subdir, &stem).await
+            if let Some(candidate) = find_media_in_root(root.as_path(), &mapped_subdir, &stem).await
             {
                 info!(
                     filename,
@@ -407,17 +414,16 @@ async fn process_one_fa_file(
     // path is NOT on the server's filesystem.
     if original_audio_path.is_none() && media_mapping.is_empty() {
         // Determine the client path to use for inference.
-        let infer_client: Option<batchalign_types::paths::ClientPath> =
-            if !source_dir.is_empty() {
-                Some(source_dir.clone())
-            } else if job.filesystem.paths_mode {
-                // Fall back to the read_path (which in paths_mode is a client path).
-                Some(batchalign_types::paths::ClientPath::new(
-                    read_path.as_path().to_string_lossy().to_string(),
-                ))
-            } else {
-                None
-            };
+        let infer_client: Option<batchalign_types::paths::ClientPath> = if !source_dir.is_empty() {
+            Some(source_dir.clone())
+        } else if job.filesystem.paths_mode {
+            // Fall back to the read_path (which in paths_mode is a client path).
+            Some(batchalign_types::paths::ClientPath::new(
+                read_path.as_path().to_string_lossy().to_string(),
+            ))
+        } else {
+            None
+        };
         if let Some(client_path) = infer_client {
             if let Some((_inferred_key, inferred_root, repo_subdir)) =
                 batchalign_types::paths::infer_media_mapping(
@@ -429,9 +435,7 @@ async fn process_one_fa_file(
                 let full_subdir = repo_subdir.join(&mapped_subdir);
                 let search_dir = full_subdir.resolve_on_server(&inferred_root);
 
-                if let Some(candidate) =
-                    find_media_in_root(search_dir.as_path(), "", &stem).await
-                {
+                if let Some(candidate) = find_media_in_root(search_dir.as_path(), "", &stem).await {
                     info!(
                         filename,
                         inferred_key = %_inferred_key,
@@ -519,15 +523,29 @@ async fn process_one_fa_file(
 
     // UTR pre-pass: if untimed utterances exist and a UTR engine is configured,
     // run ASR to recover utterance-level timing before FA grouping.
-    let (mut chat_text, mut had_unrecovered_untimed) = {
+    let (mut chat_text, mut had_unrecovered_untimed, file_lang) = {
         let fa_parser = batchalign_chat_ops::parse::TreeSitterParser::new()
             .expect("tree-sitter CHAT grammar must load");
         let (chat_file, _) = batchalign_chat_ops::parse::parse_lenient(&fa_parser, &chat_text);
+
+        // Read the primary language from @Languages, falling back to the
+        // job-level lang only if the file has no @Languages header.
+        // BA2 did this correctly (read doc.langs[0]); BA3 regressed by
+        // using the job-level lang which defaults to "eng".
+        let file_lang = chat_file
+            .languages
+            .0
+            .first()
+            .map(|lc| {
+                LanguageCode3::try_new(lc.0.as_ref()).unwrap_or_else(|_| lang_fallback.clone())
+            })
+            .unwrap_or_else(|| lang_fallback.clone());
+
         let (_timed, untimed) = batchalign_chat_ops::fa::count_utterance_timing(&chat_file);
 
         if untimed == 0 {
             info!(filename, _timed, "All utterances timed, skipping UTR");
-            (chat_text, false)
+            (chat_text, false, file_lang)
         } else if let Some(utr_engine) = utr_engine {
             lifecycle.stage(FileStage::RecoveringUtteranceTiming).await;
 
@@ -540,7 +558,7 @@ async fn process_one_fa_file(
                 &chat_text,
                 UtrPassContext {
                     audio_path: utr_audio_path,
-                    lang,
+                    lang: &file_lang,
                     services,
                     audio_identity: &audio_identity,
                     cache_policy: fa_params.cache_policy,
@@ -558,9 +576,9 @@ async fn process_one_fa_file(
             {
                 Ok((updated_text, utr_result)) => {
                     let still_untimed = utr_result.unmatched > 0;
-                    (updated_text, still_untimed)
+                    (updated_text, still_untimed, file_lang)
                 }
-                Err(original_text) => (original_text, true),
+                Err(original_text) => (original_text, true, file_lang),
             }
         } else {
             warn!(
@@ -568,7 +586,7 @@ async fn process_one_fa_file(
                 untimed,
                 "Untimed utterances detected but no UTR engine configured, using interpolation"
             );
-            (chat_text, true)
+            (chat_text, true, file_lang)
         }
     };
 
@@ -611,7 +629,7 @@ async fn process_one_fa_file(
                 bt,
                 &chat_text,
                 &audio,
-                lang,
+                &file_lang,
                 services,
                 &fa_params,
                 Some(&progress_tx),
@@ -621,7 +639,7 @@ async fn process_one_fa_file(
             crate::fa::process_fa(
                 &chat_text,
                 &audio,
-                lang,
+                &file_lang,
                 services,
                 &fa_params,
                 Some(&progress_tx),
@@ -650,6 +668,23 @@ async fn process_one_fa_file(
                     fa_result.chat_text
                 };
                 dumper.dump_fa_output(filename, &output_text);
+
+                // Inject processing provenance comment.
+                let lang_str = job
+                    .dispatch
+                    .lang
+                    .as_resolved()
+                    .map(|l| l.as_ref())
+                    .unwrap_or("eng");
+                let provenance = crate::provenance::align_provenance(
+                    lang_str,
+                    context.services.engine_version.as_ref(),
+                    None,  // TODO: extract actual UTR engine from options
+                    false, // TODO: extract wor policy from options
+                    !job.filesystem.before_paths.is_empty(),
+                );
+                let output_text =
+                    crate::provenance::inject_provenance_into_text(&output_text, &provenance);
 
                 lifecycle.stage(FileStage::Writing).await;
                 let finished_at = unix_now();
@@ -727,7 +762,7 @@ async fn process_one_fa_file(
                             &chat_text,
                             UtrPassContext {
                                 audio_path: utr_audio_path,
-                                lang,
+                                lang: &file_lang,
                                 services,
                                 audio_identity: &audio_identity,
                                 cache_policy: fa_params.cache_policy,
@@ -827,7 +862,8 @@ mod auto_detect_tests {
         assert!(
             found.is_some(),
             "Should find p08aul13.mp3 at {}/{}",
-            inferred_root, full_subdir
+            inferred_root,
+            full_subdir
         );
     }
 }

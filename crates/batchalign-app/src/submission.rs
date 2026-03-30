@@ -113,7 +113,8 @@ pub(crate) async fn materialize_submission_job(
         ensure_dir(
             staging_dir.join("output").as_ref(),
             "creating content-mode output dir",
-        ).await?;
+        )
+        .await?;
 
         let mut filenames: Vec<DisplayPath> = Vec::new();
         let mut has_chat = Vec::new();

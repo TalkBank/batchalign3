@@ -27,8 +27,7 @@ fn phase_index(stage: FileProgressStage) -> Option<usize> {
         FileProgressStage::Reading
         | FileProgressStage::ResolvingAudio
         | FileProgressStage::CheckingCache
-        | FileProgressStage::Parsing
-        | FileProgressStage::CollectingPayloads => Some(0),
+        | FileProgressStage::Parsing => Some(0),
         // Phase 1: Transcribe
         FileProgressStage::Transcribing
         | FileProgressStage::RecoveringUtteranceTiming
@@ -444,6 +443,20 @@ fn draw_metrics(f: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(Color::DarkGray),
     ));
 
+    // Show operational counters when nonzero
+    if health.worker_crashes > 0 {
+        worker_spans.push(Span::styled(
+            format!("  {}crash", health.worker_crashes),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if health.attempts_started > 0 {
+        worker_spans.push(Span::styled(
+            format!("  {}att", health.attempts_started),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
     f.render_widget(Paragraph::new(Line::from(worker_spans)), rows[0]);
 
     // ── Row 2: Memory ──
@@ -505,6 +518,17 @@ fn draw_metrics(f: &mut Frame, state: &AppState, area: Rect) {
         }
     };
 
+    // Host-memory pressure indicator (from coordinator, more precise than
+    // the simple gate proximity heuristic above).
+    let pressure = &health.host_memory_pressure;
+    let (pressure_label, pressure_color) = match pressure.as_str() {
+        "healthy" => ("healthy", Color::Green),
+        "guarded" => ("guarded", Color::Yellow),
+        "constrained" => ("constrained", Color::Red),
+        "critical" => ("CRITICAL", Color::Red),
+        _ => (pressure.as_str(), Color::DarkGray),
+    };
+
     let mem_spans = vec![
         Span::styled("  Memory: [", Style::default().fg(Color::DarkGray)),
         Span::styled(bar_filled, Style::default().fg(bar_color)),
@@ -514,6 +538,10 @@ fn draw_metrics(f: &mut Frame, state: &AppState, area: Rect) {
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(safe_label.to_string(), Style::default().fg(bar_color)),
+        Span::styled(
+            format!("  [{pressure_label}]"),
+            Style::default().fg(pressure_color),
+        ),
     ];
 
     f.render_widget(Paragraph::new(Line::from(mem_spans)), rows[1]);
@@ -738,6 +766,9 @@ mod tests {
             system_memory_used_mb: MemoryMb(162144),
             memory_gate_threshold_mb: MemoryMb(2048),
             warmup_status: "complete".into(),
+            host_memory_pressure: "healthy".into(),
+            worker_crashes: 0,
+            attempts_started: 0,
         });
         state.show_metrics = true;
 
@@ -759,6 +790,9 @@ mod tests {
             system_memory_used_mb: MemoryMb(35536),
             memory_gate_threshold_mb: MemoryMb(2048),
             warmup_status: "in_progress".into(),
+            host_memory_pressure: "guarded".into(),
+            worker_crashes: 0,
+            attempts_started: 0,
         });
         state.show_metrics = false;
 

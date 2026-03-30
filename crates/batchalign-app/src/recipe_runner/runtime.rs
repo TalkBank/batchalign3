@@ -211,9 +211,18 @@ mod tests {
             },
             filesystem: RunnerFilesystemConfig {
                 paths_mode: true,
-                source_paths: source_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
-                output_paths: vec![batchalign_types::paths::ClientPath::new("/out/main.cha"); pending_files.len()],
-                before_paths: before_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
+                source_paths: source_paths
+                    .into_iter()
+                    .map(batchalign_types::paths::ClientPath::from)
+                    .collect(),
+                output_paths: vec![
+                    batchalign_types::paths::ClientPath::new("/out/main.cha");
+                    pending_files.len()
+                ],
+                before_paths: before_paths
+                    .into_iter()
+                    .map(batchalign_types::paths::ClientPath::from)
+                    .collect(),
                 staging_dir: batchalign_types::paths::ServerPath::new("/tmp/staging"),
                 media_mapping: Default::default(),
                 media_subdir: Default::default(),
@@ -339,8 +348,15 @@ mod tests {
         let host_out = root.path().join("host/output/sample.cha");
         let filesystem = RunnerFilesystemConfig {
             paths_mode: true,
-            source_paths: vec![batchalign_types::paths::ClientPath::new(root.path().join("input/sample.cha").to_string_lossy().to_string())],
-            output_paths: vec![batchalign_types::paths::ClientPath::new(host_out.to_string_lossy().to_string())],
+            source_paths: vec![batchalign_types::paths::ClientPath::new(
+                root.path()
+                    .join("input/sample.cha")
+                    .to_string_lossy()
+                    .to_string(),
+            )],
+            output_paths: vec![batchalign_types::paths::ClientPath::new(
+                host_out.to_string_lossy().to_string(),
+            )],
             before_paths: Vec::new(),
             staging_dir: batchalign_types::paths::ServerPath::from(root.path().join("jobs/job-1")),
             media_mapping: Default::default(),

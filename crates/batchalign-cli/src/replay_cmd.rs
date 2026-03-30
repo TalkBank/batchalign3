@@ -23,14 +23,19 @@ struct FailedIpcDump {
 pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
     // 1. Load the dump file
     let dump_text = std::fs::read_to_string(&args.dump_file).map_err(|e| {
-        CliError::InvalidArgument(format!("Cannot read dump file {}: {e}", args.dump_file.display()))
+        CliError::InvalidArgument(format!(
+            "Cannot read dump file {}: {e}",
+            args.dump_file.display()
+        ))
     })?;
 
-    let dump: FailedIpcDump = serde_json::from_str(&dump_text).map_err(|e| {
-        CliError::InvalidArgument(format!("Cannot parse dump file: {e}"))
-    })?;
+    let dump: FailedIpcDump = serde_json::from_str(&dump_text)
+        .map_err(|e| CliError::InvalidArgument(format!("Cannot parse dump file: {e}")))?;
 
-    eprintln!("Replaying failed IPC request from {}", args.dump_file.display());
+    eprintln!(
+        "Replaying failed IPC request from {}",
+        args.dump_file.display()
+    );
     eprintln!("  Worker label: {}", dump.worker_label);
     eprintln!("  Original error: {}", dump.error_message);
 
@@ -47,13 +52,13 @@ pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
 
     let lang = args.lang.as_deref().unwrap_or_else(|| {
         // Try to extract from worker label (e.g., "profile:gpu:eng")
-        dump.worker_label
-            .split(':')
-            .nth(2)
-            .unwrap_or("eng")
+        dump.worker_label.split(':').nth(2).unwrap_or("eng")
     });
 
-    let python = args.python.clone().unwrap_or_else(resolve_python_executable);
+    let python = args
+        .python
+        .clone()
+        .unwrap_or_else(resolve_python_executable);
 
     eprintln!("  Task: {task}");
     eprintln!("  Lang: {lang}");
@@ -67,12 +72,18 @@ pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| {
-        CliError::InvalidArgument(format!("Cannot spawn worker: {e}"))
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| CliError::InvalidArgument(format!("Cannot spawn worker: {e}")))?;
 
-    let stdout = child.stdout.take().ok_or(CliError::InvalidArgument("No stdout".into()))?;
-    let mut stdin = child.stdin.take().ok_or(CliError::InvalidArgument("No stdin".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(CliError::InvalidArgument("No stdout".into()))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or(CliError::InvalidArgument("No stdin".into()))?;
     let reader = std::io::BufReader::new(stdout);
     let mut lines = reader.lines();
 
@@ -83,7 +94,9 @@ pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
     while let Some(Ok(line)) = lines.next() {
         if Instant::now() > deadline {
             let _ = child.kill();
-            return Err(CliError::InvalidArgument("Timeout waiting for worker ready".into()));
+            return Err(CliError::InvalidArgument(
+                "Timeout waiting for worker ready".into(),
+            ));
         }
         if line.contains("\"ready\"") && line.contains("true") {
             ready = true;
@@ -93,22 +106,27 @@ pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
     }
     if !ready {
         let _ = child.kill();
-        return Err(CliError::InvalidArgument("Worker exited without ready signal".into()));
+        return Err(CliError::InvalidArgument(
+            "Worker exited without ready signal".into(),
+        ));
     }
 
     // 5. Send the exact original request
     eprintln!("Sending original request...");
-    writeln!(stdin, "{}", dump.request).map_err(|e| {
-        CliError::InvalidArgument(format!("Write failed: {e}"))
-    })?;
-    stdin.flush().map_err(|e| CliError::InvalidArgument(format!("Flush failed: {e}")))?;
+    writeln!(stdin, "{}", dump.request)
+        .map_err(|e| CliError::InvalidArgument(format!("Write failed: {e}")))?;
+    stdin
+        .flush()
+        .map_err(|e| CliError::InvalidArgument(format!("Flush failed: {e}")))?;
 
     // 6. Read and report the response
     let response_deadline = Instant::now() + std::time::Duration::from_secs(120);
     while let Some(Ok(line)) = lines.next() {
         if Instant::now() > response_deadline {
             let _ = child.kill();
-            return Err(CliError::InvalidArgument("Timeout waiting for response".into()));
+            return Err(CliError::InvalidArgument(
+                "Timeout waiting for response".into(),
+            ));
         }
 
         let trimmed = line.trim();
@@ -129,7 +147,10 @@ pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
                 }
 
                 // Pretty-print the full response
-                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_else(|_| line));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&val).unwrap_or_else(|_| line)
+                );
 
                 // Shutdown and exit
                 let _ = writeln!(stdin, r#"{{"op":"shutdown"}}"#);
@@ -143,5 +164,7 @@ pub async fn run(args: &ReplayArgs) -> Result<(), CliError> {
     }
 
     let _ = child.kill();
-    Err(CliError::InvalidArgument("Worker exited without response".into()))
+    Err(CliError::InvalidArgument(
+        "Worker exited without response".into(),
+    ))
 }

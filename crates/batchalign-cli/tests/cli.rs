@@ -396,14 +396,18 @@ async fn cli_morphotag_real_server() {
         "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n@ID:\teng|test|CHI||female|||Target_Child|||\n*CHI:\thello world .\n@End\n",
     ).expect("write input");
 
-    let server =
-        match start_live_server(&python_path, vec![batchalign_types::paths::ServerPath::new(in_dir.clone())]).await {
-            Ok(server) => server,
-            Err(message) => {
-                eprintln!("SKIP: {message}");
-                return;
-            }
-        };
+    let server = match start_live_server(
+        &python_path,
+        vec![batchalign_types::paths::ServerPath::new(in_dir.clone())],
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(message) => {
+            eprintln!("SKIP: {message}");
+            return;
+        }
+    };
     if !server.has_infer_task(InferTask::Morphosyntax) {
         eprintln!("SKIP: live server does not advertise morphosyntax infer support");
         server.shutdown().await;
@@ -496,14 +500,18 @@ async fn cli_align_real_server_live_fa_succeeds() {
         + "\n";
     std::fs::write(in_dir.join("test.cha"), stripped_chat).expect("write stripped chat");
 
-    let server =
-        match start_live_server(&python_path, vec![batchalign_types::paths::ServerPath::new(in_dir.clone())]).await {
-            Ok(server) => server,
-            Err(message) => {
-                eprintln!("SKIP: {message}");
-                return;
-            }
-        };
+    let server = match start_live_server(
+        &python_path,
+        vec![batchalign_types::paths::ServerPath::new(in_dir.clone())],
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(message) => {
+            eprintln!("SKIP: {message}");
+            return;
+        }
+    };
     if !server.has_infer_task(InferTask::Fa) {
         eprintln!("SKIP: live server does not advertise FA infer support");
         server.shutdown().await;

@@ -165,7 +165,10 @@ async fn process_one_transcribe_file(
                 .as_path()
                 .to_owned()
         } else {
-            job.filesystem.staging_dir.join("input").join(filename)
+            job.filesystem
+                .staging_dir
+                .join("input")
+                .join(filename)
                 .as_path()
                 .to_owned()
         };
@@ -378,8 +381,12 @@ mod tests {
                 has_chat: vec![false],
                 staging_dir: Default::default(),
                 paths_mode: true,
-                source_paths: vec![batchalign_types::paths::ClientPath::new(source_path.to_string_lossy().to_string())],
-                output_paths: vec![batchalign_types::paths::ClientPath::new(output_path.to_string_lossy().to_string())],
+                source_paths: vec![batchalign_types::paths::ClientPath::new(
+                    source_path.to_string_lossy().to_string(),
+                )],
+                output_paths: vec![batchalign_types::paths::ClientPath::new(
+                    output_path.to_string_lossy().to_string(),
+                )],
                 before_paths: Vec::new(),
                 media_mapping: Default::default(),
                 media_subdir: Default::default(),

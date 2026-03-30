@@ -246,11 +246,23 @@ impl JobStore {
                             has_chat: row.has_chat,
                             staging_dir: batchalign_types::paths::ServerPath::from(row.staging_dir),
                             paths_mode: row.paths_mode,
-                            source_paths: row.source_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
-                            output_paths: row.output_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
+                            source_paths: row
+                                .source_paths
+                                .into_iter()
+                                .map(batchalign_types::paths::ClientPath::from)
+                                .collect(),
+                            output_paths: row
+                                .output_paths
+                                .into_iter()
+                                .map(batchalign_types::paths::ClientPath::from)
+                                .collect(),
                             before_paths: Vec::new(),
-                            media_mapping: batchalign_types::paths::MediaMappingKey::from(row.media_mapping),
-                            media_subdir: batchalign_types::paths::RepoRelativePath::from(row.media_subdir),
+                            media_mapping: batchalign_types::paths::MediaMappingKey::from(
+                                row.media_mapping,
+                            ),
+                            media_subdir: batchalign_types::paths::RepoRelativePath::from(
+                                row.media_subdir,
+                            ),
                             // source_dir is owned by JobSourceContext; the runner snapshot
                             // assembles RunnerFilesystemConfig.source_dir from there.
                             source_dir: Default::default(),

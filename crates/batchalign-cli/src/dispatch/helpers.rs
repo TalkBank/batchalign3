@@ -532,10 +532,7 @@ pub(super) fn print_failure_summary(errors: &[FileErrorDetail], total_files: u64
     if let Some(home) = dirs::home_dir() {
         let daemon_log = home.join(".batchalign3").join("daemon.log");
         if daemon_log.exists() {
-            eprintln!(
-                "  hint: server logs at {}",
-                daemon_log.display()
-            );
+            eprintln!("  hint: server logs at {}", daemon_log.display());
         }
     }
     eprintln!();

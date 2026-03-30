@@ -145,7 +145,7 @@ pub(crate) fn build_empty_chat_text(opts: &TranscribeOptions) -> Result<String, 
     };
     let chat_file = build_chat::build_chat(&desc)
         .map_err(|e| ServerError::Validation(format!("Failed to build empty CHAT: {e}")))?;
-    Ok(insert_transcribe_comment(&to_chat_string(&chat_file), opts))
+    Ok(to_chat_string(&chat_file))
 }
 
 pub(crate) fn insert_transcribe_comment(chat_text: &str, opts: &TranscribeOptions) -> String {

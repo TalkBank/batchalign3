@@ -250,6 +250,7 @@ impl JobStore {
     }
 
     /// Clear the batch-level progress (called on job finalization).
+    #[cfg(test)]
     pub(crate) async fn clear_batch_progress(&self, job_id: &JobId) {
         if let Some(job_update) = self.registry.clear_batch_progress(job_id).await {
             self.notify_job_item(job_update);

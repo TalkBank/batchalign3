@@ -152,6 +152,7 @@ pub async fn run(global: &GlobalOpts, args: &BenchArgs) -> Result<(), CliError> 
             use_tui: false,
             open_dashboard: global.open_dashboard && !global.no_open_dashboard,
             force_cpu: global.force_cpu,
+            no_server: global.no_server,
             before: None,
             workers: global.workers,
             timeout: global.timeout,

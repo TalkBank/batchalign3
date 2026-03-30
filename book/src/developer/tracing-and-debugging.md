@@ -1,11 +1,50 @@
 # Tracing and Debugging
 
 **Status:** Current
-**Last updated:** 2026-03-19
+**Last modified:** 2026-03-29 11:32 EDT
 
 This document describes the tracing and debugging strategy across the
 batchalign3 stack: Rust (batchalign-core PyO3 bridge), Rust (CLI and server
 control plane), and Python (pipeline engines and worker process).
+
+## Server Log File
+
+The server writes its own log file directly, like Nginx or Apache.
+When running in `--foreground` mode (which is how both the daemon
+spawn and Ansible start the server), stderr is redirected to
+`~/.batchalign3/server.log` via `dup2(2)`. All `tracing` output
+(WARN and above by default) is captured in this file regardless of
+how the process was started.
+
+**Log location:** `~/.batchalign3/server.log` (append mode)
+
+**Default level:** `WARN` — captures pipeline timing, cache metrics,
+heartbeat warnings, worker crashes, slow queries. Does NOT capture
+per-file progress, worker spawn/ready, or routine lifecycle events.
+
+**For debugging:** Run with `-v` to get `INFO` level (worker spawns,
+job lifecycle, per-file progress) or `-vv` for `DEBUG` (full payload
+details). Or set `RUST_LOG=info` environment variable.
+
+```bash
+# Normal operation (WARN only):
+batchalign3 serve start
+
+# Debugging session (INFO — shows worker spawns, job lifecycle):
+batchalign3 -v serve start --foreground
+
+# Deep debugging (DEBUG — shows payloads, IPC):
+batchalign3 -vv serve start --foreground
+
+# Override per-module:
+RUST_LOG=batchalign_app::morphosyntax=debug batchalign3 serve start
+```
+
+**Log rotation:** Not implemented. The log file grows unbounded.
+For long-running production servers, periodically truncate:
+```bash
+: > ~/.batchalign3/server.log  # truncate without restarting
+```
 
 ## Verbosity Levels
 

@@ -377,6 +377,7 @@ async fn collect_direct_content_results(
                 content: String::new(),
                 content_type: result.content_type,
                 error: result.error.clone(),
+                provenance: Vec::new(),
             })
             .collect();
     }
@@ -397,6 +398,7 @@ async fn collect_direct_content_results(
             content,
             content_type: result.content_type,
             error: result.error.clone(),
+            provenance: Vec::new(),
         });
     }
     files
@@ -1539,9 +1541,11 @@ fn live_fixture_pool_config(python_path: &str) -> PoolConfig {
         python_path: python_path.into(),
         test_echo: false,
         health_check_interval_s: 3_600,
-        idle_timeout_s: 30,
+        idle_timeout_s: 120,
         ready_timeout_s: 120,
-        max_workers_per_key: 1,
+        // Allow 2 workers per key so sequential tests don't block waiting
+        // for a prior test's checked-out worker to be returned to the pool.
+        max_workers_per_key: 2,
         verbose: 0,
         engine_overrides: String::new(),
         runtime: Default::default(),

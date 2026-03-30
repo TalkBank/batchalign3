@@ -103,8 +103,7 @@ pub(super) async fn dispatch_single_server(
     // file content is sent over HTTP, and the server resolves media via its
     // own media_mappings. Paths mode is for local daemons only.
     let server_is_local = is_local_server(server_url);
-    let use_paths_mode =
-        released_command_uses_local_audio(command) && server_is_local;
+    let use_paths_mode = released_command_uses_local_audio(command) && server_is_local;
 
     let (submission, effective_out, result_map, paths_mode) = if use_paths_mode {
         let Some(prepared) = prepare_paths_submission(

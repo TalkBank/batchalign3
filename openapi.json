@@ -110,7 +110,6 @@
           "finalizing",
           "writing",
           "parsing",
-          "collecting_payloads",
           "analyzing",
           "segmenting",
           "translating",
@@ -141,6 +140,13 @@
           "filename": {
             "$ref": "#/components/schemas/DisplayPath",
             "description": "Display path for this file: a bare basename (`\"sample.cha\"`) or a\nrelative forward-slash path (`\"PWA/TYO_a1.cha\"`) for directory input.\nBackslashes are normalized to forward slashes on construction."
+          },
+          "provenance": {
+            "description": "Processing provenance extracted from the output CHAT file.\nEach entry records one batchalign3 command that was applied\n(command name, engine version, timestamp). Empty for non-CHAT\noutput or files that failed processing.",
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceEntry"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -487,8 +493,8 @@
       "JobControlPlaneBackendKind": {
         "description": "Control-plane backend that currently owns orchestration for a server job.",
         "enum": [
-          "embedded",
-          "temporal"
+          "temporal",
+          "test"
         ],
         "type": "string"
       },
@@ -1029,6 +1035,35 @@
         "format": "int32",
         "minimum": 0,
         "type": "integer"
+      },
+      "ProvenanceEntry": {
+        "description": "One extracted provenance entry from a CHAT file.",
+        "properties": {
+          "command": {
+            "description": "Command name (e.g., \"morphotag\", \"align\").",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Key-value fields (engine, lang, etc.).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "timestamp": {
+            "description": "ISO 8601 timestamp string.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "fields",
+          "timestamp"
+        ],
+        "type": "object"
       },
       "ReleasedCommand": {
         "description": "Closed released command vocabulary used at all Rust seams.\n\nThis is the single canonical command type. Unknown command strings are\nrejected at deserialization boundaries (HTTP 422, DB recovery skip).",

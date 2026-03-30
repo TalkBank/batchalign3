@@ -60,7 +60,11 @@ fn dump_failed_ipc_request(
 
     let truncated_response = response_fragment.map(|r| {
         if r.len() > FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES {
-            format!("{}... [truncated, {} bytes total]", &r[..FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES], r.len())
+            format!(
+                "{}... [truncated, {} bytes total]",
+                &r[..FAILED_REQUEST_DUMP_MAX_RESPONSE_BYTES],
+                r.len()
+            )
         } else {
             r.to_string()
         }
@@ -474,6 +478,8 @@ impl WorkerHandle {
             "Spawning worker (memory guard passed)"
         );
 
+        let spawn_start = std::time::Instant::now();
+
         let mut child = cmd.spawn().map_err(|e| {
             WorkerError::SpawnFailed(format!("failed to spawn {}: {}", config.python_path, e))
         })?;
@@ -541,11 +547,13 @@ impl WorkerHandle {
             .take()
             .ok_or_else(|| WorkerError::SpawnFailed("child stdin not captured".into()))?;
         let pid = WorkerPid(ready.pid);
+        let startup_ms = spawn_start.elapsed().as_millis() as u64;
 
         info!(
             target = %config.bootstrap_label(),
             lang = %config.lang,
             pid = %pid,
+            startup_ms,
             "Worker ready"
         );
 
@@ -746,7 +754,21 @@ impl WorkerHandle {
 
         loop {
             let mut line = String::new();
-            let bytes = self.stdout.read_line(&mut line).await?;
+            let bytes = match self.stdout.read_line(&mut line).await {
+                Ok(b) => b,
+                Err(io_err) => {
+                    // Pipe error (BrokenPipe, etc.) — worker likely crashed.
+                    // Drain stderr to capture the Python traceback before
+                    // returning the error. Without this, BrokenPipe errors
+                    // produce no diagnostic information.
+                    let stderr = self.drain_stderr_tail(50);
+                    let code = self.child.try_wait().ok().flatten().and_then(|s| s.code());
+                    return Err(WorkerError::ProcessExited {
+                        code,
+                        stderr: stderr.or_else(|| Some(format!("I/O error: {io_err}"))),
+                    });
+                }
+            };
             if bytes == 0 {
                 let code = self.child.try_wait().ok().flatten().and_then(|s| s.code());
                 let stderr = self.drain_stderr_tail(50);
@@ -906,10 +928,8 @@ impl WorkerHandle {
         self.last_activity = tokio::time::Instant::now();
 
         // Capture serialized request for failure dumps (before sending).
-        let request_json_for_dump = serde_json::to_string(
-            &WorkerRequest::ExecuteV2 { request },
-        )
-        .unwrap_or_else(|_| "<serialization failed>".into());
+        let request_json_for_dump = serde_json::to_string(&WorkerRequest::ExecuteV2 { request })
+            .unwrap_or_else(|_| "<serialization failed>".into());
 
         self.write_request(&WorkerRequest::ExecuteV2 { request })
             .await?;

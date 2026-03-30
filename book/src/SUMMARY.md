@@ -30,6 +30,7 @@
 - [Server Mode](user-guide/server-mode.md)
 - [Rev.AI Integration](user-guide/rev-ai.md)
 - [Performance](user-guide/performance.md)
+- [Processing Provenance](user-guide/provenance.md)
 - [Worker Tuning](user-guide/worker-tuning.md)
 - [Troubleshooting](user-guide/troubleshooting.md)
 
@@ -66,6 +67,8 @@
 - [Type-Driven Design](architecture/type-driven-design.md)
 - [Typed Path Provenance](architecture/path-provenance.md)
 - [Stanza Capability Registry](architecture/stanza-capability-registry.md)
+- [Observability](architecture/observability.md)
+- [Pipeline Parallelism](architecture/pipeline-parallelism.md)
 - [Command Trait Proposal (ADR)](architecture/command-trait-proposal.md)
 - [Recipe-Driven Command Architecture](architecture/recipe-runner-architecture.md)
 - [Parameter Design](architecture/parameter-design.md)
@@ -83,6 +86,7 @@
 - [Tier Parse Leniency](architecture/tier-parse-leniency.md)
 - [Overlap Encoding (`&*` and `+<`)](architecture/overlap-encoding.md)
 - [Algorithm Visualizations](architecture/algorithm-visualizations.md)
+- [Processing Provenance](architecture/provenance.md)
 
 # Technical Reference
 

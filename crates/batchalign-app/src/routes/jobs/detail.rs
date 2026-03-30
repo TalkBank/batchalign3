@@ -93,11 +93,17 @@ pub(crate) async fn get_results(
         } else {
             String::new()
         };
+        let provenance = if r.error.is_none() && r.content_type == ContentType::Chat {
+            crate::provenance::extract_provenance(&content)
+        } else {
+            Vec::new()
+        };
         files.push(FileResult {
             filename: r.filename.clone(),
             content,
             content_type: r.content_type,
             error: r.error.clone(),
+            provenance,
         });
     }
 
@@ -161,6 +167,7 @@ pub(crate) async fn get_single_result(
             content: String::new(),
             content_type: ContentType::Chat,
             error: fs.error.clone().or(Some("Unknown error".into())),
+            provenance: Vec::new(),
         }));
     }
 
@@ -192,11 +199,17 @@ pub(crate) async fn get_single_result(
 
     let content = read_result_content(&result_content_path(&detail, &out_filename)).await?;
 
+    let provenance = if content_type == ContentType::Chat {
+        crate::provenance::extract_provenance(&content)
+    } else {
+        Vec::new()
+    };
     Ok(Json(FileResult {
         filename: out_filename,
         content,
         content_type,
         error: None,
+        provenance,
     }))
 }
 

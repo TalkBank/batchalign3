@@ -3,7 +3,7 @@
 use crate::api::{EngineVersion, LanguageCode3};
 use crate::cache::{CacheBackend, UtteranceCache};
 use crate::error::ServerError;
-use crate::infer_retry::{dispatch_execute_v2_with_retry, dispatch_execute_v2_with_retry_and_progress};
+use crate::infer_retry::dispatch_execute_v2_with_retry_and_progress;
 use crate::worker::artifacts_v2::PreparedArtifactRuntimeV2;
 use crate::worker::pool::WorkerPool;
 use crate::worker::text_request_v2::{PreparedTextRequestIdsV2, build_morphosyntax_request_v2};
@@ -102,7 +102,8 @@ async fn infer_batch_single(
         "Dispatching morphosyntax execute_v2 batch"
     );
 
-    let response = dispatch_execute_v2_with_retry_and_progress(pool, lang, &request, progress_tx).await?;
+    let response =
+        dispatch_execute_v2_with_retry_and_progress(pool, lang, &request, progress_tx).await?;
     let result = parse_morphosyntax_result_v2(&response).map_err(|error| {
         ServerError::Validation(format!("invalid morphosyntax V2 result: {error}"))
     })?;
@@ -133,7 +134,11 @@ async fn infer_batch_single(
                 let diag_str = if diagnostics.is_empty() {
                     "no structural issues detected by diagnostics".to_string()
                 } else {
-                    diagnostics.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; ")
+                    diagnostics
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 };
                 let raw_json = serde_json::to_string(raw_sentences)
                     .unwrap_or_else(|_| "<serialization failed>".into());

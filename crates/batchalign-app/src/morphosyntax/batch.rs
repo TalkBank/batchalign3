@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::{DisplayPath, EngineVersion};
+use crate::api::EngineVersion;
 use crate::cache::{CacheBackend, UtteranceCache};
 use crate::error::ServerError;
 use crate::params::MorphosyntaxParams;
@@ -42,251 +42,146 @@ pub(crate) async fn run_morphosyntax_batch_impl(
     progress_tx: Option<tokio::sync::mpsc::Sender<crate::types::worker_v2::ProgressEventV2>>,
     group_timeout: std::time::Duration,
 ) -> TextBatchFileResults {
+    let parser = batchalign_chat_ops::parse::TreeSitterParser::new()
+        .expect("tree-sitter CHAT grammar must load");
     let primary_lang = LanguageCode::new(params.lang.as_ref());
+    let mut results: TextBatchFileResults = Vec::with_capacity(files.len());
 
-    // 1. Parse all files in parallel.
-    //
-    // Tree-sitter parsers are !Send, so we use spawn_blocking with a
-    // per-task parser. Each file's parse + validate + clear is independent.
-    let file_texts: Vec<(String, String)> = files
+    // 1. Parse all files
+    let parse_start = tokio::time::Instant::now();
+    let mut parsed_files: Vec<ChatFile> = Vec::with_capacity(files.len());
+    let mut dummy_flags: Vec<bool> = Vec::with_capacity(files.len());
+    let mut validation_errors: Vec<Option<String>> = Vec::with_capacity(files.len());
+    for file in files {
+        let filename = file.filename.as_ref();
+        let (mut chat_file, parse_errors) = parse_lenient(&parser, file.chat_text.as_ref());
+        if !parse_errors.is_empty() {
+            warn!(
+                filename = %filename,
+                num_errors = parse_errors.len(),
+                "Parse errors (continuing with recovery)"
+            );
+        }
+        let dummy = is_dummy(&chat_file);
+        if !dummy {
+            // Pre-validation gate (L2: MainTierValid)
+            if let Err(errors) =
+                validate_to_level(&chat_file, parse_errors.len(), ValidityLevel::MainTierValid)
+            {
+                let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+                validation_errors.push(Some(format!(
+                    "morphotag pre-validation failed: {}",
+                    msgs.join("; ")
+                )));
+                dummy_flags.push(true); // treat as skip
+                parsed_files.push(chat_file);
+                continue;
+            }
+            clear_morphosyntax(&mut chat_file);
+        }
+        validation_errors.push(None);
+        dummy_flags.push(dummy);
+        parsed_files.push(chat_file);
+    }
+
+    let num_files = files.len();
+    let total_utterances: usize = parsed_files
         .iter()
-        .map(|f| (f.filename.to_string(), f.chat_text.to_string()))
-        .collect();
+        .map(|f| {
+            f.lines
+                .iter()
+                .filter(|l| matches!(l, batchalign_chat_ops::Line::Utterance(_)))
+                .count()
+        })
+        .sum();
+    tracing::warn!(
+        num_files,
+        total_utterances,
+        parse_ms = parse_start.elapsed().as_millis() as u64,
+        "Pipeline timing: parse phase"
+    );
 
-    struct ParsedFile {
-        chat_file: ChatFile,
-        is_dummy: bool,
-        validation_error: Option<String>,
-    }
-
-    let num_files = file_texts.len();
-    let parsed_results: Vec<ParsedFile> = tokio::task::spawn_blocking(move || {
-        use rayon::prelude::*;
-        file_texts
-            .par_iter()
-            .map(|(filename, chat_text)| {
-                // Each rayon thread gets its own parser (tree-sitter is !Send).
-                let thread_parser =
-                    batchalign_chat_ops::parse::TreeSitterParser::new()
-                        .expect("tree-sitter CHAT grammar must load");
-                let (mut chat_file, parse_errors) = parse_lenient(&thread_parser, chat_text);
-                if !parse_errors.is_empty() {
-                    // Log inside spawn_blocking is fine — tracing is thread-safe.
-                    warn!(
-                        filename = %filename,
-                        num_errors = parse_errors.len(),
-                        "Parse errors (continuing with recovery)"
-                    );
-                }
-                let dummy = is_dummy(&chat_file);
-                if !dummy {
-                    if let Err(errors) = validate_to_level(
-                        &chat_file,
-                        parse_errors.len(),
-                        ValidityLevel::MainTierValid,
-                    ) {
-                        let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-                        return ParsedFile {
-                            chat_file,
-                            is_dummy: true, // treat as skip
-                            validation_error: Some(format!(
-                                "morphotag pre-validation failed: {}",
-                                msgs.join("; ")
-                            )),
-                        };
-                    }
-                    clear_morphosyntax(&mut chat_file);
-                }
-                ParsedFile {
-                    chat_file,
-                    is_dummy: dummy,
-                    validation_error: None,
-                }
-            })
-            .collect()
-    })
-    .await
-    .expect("parse task must not panic");
-
-    tracing::info!(num_files, "Parsed all files in parallel");
-
-    let mut parsed_files: Vec<ChatFile> = Vec::with_capacity(num_files);
-    let mut dummy_flags: Vec<bool> = Vec::with_capacity(num_files);
-    let mut validation_errors: Vec<Option<String>> = Vec::with_capacity(num_files);
-    for pf in parsed_results {
-        parsed_files.push(pf.chat_file);
-        dummy_flags.push(pf.is_dummy);
-        validation_errors.push(pf.validation_error);
-    }
-
-    // 2. Collect payloads from each file, tracking provenance.
-    //
-    // Phase 2 parallelism: the CPU-bound work (collect_payloads,
-    // declared_languages, cache_key, Cantonese warning) runs in parallel
-    // via rayon inside spawn_blocking. The async cache lookups run
-    // sequentially afterward since they need the SQLite cache.
+    // 2. Collect payloads from each file, tracking provenance
+    let collect_start = tokio::time::Instant::now();
+    let mut cache_total_items: usize = 0;
+    let mut cache_hits: usize = 0;
+    let mut cache_injection_failures: usize = 0;
     struct FileMissInfo {
         item_count: usize,
         keys: Vec<CacheKey>,
         global_start: usize,
     }
 
-    // 2a. CPU-bound payload collection — rayon in spawn_blocking.
-    //
-    // For each non-dummy file: extract batch items, compute cache keys,
-    // and emit the Cantonese per-character warning.
-    struct CollectedPayload {
-        batch_items: Vec<BatchItemWithPosition>,
-        keys: Vec<CacheKey>,
-        /// Serialized debug JSON for the debug dumper.
-        debug_json: Vec<serde_json::Value>,
-    }
-
-    let primary_lang_owned = primary_lang.clone();
-    let multilingual_policy = params.multilingual_policy;
-    let retokenize_flag = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
-    let lang_str = params.lang.as_ref().to_string();
-    // Clone MwtDict into the blocking closure (BTreeMap is Send).
-    let mwt_owned = params.mwt.clone();
-
-    // spawn_blocking requires 'static, so we clone the ChatFiles for the
-    // read-only collection phase. The originals stay for cache-hit injection
-    // in the async loop afterward.
-    let collected_payloads: Vec<Option<CollectedPayload>> =
-        tokio::task::spawn_blocking({
-            let parsed_files_clone: Vec<ChatFile> = parsed_files.clone();
-            let dummy_flags_clone = dummy_flags.clone();
-            move || {
-                use rayon::prelude::*;
-                parsed_files_clone
-                    .par_iter()
-                    .enumerate()
-                    .map(|(file_idx, chat_file)| {
-                        if dummy_flags_clone[file_idx] {
-                            return None;
-                        }
-
-                        let langs =
-                            declared_languages(chat_file, &primary_lang_owned);
-                        let (batch_items, _total) = collect_payloads(
-                            chat_file,
-                            &primary_lang_owned,
-                            &langs,
-                            multilingual_policy,
-                        );
-
-                        if batch_items.is_empty() {
-                            return None;
-                        }
-
-                        // Cantonese per-character warning (CPU-bound check).
-                        if !retokenize_flag && lang_str == "yue" {
-                            let per_char_count = batch_items
-                                .iter()
-                                .flat_map(|(_, _, item, _)| item.words.iter())
-                                .filter(|w| {
-                                    w.chars().count() == 1
-                                        && w.chars().all(|c| c > '\u{2E80}')
-                                })
-                                .count();
-                            let total_words: usize = batch_items
-                                .iter()
-                                .map(|(_, _, item, _)| item.words.len())
-                                .sum();
-                            if total_words > 0
-                                && per_char_count * 100 / total_words > 80
-                            {
-                                warn!(
-                                    "Cantonese input appears to be per-character tokens \
-                                     ({per_char_count}/{total_words} single-CJK words). \
-                                     Consider --retokenize for word-level analysis."
-                                );
-                            }
-                        }
-
-                        // Compute cache keys for each batch item.
-                        let keys: Vec<CacheKey> = batch_items
-                            .iter()
-                            .map(|(_, _, item, _)| {
-                                cache_key(
-                                    &item.words,
-                                    &item.lang,
-                                    &mwt_owned,
-                                    retokenize_flag,
-                                )
-                            })
-                            .collect();
-
-                        // Build debug JSON (used by DebugDumper after we
-                        // return to the async context).
-                        let debug_json: Vec<serde_json::Value> = batch_items
-                            .iter()
-                            .map(|(li, uo, item, words)| {
-                                serde_json::json!({
-                                    "line_idx": li,
-                                    "utt_ordinal": uo,
-                                    "item_words": &item.words,
-                                    "extracted_words": words.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>(),
-                                    "word_count": words.len(),
-                                })
-                            })
-                            .collect();
-
-                        Some(CollectedPayload {
-                            batch_items,
-                            keys,
-                            debug_json,
-                        })
-                    })
-                    .collect()
-            }
-        })
-        .await
-        .expect("payload collection task must not panic");
-
-    tracing::info!(num_files, "Collected payloads from all files in parallel");
-
-    // 2b. Async cache lookups + cache-hit injection (sequential — needs
-    // async SQLite cache and mutable ChatFile access).
-    //
-    // Instrumented with counters and timers so we can measure whether
-    // the cache actually helps in practice.
     let mut all_misses: Vec<BatchItemWithPosition> = Vec::new();
     let mut per_file_info: Vec<Option<FileMissInfo>> = Vec::with_capacity(files.len());
-    let mut cache_total_items: usize = 0;
-    let mut cache_hits: usize = 0;
-    let mut cache_injection_failures: usize = 0;
-    let cache_lookup_start = tokio::time::Instant::now();
 
-    for (file_idx, collected) in collected_payloads.into_iter().enumerate() {
-        let collected = match collected {
-            Some(c) => c,
-            None => {
-                per_file_info.push(None);
-                continue;
-            }
-        };
+    for file_idx in 0..parsed_files.len() {
+        // Skip dummy files entirely — they pass through unchanged
+        if dummy_flags[file_idx] {
+            per_file_info.push(None);
+            continue;
+        }
 
-        // Debug dump (runs on the async executor — cheap I/O).
+        let langs = declared_languages(&parsed_files[file_idx], &primary_lang);
+        let (batch_items, _total) = collect_payloads(
+            &parsed_files[file_idx],
+            &primary_lang,
+            &langs,
+            params.multilingual_policy,
+        );
+
+        // Debug: dump extracted payloads
         let filename = &files[file_idx].filename;
-        services
-            .debug_dumper
-            .dump_morphosyntax_extracted(filename, &collected.debug_json);
+        services.debug_dumper.dump_morphosyntax_extracted(
+            filename,
+            &batch_items.iter().map(|(li, uo, item, words)| {
+                serde_json::json!({
+                    "line_idx": li,
+                    "utt_ordinal": uo,
+                    "item_words": &item.words,
+                    "extracted_words": words.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>(),
+                    "word_count": words.len(),
+                })
+            }).collect::<Vec<_>>(),
+        );
 
-        let CollectedPayload {
-            batch_items,
-            keys,
-            debug_json: _,
-        } = collected;
+        if batch_items.is_empty() {
+            per_file_info.push(None);
+            continue;
+        }
 
-        // Cache lookup — async, uses SQLite.
+        // Warn when Cantonese input appears to be per-character without --retokenize.
+        let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+        if !retokenize && params.lang.as_ref() == "yue" {
+            let per_char_count = batch_items
+                .iter()
+                .flat_map(|(_, _, item, _)| item.words.iter())
+                .filter(|w| w.chars().count() == 1 && w.chars().all(|c| c > '\u{2E80}'))
+                .count();
+            let total_words: usize = batch_items
+                .iter()
+                .map(|(_, _, item, _)| item.words.len())
+                .sum();
+            if total_words > 0 && per_char_count * 100 / total_words > 80 {
+                warn!(
+                    "Cantonese input appears to be per-character tokens \
+                     ({per_char_count}/{total_words} single-CJK words). \
+                     Consider --retokenize for word-level analysis."
+                );
+            }
+        }
+
+        // Cache lookup
         let (hits, miss_keys, misses) = if params.cache_policy.should_skip() {
+            let keys: Vec<CacheKey> = batch_items
+                .iter()
+                .map(|(_, _, item, _)| {
+                    let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
+                    cache_key(&item.words, &item.lang, params.mwt, retokenize)
+                })
+                .collect();
             (HashMap::new(), keys, batch_items)
         } else {
-            // partition_by_cache recomputes keys internally, but we already
-            // have them. For now, call the existing function to avoid
-            // duplicating its cache-get logic. The key computation is cheap
-            // relative to the SQLite I/O.
             let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
             partition_by_cache(
                 &batch_items,
@@ -327,9 +222,10 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             all_misses.extend(misses);
         }
     }
-    let cache_lookup_ms = cache_lookup_start.elapsed().as_millis() as u64;
-    let cache_misses = cache_total_items - cache_hits;
-    let effective_hits = cache_hits - cache_injection_failures;
+
+    let collect_ms = collect_start.elapsed().as_millis() as u64;
+    let cache_misses = cache_total_items.saturating_sub(cache_hits);
+    let effective_hits = cache_hits.saturating_sub(cache_injection_failures);
     let hit_rate_pct = if cache_total_items > 0 {
         effective_hits * 100 / cache_total_items
     } else {
@@ -341,9 +237,9 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         effective_hits,
         cache_misses,
         cache_injection_failures,
-        cache_lookup_ms,
+        collect_ms,
         hit_rate_pct,
-        "Cache metrics: lookup phase"
+        "Pipeline timing: collect + cache phase"
     );
 
     // 3. Batch infer grouped by per-item language — all languages in parallel.
@@ -366,10 +262,8 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         let retokenize = params.tokenization_mode == TokenizationMode::StanzaRetokenize;
 
         // Group items by their per-item language, preserving original indices.
-        let mut by_lang: HashMap<
-            LanguageCode,
-            Vec<(usize, &BatchItemWithPosition)>,
-        > = HashMap::new();
+        let mut by_lang: HashMap<LanguageCode, Vec<(usize, &BatchItemWithPosition)>> =
+            HashMap::new();
         for (global_idx, item) in all_misses.iter().enumerate() {
             let item_lang = &item.2.lang;
             by_lang
@@ -405,8 +299,7 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             } else {
                 batchalign_chat_ops::morphosyntax::stanza_languages::is_stanza_supported(lang)
             };
-            if !lang_supported
-            {
+            if !lang_supported {
                 tracing::warn!(
                     lang = %lang3,
                     items = lang_items.len(),
@@ -420,9 +313,12 @@ pub(crate) async fn run_morphosyntax_batch_impl(
 
             let items: Vec<BatchItemWithPosition> =
                 lang_items.iter().map(|(_, item)| (*item).clone()).collect();
-            let global_indices: Vec<usize> =
-                lang_items.iter().map(|(idx, _)| *idx).collect();
-            dispatches.push(LangDispatch { lang3, items, global_indices });
+            let global_indices: Vec<usize> = lang_items.iter().map(|(idx, _)| *idx).collect();
+            dispatches.push(LangDispatch {
+                lang3,
+                items,
+                global_indices,
+            });
         }
 
         if !skipped_indices.is_empty() {
@@ -467,7 +363,6 @@ pub(crate) async fn run_morphosyntax_batch_impl(
             .map(|d| {
                 let sem = lang_sem.clone();
                 let ptx = progress_tx.clone();
-                let gt = group_timeout;
                 async move {
                     let _permit = sem.acquire().await.map_err(|_| {
                         ServerError::Validation("language group semaphore closed".into())
@@ -476,24 +371,33 @@ pub(crate) async fn run_morphosyntax_batch_impl(
                         lang = %d.lang3,
                         items = d.items.len(),
                         available_permits = sem.available_permits(),
-                        "Acquired semaphore permit for language group"
+                        "Acquired semaphore for language group"
                     );
-                    let result = tokio::time::timeout(
-                        gt,
-                        infer_batch(services.pool, &d.items, &d.lang3, params.mwt, retokenize, ptx.as_ref()),
-                    ).await;
-                    match result {
-                        Ok(inner) => inner,
+                    match tokio::time::timeout(
+                        group_timeout,
+                        infer_batch(
+                            services.pool,
+                            &d.items,
+                            &d.lang3,
+                            params.mwt,
+                            retokenize,
+                            ptx.as_ref(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
                         Err(_) => {
                             tracing::error!(
                                 lang = %d.lang3,
                                 items = d.items.len(),
-                                timeout_s = gt.as_secs(),
-                                "Language group timed out — producing empty responses"
+                                timeout_s = group_timeout.as_secs(),
+                                "Language group timed out"
                             );
                             Err(ServerError::Validation(format!(
                                 "language group {} timed out after {}s",
-                                d.lang3, gt.as_secs()
+                                d.lang3,
+                                group_timeout.as_secs()
                             )))
                         }
                     }
@@ -516,14 +420,18 @@ pub(crate) async fn run_morphosyntax_batch_impl(
                         error = %e,
                         "Batch infer failed for language group"
                     );
-                    let dump_items: Vec<_> = dispatch.items.iter().map(|(li, uo, item, _)| {
-                        serde_json::json!({
-                            "line_idx": li,
-                            "utt_ordinal": uo,
-                            "words": &item.words,
-                            "lang": item.lang.as_ref(),
+                    let dump_items: Vec<_> = dispatch
+                        .items
+                        .iter()
+                        .map(|(li, uo, item, _)| {
+                            serde_json::json!({
+                                "line_idx": li,
+                                "utt_ordinal": uo,
+                                "words": &item.words,
+                                "lang": item.lang.as_ref(),
+                            })
                         })
-                    }).collect();
+                        .collect();
                     services.debug_dumper.dump_morphosyntax_failed_batch(
                         &format!("batch_failure_{}", dispatch.lang3),
                         &dump_items,
@@ -549,7 +457,11 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         // rather than poisoning the entire batch.
         let collected: Vec<UdResponse> = all_responses
             .into_iter()
-            .map(|r| r.unwrap_or_else(|| UdResponse { sentences: Vec::new() }))
+            .map(|r| {
+                r.unwrap_or_else(|| UdResponse {
+                    sentences: Vec::new(),
+                })
+            })
             .collect();
         services
             .debug_dumper
@@ -557,215 +469,95 @@ pub(crate) async fn run_morphosyntax_batch_impl(
         collected
     };
 
-    // 4. Distribute responses back to files and inject — rayon parallel.
-    //
-    // Each file's injection is independent: inject_results, validate,
-    // extract_strings, serialize. The tree-sitter parser is !Send, so
-    // each rayon thread creates its own (same pattern as the parse phase).
-    //
-    // Cache puts are async (SQLite), so we collect the cache data during
-    // the parallel phase and perform the puts sequentially afterward.
-    use batchalign_chat_ops::morphosyntax::MorphosyntaxStringsEntry;
+    // 4. Distribute responses back to files and inject
+    let inject_start = tokio::time::Instant::now();
+    for (file_idx, file) in files.iter().enumerate() {
+        let filename = file.filename.as_ref();
+        // Skip files that failed pre-validation
+        if let Some(ref err) = validation_errors[file_idx] {
+            results.push(TextBatchFileResult::err(file.filename.clone(), err.clone()));
+            continue;
+        }
 
-    /// Data collected per file during the parallel injection phase that
-    /// needs async cache writes afterward.
-    struct CachePutData {
-        keys: Vec<CacheKey>,
-        entries: Vec<MorphosyntaxStringsEntry>,
-    }
+        let chat_file = &mut parsed_files[file_idx];
 
-    // Build per-file input bundles that own all the data each rayon task
-    // needs, avoiding shared mutable state across threads.
-    struct InjectionInput {
-        filename: DisplayPath,
-        chat_file: ChatFile,
-        is_dummy: bool,
-        validation_error: Option<String>,
-        miss_info: Option<FileMissInfo>,
-        file_responses: Vec<UdResponse>,
-        file_items: Vec<BatchItemWithPosition>,
-    }
+        if let Some(ref fm) = per_file_info[file_idx] {
+            let global_start = fm.global_start;
+            let count = fm.item_count;
 
-    // Consume parsed_files, per_file_info, dummy_flags, and validation_errors
-    // by zipping into owned bundles. Each InjectionInput owns its ChatFile so
-    // rayon threads can mutate them independently.
-    let injection_inputs: Vec<InjectionInput> = parsed_files
-        .into_iter()
-        .zip(per_file_info.into_iter())
-        .zip(dummy_flags.into_iter())
-        .zip(validation_errors.into_iter())
-        .enumerate()
-        .map(|(file_idx, (((chat_file, miss_info), is_dummy), validation_error))| {
-            let (file_responses, file_items) = if let Some(ref fm) = miss_info {
-                let gs = fm.global_start;
-                let cnt = fm.item_count;
-                (
-                    all_ud_responses[gs..gs + cnt].to_vec(),
-                    all_misses[gs..gs + cnt].to_vec(),
-                )
-            } else {
-                (Vec::new(), Vec::new())
-            };
-            InjectionInput {
-                filename: files[file_idx].filename.clone(),
+            let file_responses: Vec<UdResponse> =
+                all_ud_responses[global_start..global_start + count].to_vec();
+            let file_items: Vec<BatchItemWithPosition> =
+                all_misses[global_start..global_start + count].to_vec();
+            let miss_line_indices: Vec<usize> = file_items.iter().map(|(idx, ..)| *idx).collect();
+
+            let file_inject_start = tokio::time::Instant::now();
+            match inject_results(
+                &parser,
                 chat_file,
-                is_dummy,
-                validation_error,
-                miss_info,
-                file_responses,
                 file_items,
-            }
-        })
-        .collect();
-
-    let primary_lang_inject = primary_lang.clone();
-    let tokenization_mode_inject = params.tokenization_mode;
-    let mwt_inject = params.mwt.clone();
-
-    // Run injection + serialization in parallel via rayon.
-    let injection_results: Vec<(TextBatchFileResult, Option<CachePutData>)> =
-        tokio::task::spawn_blocking(move || {
-            use rayon::prelude::*;
-            injection_inputs
-                .into_par_iter()
-                .map(|input| {
-                    let InjectionInput {
-                        filename,
-                        mut chat_file,
-                        is_dummy,
-                        validation_error,
-                        miss_info,
-                        file_responses,
-                        file_items,
-                    } = input;
-
-                    // Skip files that failed pre-validation.
-                    if let Some(err) = validation_error {
-                        return (
-                            TextBatchFileResult::err(filename, err),
-                            None,
+                file_responses,
+                &primary_lang,
+                params.tokenization_mode,
+                params.mwt,
+            ) {
+                Ok(_retokenize_traces) => {
+                    let inject_ms = file_inject_start.elapsed().as_millis() as u64;
+                    if inject_ms > 1000 {
+                        warn!(
+                            filename = %filename,
+                            inject_ms,
+                            items = count,
+                            "Slow injection (>1s)"
                         );
                     }
+                }
+                Err(e) => {
+                    results.push(TextBatchFileResult::err(
+                        file.filename.clone(),
+                        format!("Result injection failed: {e}"),
+                    ));
+                    continue;
+                }
+            }
 
-                    let mut cache_data: Option<CachePutData> = None;
+            // Validate alignment
+            let alignment_warnings = validate_mor_alignment(chat_file);
+            for w in &alignment_warnings {
+                warn!(filename = %filename, warning = %w, "Morphosyntax alignment mismatch");
+            }
 
-                    if let Some(fm) = miss_info {
-                        let miss_line_indices: Vec<usize> =
-                            file_items.iter().map(|(idx, ..)| *idx).collect();
-
-                        // Each rayon thread gets its own parser (tree-sitter
-                        // is !Send).
-                        let thread_parser =
-                            batchalign_chat_ops::parse::TreeSitterParser::new()
-                                .expect("tree-sitter CHAT grammar must load");
-
-                        match inject_results(
-                            &thread_parser,
-                            &mut chat_file,
-                            file_items,
-                            file_responses,
-                            &primary_lang_inject,
-                            tokenization_mode_inject,
-                            &mwt_inject,
-                        ) {
-                            Ok(_retokenize_traces) => {}
-                            Err(e) => {
-                                return (
-                                    TextBatchFileResult::err(
-                                        filename,
-                                        format!("Result injection failed: {e}"),
-                                    ),
-                                    None,
-                                );
-                            }
-                        }
-
-                        // Validate alignment.
-                        let alignment_warnings =
-                            validate_mor_alignment(&chat_file);
-                        for w in &alignment_warnings {
-                            warn!(
-                                filename = %filename,
-                                warning = %w,
-                                "Morphosyntax alignment mismatch"
-                            );
-                        }
-
-                        // Extract cache strings — the actual async cache put
-                        // happens after spawn_blocking returns.
-                        match extract_strings(&chat_file, &miss_line_indices) {
-                            Ok(entries) => {
-                                cache_data = Some(CachePutData {
-                                    keys: fm.keys,
-                                    entries,
-                                });
-                            }
-                            Err(e) => {
-                                warn!(
-                                    filename = %filename,
-                                    error = %e,
-                                    "Cache extraction failed (non-fatal)"
-                                );
-                            }
-                        }
-                    }
-
-                    // Post-validation check (warn only — always serialize
-                    // output so it can be inspected for debugging).
-                    if !is_dummy {
-                        if let Err(errors) =
-                            validate_output(&chat_file, "morphotag")
-                        {
-                            let msgs: Vec<String> =
-                                errors.iter().map(|e| e.to_string()).collect();
-                            warn!(
-                                filename = %filename,
-                                errors = ?msgs,
-                                "morphotag post-validation warnings (non-fatal)"
-                            );
-                        }
-                    }
-
-                    let result = TextBatchFileResult::ok(
-                        filename,
-                        to_chat_string(&chat_file),
-                    );
-                    (result, cache_data)
-                })
-                .collect()
-        })
-        .await
-        .expect("injection task must not panic");
-
-    tracing::info!(num_files, "Injected and serialized all files in parallel");
-
-    // 4b. Async cache puts — sequential, needs SQLite.
-    let cache_put_start = tokio::time::Instant::now();
-    let mut cache_put_count: usize = 0;
-    for (_result, cache_data) in &injection_results {
-        if let Some(cd) = cache_data {
-            cache_put_count += cd.keys.len();
-            cache_put_entries(
-                services.cache,
-                &cd.keys,
-                &cd.entries,
-                services.engine_version,
-            )
-            .await;
+            match extract_strings(chat_file, &miss_line_indices) {
+                Ok(entries) => {
+                    cache_put_entries(services.cache, &fm.keys, &entries, services.engine_version)
+                        .await;
+                }
+                Err(e) => {
+                    warn!(filename = %filename, error = %e, "Cache extraction failed (non-fatal)");
+                }
+            }
         }
-    }
-    let cache_put_ms = cache_put_start.elapsed().as_millis() as u64;
-    tracing::warn!(
-        cache_put_count,
-        cache_put_ms,
-        "Cache metrics: put phase"
-    );
 
-    // Collect the final results in file order.
-    let results: TextBatchFileResults = injection_results
-        .into_iter()
-        .map(|(result, _)| result)
-        .collect();
+        // Post-validation check (warn only — always serialize output so it can
+        // be inspected for debugging).
+        if !dummy_flags[file_idx]
+            && let Err(errors) = validate_output(chat_file, "morphotag")
+        {
+            let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            warn!(filename = %filename, errors = ?msgs, "morphotag post-validation warnings (non-fatal)");
+        }
+
+        results.push(TextBatchFileResult::ok(
+            file.filename.clone(),
+            to_chat_string(chat_file),
+        ));
+    }
+
+    tracing::warn!(
+        num_files,
+        inject_ms = inject_start.elapsed().as_millis() as u64,
+        "Pipeline timing: injection + serialization phase"
+    );
 
     results
 }

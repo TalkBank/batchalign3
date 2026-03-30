@@ -205,8 +205,6 @@ enum ExecutionReservationError {
 pub(crate) enum MemoryGateRejectionDisposition {
     /// The host re-queued the job for a later eligibility deadline.
     Requeued { retry_at: UnixTimestamp },
-    /// The host wants the runner to fail the job instead of re-queueing it.
-    FailJob,
 }
 
 /// Result of one host-owned job execution attempt.
@@ -362,12 +360,6 @@ async fn run_hosted_job(
                             "Re-queueing job after host-memory capacity rejection"
                         );
                         return Ok(HostedJobRunOutcome::Requeued { retry_at });
-                    }
-                    MemoryGateRejectionDisposition::FailJob => {
-                        let message = error.to_string();
-                        sink.bump_memory_gate_aborts().await;
-                        sink.fail_job(job_id, &message, unix_now()).await;
-                        return Err(crate::error::ServerError::MemoryPressure(message));
                     }
                 }
             }
@@ -1021,7 +1013,10 @@ async fn dispatch_test_echo_files(
                     .as_path()
                     .to_owned()
             } else {
-                job.filesystem.staging_dir.join("input").join(filename)
+                job.filesystem
+                    .staging_dir
+                    .join("input")
+                    .join(filename)
                     .as_path()
                     .to_owned()
             };

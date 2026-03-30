@@ -580,12 +580,7 @@ fn test_french_elision_in_quoted_context() {
 
     let primary = talkbank_model::model::LanguageCode::new("fra");
     let langs = declared_languages(&chat_file, &primary);
-    let (items, _) = collect_payloads(
-        &chat_file,
-        &primary,
-        &langs,
-        MultilingualPolicy::ProcessAll,
-    );
+    let (items, _) = collect_payloads(&chat_file, &primary, &langs, MultilingualPolicy::ProcessAll);
 
     assert_eq!(items.len(), 1, "Should have exactly 1 utterance payload");
     let (_, _, item, extracted_words) = &items[0];
@@ -593,7 +588,13 @@ fn test_french_elision_in_quoted_context() {
     // Print for debugging
     println!("Extracted words: {:?}", item.words);
     println!("Word count: {}", item.words.len());
-    println!("Extracted word details: {:?}", extracted_words.iter().map(|w| w.text.as_ref()).collect::<Vec<_>>());
+    println!(
+        "Extracted word details: {:?}",
+        extracted_words
+            .iter()
+            .map(|w| w.text.as_ref())
+            .collect::<Vec<_>>()
+    );
 
     // The utterance has these CHAT words (in MOR domain, excluding separators):
     // On, dit, pas, 'quoi, tu, veux', mais, 'qu', est-ce, que', on, dit, .

@@ -416,6 +416,23 @@ async fn start_daemon(
 
     let exe = crate::self_exe::resolve_self_exe();
     let mut cmd = std::process::Command::new(&exe);
+
+    // Read verbose level from server.yaml so fleet deployments can set
+    // `verbose: 1` for INFO-level logging without hardcoding in the binary.
+    let config_verbose = layout
+        .config_path()
+        .exists()
+        .then(|| {
+            batchalign_app::config::load_config_from_layout(layout, None)
+                .ok()
+                .map(|cfg| cfg.verbose)
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    for _ in 0..config_verbose {
+        cmd.arg("-v");
+    }
+
     cmd.args([
         "serve",
         "start",

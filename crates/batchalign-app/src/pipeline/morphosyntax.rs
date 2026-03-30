@@ -409,9 +409,20 @@ fn stage_postvalidate<'a, 'ctx>(ctx: &'a mut MorphosyntaxPipelineContext<'ctx>) 
 
 fn stage_serialize<'a, 'ctx>(ctx: &'a mut MorphosyntaxPipelineContext<'ctx>) -> StageFuture<'a> {
     Box::pin(async move {
-        let chat_file = ctx.chat_file.as_ref().ok_or_else(|| {
+        let chat_file = ctx.chat_file.as_mut().ok_or_else(|| {
             ServerError::Validation("Parsed chat missing before morphotag serialize".into())
         })?;
+
+        // Inject processing provenance comment.
+        let provenance = crate::provenance::morphotag_provenance(
+            ctx.lang.as_ref(),
+            ctx.services.engine_version.as_ref(),
+            ctx.tokenization_mode
+                == batchalign_chat_ops::morphosyntax::TokenizationMode::StanzaRetokenize,
+            false, // incremental is handled separately
+        );
+        crate::provenance::inject_provenance(chat_file, &provenance);
+
         ctx.final_chat_text = Some(to_chat_string(chat_file));
         Ok(())
     })

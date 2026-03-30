@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 
-use super::backend::{CacheBackend, CacheStats};
 use super::CacheError;
+use super::backend::{CacheBackend, CacheStats};
 
 /// A cache backend that never stores or returns anything.
 pub(super) struct NoopBackend;

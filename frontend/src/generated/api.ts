@@ -367,7 +367,7 @@ export interface components {
          *     without parsing human-facing display labels.
          * @enum {string}
          */
-        FileProgressStage: "processing" | "reading" | "resolving_audio" | "recovering_utterance_timing" | "recovering_timing_fallback" | "aligning" | "transcribing" | "benchmarking" | "checking_cache" | "applying_results" | "post_processing" | "building_chat" | "segmenting_utterances" | "analyzing_morphosyntax" | "finalizing" | "writing" | "parsing" | "collecting_payloads" | "analyzing" | "segmenting" | "translating" | "resolving_coreference" | "comparing" | "retry_scheduled";
+        FileProgressStage: "processing" | "reading" | "resolving_audio" | "recovering_utterance_timing" | "recovering_timing_fallback" | "aligning" | "transcribing" | "benchmarking" | "checking_cache" | "applying_results" | "post_processing" | "building_chat" | "segmenting_utterances" | "analyzing_morphosyntax" | "finalizing" | "writing" | "parsing" | "analyzing" | "segmenting" | "translating" | "resolving_coreference" | "comparing" | "retry_scheduled";
         /** @description Result for a single processed file. */
         FileResult: {
             /**
@@ -391,6 +391,13 @@ export interface components {
              *     Backslashes are normalized to forward slashes on construction.
              */
             filename: components["schemas"]["DisplayPath"];
+            /**
+             * @description Processing provenance extracted from the output CHAT file.
+             *     Each entry records one batchalign3 command that was applied
+             *     (command name, engine version, timestamp). Empty for non-CHAT
+             *     output or files that failed processing.
+             */
+            provenance?: components["schemas"]["ProvenanceEntry"][];
         };
         /**
          * @description Per-file status within a job.
@@ -643,7 +650,7 @@ export interface components {
          * @description Control-plane backend that currently owns orchestration for a server job.
          * @enum {string}
          */
-        JobControlPlaneBackendKind: "embedded" | "temporal";
+        JobControlPlaneBackendKind: "temporal" | "test";
         /** @description Backend-owned orchestration metadata for a job projection. */
         JobControlPlaneInfo: {
             /** @description Control-plane backend that produced this projection. */
@@ -924,6 +931,17 @@ export interface components {
          * @description Number of speakers in a recording.
          */
         NumSpeakers: number;
+        /** @description One extracted provenance entry from a CHAT file. */
+        ProvenanceEntry: {
+            /** @description Command name (e.g., "morphotag", "align"). */
+            command: string;
+            /** @description Key-value fields (engine, lang, etc.). */
+            fields: {
+                [key: string]: string;
+            };
+            /** @description ISO 8601 timestamp string. */
+            timestamp: string;
+        };
         /**
          * @description Closed released command vocabulary used at all Rust seams.
          *

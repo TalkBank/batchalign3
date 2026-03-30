@@ -23,6 +23,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Resolve the config path from an injected environment lookup.
+#[cfg(test)]
 fn config_path_from_env(mut get_var: impl FnMut(&str) -> Option<OsString>) -> PathBuf {
     home_dir_from_env(&mut get_var)
         .unwrap_or_else(|| PathBuf::from("."))

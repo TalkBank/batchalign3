@@ -32,6 +32,13 @@ pub struct GlobalOpts {
     #[arg(long, env = "BATCHALIGN_SERVER", global = true)]
     pub server: Option<String>,
 
+    /// Skip auto-detection of a local server. By default, batchalign3
+    /// checks if a server is running locally and routes work through it
+    /// for fleet benefits (warm models, distributed processing, crash
+    /// recovery). Use --no-server to force direct in-process execution.
+    #[arg(long = "no-server", global = true)]
+    pub no_server: bool,
+
     /// Bypass the media analysis cache.
     #[arg(long, global = true)]
     pub override_media_cache: bool,

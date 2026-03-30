@@ -71,7 +71,25 @@ impl OtlpRuntimeConfig {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let tracer_provider = init_tracing(cli.global.verbose);
+
+    // If running as a server, write tracing to a log file directly
+    // (like Nginx) in addition to stderr. The log file uses daily
+    // rotation via tracing-appender.
+    let server_log_dir = if matches!(
+        &cli.command,
+        batchalign_cli::args::Commands::Serve(batchalign_cli::args::ServeArgs {
+            action: batchalign_cli::args::ServeAction::Start(args), ..
+        }) if args.foreground
+    ) {
+        let layout = batchalign_app::config::RuntimeLayout::from_env();
+        let dir = layout.state_dir().to_path_buf();
+        let _ = std::fs::create_dir_all(&dir);
+        Some(dir)
+    } else {
+        None
+    };
+
+    let (_log_guard, tracer_provider) = init_tracing(cli.global.verbose, server_log_dir.as_deref());
 
     let update_handle = batchalign_cli::update_check::spawn_update_check();
 
@@ -97,7 +115,19 @@ async fn main() {
     }
 }
 
-fn init_tracing(verbose: u8) -> Option<SdkTracerProvider> {
+/// Initialize tracing with optional file appender for server mode.
+///
+/// When `server_log_dir` is provided, tracing output is written to a
+/// daily-rotating log file (like Nginx) in addition to stderr. The
+/// returned guard MUST be held for the lifetime of the process — dropping
+/// it flushes and closes the non-blocking writer.
+fn init_tracing(
+    verbose: u8,
+    server_log_dir: Option<&std::path::Path>,
+) -> (
+    Option<tracing_appender::non_blocking::WorkerGuard>,
+    Option<SdkTracerProvider>,
+) {
     let filter = match verbose {
         0 => "warn",
         1 => "info",
@@ -107,6 +137,20 @@ fn init_tracing(verbose: u8) -> Option<SdkTracerProvider> {
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
 
+    // Server mode: write to a daily-rotating log file via tracing-appender.
+    // Non-blocking writer so logging never blocks the async runtime.
+    let (file_layer, guard) = if let Some(log_dir) = server_log_dir {
+        let file_appender = tracing_appender::rolling::daily(log_dir, "server.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        let layer = tracing_subscriber::fmt::layer()
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(non_blocking);
+        (Some(layer), Some(guard))
+    } else {
+        (None, None)
+    };
+
     let otlp = OtlpRuntimeConfig::from_env();
     if otlp.should_enable() {
         match init_otlp_provider(&otlp) {
@@ -115,9 +159,10 @@ fn init_tracing(verbose: u8) -> Option<SdkTracerProvider> {
                 tracing_subscriber::registry()
                     .with(env_filter)
                     .with(tracing_subscriber::fmt::layer().with_target(false))
+                    .with(file_layer)
                     .with(tracing_opentelemetry::layer().with_tracer(tracer))
                     .init();
-                return Some(provider);
+                return (guard, Some(provider));
             }
             Err(message) => {
                 eprintln!("warning: OTLP tracing disabled: {message}");
@@ -128,8 +173,9 @@ fn init_tracing(verbose: u8) -> Option<SdkTracerProvider> {
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer().with_target(false))
+        .with(file_layer)
         .init();
-    None
+    (guard, None)
 }
 
 fn init_otlp_provider(config: &OtlpRuntimeConfig) -> Result<SdkTracerProvider, String> {

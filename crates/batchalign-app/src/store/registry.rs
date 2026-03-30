@@ -16,6 +16,7 @@ use crate::api::{
     DisplayPath, FileStatusEntry, JobId, JobInfo, JobListItem, JobStatus, NodeId, UnixTimestamp,
 };
 use crate::error::ServerError;
+#[cfg(test)]
 use crate::queue::QueuePoll;
 use crate::scheduling::LeaseRecord;
 
@@ -28,6 +29,9 @@ use super::job::{
 };
 
 /// One claimed lease that should be mirrored into durable storage.
+///
+/// Currently used only by the test-only queue-claim path.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct ClaimedLeaseRecord {
     /// Job whose runner claim was acquired.
@@ -37,6 +41,9 @@ pub(crate) struct ClaimedLeaseRecord {
 }
 
 /// Result of claiming all currently runnable queued jobs.
+///
+/// Currently used only by the test-only queue-claim path.
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ClaimedQueuePoll {
     /// Queue wakeup information for the dispatcher loop.
@@ -484,6 +491,9 @@ impl JobRegistry {
     }
 
     /// Claim every queued job that is eligible to run on this node.
+    ///
+    /// Currently exercised only by the test-only local queue-claim path.
+    #[cfg(test)]
     pub(crate) async fn claim_ready_queued_jobs(
         &self,
         now: UnixTimestamp,
@@ -739,10 +749,8 @@ impl JobRegistry {
     }
 
     /// Clear the batch-level progress (e.g. on job finalization).
-    pub(crate) async fn clear_batch_progress(
-        &self,
-        job_id: &JobId,
-    ) -> Option<JobListItem> {
+    #[cfg(test)]
+    pub(crate) async fn clear_batch_progress(&self, job_id: &JobId) -> Option<JobListItem> {
         self.update_job(job_id.clone(), move |job| {
             job.execution.batch_progress = None;
             job.to_list_item()

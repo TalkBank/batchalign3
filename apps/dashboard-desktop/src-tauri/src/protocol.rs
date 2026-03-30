@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Constants used by tests and mirrored in TypeScript protocol.ts
 //! Stable Tauri protocol identifiers and payload shapes for the desktop shell.
 //!
 //! The React frontend keeps a mirrored inventory in
@@ -5,6 +6,12 @@
 //! serialized field names aligned across both sides when this seam changes.
 
 use serde::{Deserialize, Serialize};
+
+// Command/event name constants are the single source of truth for test
+// stability assertions. The Tauri `#[tauri::command]` macro uses the
+// function name directly as the command identifier, so these constants
+// are not referenced in non-test production code — only in the test
+// module below and in the TypeScript mirror (frontend/src/desktop/protocol.ts).
 
 /// Tauri command name for recursive file discovery.
 pub const DISCOVER_FILES_COMMAND: &str = "discover_files";

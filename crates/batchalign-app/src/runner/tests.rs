@@ -162,14 +162,6 @@ fn non_infer_commands_do_not_require_infer() {
 }
 
 #[test]
-fn memory_gate_disposition_supports_terminal_failure_path() {
-    assert_eq!(
-        super::MemoryGateRejectionDisposition::FailJob,
-        super::MemoryGateRejectionDisposition::FailJob
-    );
-}
-
-#[test]
 fn transcribe_result_filename_preserves_relative_path() {
     assert_eq!(
         result_filename_for_command(ReleasedCommand::Transcribe, "sub/nested.wav"),

@@ -20,7 +20,7 @@ use crate::runner::util::{FileStage, ProgressSender, ProgressUpdate};
 use crate::transcribe::{
     AsrInferParams, AsrResponse, SpeakerInferParams, TranscribeOptions, build_empty_chat_text,
     convert_asr_response, generate_participant_ids, infer_asr, infer_speaker,
-    insert_transcribe_comment, response_has_speaker_labels,
+    response_has_speaker_labels,
 };
 use crate::types::worker_v2::SpeakerSegmentV2;
 
@@ -499,8 +499,19 @@ fn stage_build_chat<'a, 'ctx>(ctx: &'a mut TranscribePipelineContext<'ctx>) -> S
                 &participant_ids,
             );
         }
+        // Inject processing provenance comment (replaces legacy string-hacked comment).
+        let asr_engine = match ctx.opts.backend {
+            crate::transcribe::types::AsrBackend::RustRevAi => "rev",
+            crate::transcribe::types::AsrBackend::Worker(_) => "whisper",
+        };
+        let provenance = crate::provenance::transcribe_provenance(
+            resolved_lang.as_ref(),
+            asr_engine,
+            ctx.opts.diarize,
+            ctx.opts.write_wor,
+        );
+        crate::provenance::inject_provenance(&mut chat_file, &provenance);
         let chat_text = to_chat_string(&chat_file);
-        let chat_text = insert_transcribe_comment(&chat_text, ctx.opts);
         let filename = ctx
             .audio_path
             .file_name()

@@ -39,6 +39,24 @@ const PROXIMITY_STYLES = {
   danger: "text-red-600 bg-red-50",
 } as const;
 
+type PressureLevel = "healthy" | "guarded" | "constrained" | "critical";
+
+/** Map host_memory_pressure to display style and label. */
+const PRESSURE_BADGE: Record<PressureLevel, { style: string; label: string }> = {
+  healthy:     { style: "text-emerald-700 bg-emerald-50", label: "Healthy" },
+  guarded:     { style: "text-amber-700 bg-amber-50",     label: "Guarded" },
+  constrained: { style: "text-orange-700 bg-orange-50",   label: "Constrained" },
+  critical:    { style: "text-red-700 bg-red-50",         label: "Critical" },
+} as const;
+
+/** Dot color matching the pressure level badge. */
+const PRESSURE_DOT: Record<PressureLevel, string> = {
+  healthy: "bg-emerald-500",
+  guarded: "bg-amber-500",
+  constrained: "bg-orange-500",
+  critical: "bg-red-500",
+} as const;
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -65,6 +83,8 @@ export function MemoryPanel({ health }: MemoryPanelProps) {
 
   if (totalMb === 0) return null;
 
+  const pressure = health.host_memory_pressure as PressureLevel | undefined;
+
   const usedPct = Math.round((usedMb / totalMb) * 100);
   const gatePct = gateMb > 0 ? Math.round(((totalMb - gateMb) / totalMb) * 100) : 0;
   const proximity = gateProximity(availableMb, gateMb);
@@ -89,9 +109,21 @@ export function MemoryPanel({ health }: MemoryPanelProps) {
           </svg>
           <span className="text-sm font-semibold text-gray-700">Memory</span>
         </div>
-        <span className="text-xs text-gray-400 font-mono">
-          {formatMb(totalMb)} total
-        </span>
+        <div className="flex items-center gap-2">
+          {pressure && PRESSURE_BADGE[pressure] && (
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${PRESSURE_BADGE[pressure].style}`}
+            >
+              <span
+                className={`inline-block w-1.5 h-1.5 rounded-full ${PRESSURE_DOT[pressure]}`}
+              />
+              {PRESSURE_BADGE[pressure].label}
+            </span>
+          )}
+          <span className="text-xs text-gray-400 font-mono">
+            {formatMb(totalMb)} total
+          </span>
+        </div>
       </div>
 
       {/* Gauge */}

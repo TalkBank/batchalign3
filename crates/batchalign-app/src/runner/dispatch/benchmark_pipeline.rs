@@ -389,7 +389,14 @@ fn resolve_benchmark_original_audio_path(
         .get(file_index)
         .map(|cp| cp.assume_shared_filesystem().as_path().to_owned())
         // paths_mode is active for benchmark — convert ClientPath to ServerPath before joining.
-        .unwrap_or_else(|| filesystem.source_dir.assume_shared_filesystem().join(filename).as_path().to_owned())
+        .unwrap_or_else(|| {
+            filesystem
+                .source_dir
+                .assume_shared_filesystem()
+                .join(filename)
+                .as_path()
+                .to_owned()
+        })
 }
 
 #[cfg(test)]
@@ -401,7 +408,10 @@ mod tests {
     fn filesystem_config(source_paths: Vec<&str>, source_dir: &str) -> RunnerFilesystemConfig {
         RunnerFilesystemConfig {
             paths_mode: false,
-            source_paths: source_paths.into_iter().map(batchalign_types::paths::ClientPath::from).collect(),
+            source_paths: source_paths
+                .into_iter()
+                .map(batchalign_types::paths::ClientPath::from)
+                .collect(),
             output_paths: Vec::new(),
             before_paths: Vec::new(),
             staging_dir: batchalign_types::paths::ServerPath::new("/tmp/staging"),

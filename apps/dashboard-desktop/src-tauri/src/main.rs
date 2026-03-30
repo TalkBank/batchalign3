@@ -84,7 +84,7 @@ fn main() {
         .setup(|app| {
             // Auto-start the server on app launch.
             let state = app.state::<ServerProcess>();
-            match server::start_managed_server(&app.handle(), state.inner()) {
+            match server::start_managed_server(app.handle(), state.inner()) {
                 Ok(status) => eprintln!(
                     "[tauri] Server running={}, pid={:?}, port={}",
                     status.running, status.pid, status.port

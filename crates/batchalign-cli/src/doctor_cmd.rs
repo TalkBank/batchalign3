@@ -44,7 +44,10 @@ impl std::fmt::Display for CheckStatus {
 /// Run the doctor command.
 pub async fn run(args: &DoctorArgs) -> Result<(), CliError> {
     let mut results: Vec<CheckResult> = Vec::new();
-    let python = args.python.clone().unwrap_or_else(resolve_python_executable);
+    let python = args
+        .python
+        .clone()
+        .unwrap_or_else(resolve_python_executable);
 
     // --- Check 1: Python availability ---
     let start = Instant::now();
@@ -65,7 +68,11 @@ pub async fn run(args: &DoctorArgs) -> Result<(), CliError> {
         Ok(output) => CheckResult {
             name: "python".into(),
             status: CheckStatus::Fail,
-            detail: format!("Python exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()),
+            detail: format!(
+                "Python exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
             duration_ms: start.elapsed().as_millis() as u64,
         },
         Err(e) => CheckResult {
@@ -92,7 +99,14 @@ pub async fn run(args: &DoctorArgs) -> Result<(), CliError> {
         Ok(output) => CheckResult {
             name: "worker_import".into(),
             status: CheckStatus::Fail,
-            detail: format!("Import failed: {}", String::from_utf8_lossy(&output.stderr).trim().chars().take(200).collect::<String>()),
+            detail: format!(
+                "Import failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+                    .trim()
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            ),
             duration_ms: start.elapsed().as_millis() as u64,
         },
         Err(e) => CheckResult {
@@ -105,7 +119,16 @@ pub async fn run(args: &DoctorArgs) -> Result<(), CliError> {
 
     // --- Check 3: Worker ready signal (test-echo mode) ---
     let start = Instant::now();
-    let echo_check = spawn_worker_and_check_ready(&python, &["--test-echo", "--task", "morphosyntax", "--lang", &args.lang]);
+    let echo_check = spawn_worker_and_check_ready(
+        &python,
+        &[
+            "--test-echo",
+            "--task",
+            "morphosyntax",
+            "--lang",
+            &args.lang,
+        ],
+    );
     results.push(match echo_check {
         Ok(detail) => CheckResult {
             name: "worker_ready_echo".into(),
@@ -156,13 +179,19 @@ pub async fn run(args: &DoctorArgs) -> Result<(), CliError> {
     let available_mb = mem_info.available_memory() / (1024 * 1024);
     results.push(CheckResult {
         name: "memory".into(),
-        status: if available_mb >= 4096 { CheckStatus::Pass } else { CheckStatus::Fail },
+        status: if available_mb >= 4096 {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
         detail: format!("{available_mb} MB available / {total_mb} MB total"),
         duration_ms: 0,
     });
 
     // --- Output ---
-    let any_fail = results.iter().any(|r| matches!(r.status, CheckStatus::Fail));
+    let any_fail = results
+        .iter()
+        .any(|r| matches!(r.status, CheckStatus::Fail));
 
     match args.format {
         crate::args::DoctorFormat::Human => {
@@ -172,17 +201,23 @@ pub async fn run(args: &DoctorArgs) -> Result<(), CliError> {
                     CheckStatus::Fail => "\u{2717}",
                     CheckStatus::Skip => "-",
                 };
-                eprintln!("  {icon} [{:>4}] {:25} {} ({} ms)", r.status, r.name, r.detail, r.duration_ms);
+                eprintln!(
+                    "  {icon} [{:>4}] {:25} {} ({} ms)",
+                    r.status, r.name, r.detail, r.duration_ms
+                );
             }
             if any_fail {
-                eprintln!("\nSome checks FAILED. Fix the issues above before using this machine for production.");
+                eprintln!(
+                    "\nSome checks FAILED. Fix the issues above before using this machine for production."
+                );
             } else {
                 eprintln!("\nAll checks passed.");
             }
         }
         crate::args::DoctorFormat::Json => {
-            let json = serde_json::to_string_pretty(&results)
-                .map_err(|e| CliError::InvalidArgument(format!("JSON serialization failed: {e}")))?;
+            let json = serde_json::to_string_pretty(&results).map_err(|e| {
+                CliError::InvalidArgument(format!("JSON serialization failed: {e}"))
+            })?;
             println!("{json}");
         }
     }
@@ -237,7 +272,14 @@ fn spawn_worker_and_send_batch(
     test_sentences: &[Vec<&str>],
 ) -> Result<String, String> {
     let mut cmd = Command::new(python);
-    cmd.args(["-m", "batchalign.worker", "--task", "morphosyntax", "--lang", lang]);
+    cmd.args([
+        "-m",
+        "batchalign.worker",
+        "--task",
+        "morphosyntax",
+        "--lang",
+        lang,
+    ]);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -305,7 +347,10 @@ fn spawn_worker_and_send_batch(
         };
 
         if val.get("op").and_then(|v| v.as_str()) == Some("error") {
-            let err = val.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let err = val
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let _ = child.kill();
             return Err(format!("Worker error: {err}"));
         }
@@ -349,7 +394,10 @@ fn spawn_worker_and_send_batch(
                                             .and_then(|v| v.as_array())
                                             .is_some_and(|a| a.len() > 1);
                                         if !is_range || field == "text" {
-                                            let text = word.get("text").and_then(|v| v.as_str()).unwrap_or("?");
+                                            let text = word
+                                                .get("text")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("?");
                                             missing_fields.push(format!(
                                                 "result {ri} sent {si} word {wi} ('{text}'): missing {field}"
                                             ));
